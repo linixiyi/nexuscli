@@ -1,0 +1,359 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "NexusCLI 架构",
+    "locale": "zh-CN",
+    "output": "docs/architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "main-path",
+        "label": "主路径",
+        "focus": [
+          "user",
+          "entry",
+          "engine",
+          "llm"
+        ],
+        "note": "从终端输入到 OpenAI-compatible 流式对话的核心 ReAct 路径。"
+      },
+      {
+        "id": "tools-and-guard",
+        "label": "工具与安全",
+        "focus": [
+          "engine",
+          "tools",
+          "policy",
+          "state"
+        ],
+        "note": "写文件、执行命令等危险动作经过 policy、HITL 与 JSONL 审计后才会落盘。"
+      },
+      {
+        "id": "remote-extend",
+        "label": "远程扩展",
+        "focus": [
+          "engine",
+          "mcp",
+          "mcpsrv",
+          "skill"
+        ],
+        "note": "MCP 远程工具与 builtin/user/project 分层 Skill 构成能力扩展面。"
+      },
+      {
+        "id": "runtime-access",
+        "label": "后台与接入",
+        "focus": [
+          "user",
+          "runtime",
+          "engine",
+          "context"
+        ],
+        "note": "外部系统经 Runtime API 创建 thread、turn、事件与持久化后台任务。"
+      }
+    ]
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      40,
+      70
+    ],
+    "cols": 4,
+    "gapX": 150,
+    "gapY": 64,
+    "cellW": 180,
+    "cellH": 72
+  },
+  "components": [
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "Runtime API",
+      "sublabel": "threads · 任务队列",
+      "row": 0,
+      "col": 1,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "context",
+      "type": "backend",
+      "label": "上下文管理",
+      "sublabel": "预算压缩 · 动态 Prompt",
+      "row": 0,
+      "col": 2,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "user",
+      "type": "external",
+      "label": "开发者",
+      "sublabel": "终端 · 外部系统",
+      "row": 1,
+      "col": 0,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "entry",
+      "type": "frontend",
+      "label": "CLI · REPL · SDK",
+      "sublabel": "entrypoints · sdk.py",
+      "row": 1,
+      "col": 1,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "backend",
+      "label": "Agent 引擎",
+      "sublabel": "react · plan · team",
+      "row": 1,
+      "col": 2,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "cloud",
+      "label": "LLM Client",
+      "sublabel": "OpenAI 兼容协议",
+      "tag": "DeepSeek · GLM",
+      "row": 1,
+      "col": 3,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "policy",
+      "type": "security",
+      "label": "Policy · HITL",
+      "sublabel": "守卫 · JSONL 审计",
+      "row": 2,
+      "col": 1,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "backend",
+      "label": "内置工具",
+      "sublabel": "file · bash · grep · web",
+      "row": 2,
+      "col": 2,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "mcp",
+      "type": "backend",
+      "label": "MCP Client",
+      "sublabel": "stdio · HTTP",
+      "row": 2,
+      "col": 3,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "skill",
+      "type": "backend",
+      "label": "Skill 系统",
+      "sublabel": "builtin → project",
+      "row": 3,
+      "col": 1,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "本地状态",
+      "sublabel": "记忆 · 会话 · 快照",
+      "row": 3,
+      "col": 2,
+      "size": [
+        180,
+        72
+      ]
+    },
+    {
+      "id": "mcpsrv",
+      "type": "external",
+      "label": "外部 MCP Server",
+      "sublabel": "Chrome DevTools 等",
+      "row": 3,
+      "col": 3,
+      "size": [
+        180,
+        72
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "NexusCLI 进程",
+      "wraps": [
+        "entry",
+        "runtime",
+        "engine",
+        "context",
+        "tools",
+        "skill",
+        "mcp",
+        "policy"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "本机存储 ~/.nexuscli",
+      "wraps": [
+        "state"
+      ],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-to-entry",
+      "from": "user",
+      "to": "entry",
+      "label": "prompt · 图片输入",
+      "variant": "emphasis"
+    },
+    {
+      "id": "entry-to-engine",
+      "from": "entry",
+      "to": "engine",
+      "label": "启动 Agent run",
+      "variant": "emphasis",
+      "labelDy": 24
+    },
+    {
+      "id": "engine-to-llm",
+      "from": "engine",
+      "to": "llm",
+      "label": "流式对话",
+      "variant": "emphasis"
+    },
+    {
+      "id": "user-to-runtime",
+      "from": "user",
+      "to": "runtime",
+      "label": "REST 接入",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "left",
+      "via": [
+        [
+          130,
+          106
+        ]
+      ]
+    },
+    {
+      "id": "runtime-to-engine",
+      "from": "runtime",
+      "to": "engine",
+      "label": "turn · 后台任务"
+    },
+    {
+      "id": "engine-to-context",
+      "from": "engine",
+      "to": "context",
+      "label": "预算 · 压缩"
+    },
+    {
+      "id": "engine-to-tools",
+      "from": "engine",
+      "to": "tools",
+      "label": "ReAct 工具调用",
+      "labelDy": 24
+    },
+    {
+      "id": "engine-to-mcp",
+      "from": "engine",
+      "to": "mcp",
+      "label": "mcp__* 注册"
+    },
+    {
+      "id": "mcp-to-mcpsrv",
+      "from": "mcp",
+      "to": "mcpsrv",
+      "label": "stdio · HTTP",
+      "labelDy": 24
+    },
+    {
+      "id": "tools-to-policy",
+      "from": "tools",
+      "to": "policy",
+      "label": "危险动作守卫",
+      "variant": "security"
+    },
+    {
+      "id": "tools-to-skill",
+      "from": "tools",
+      "to": "skill",
+      "label": "load_skill 懒加载"
+    },
+    {
+      "id": "tools-to-state",
+      "from": "tools",
+      "to": "state",
+      "label": "todo · 记忆读写",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "多入口",
+      "items": [
+        "CLI / REPL 与单次 -p 模式",
+        "Python SDK 与 Runtime API",
+        "自身也可作为 MCP server"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Agent 核心",
+      "items": [
+        "react / plan / team 三种运行模式",
+        "80% 预算触发上下文压缩",
+        "动态记忆按问题 Top-K 召回"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "安全与持久化",
+      "items": [
+        "命令/路径守卫 · HITL 确认 · JSONL 审计",
+        "SQLite 记忆 · 会话恢复 · 快照回滚"
+      ]
+    }
+  ]
+}
