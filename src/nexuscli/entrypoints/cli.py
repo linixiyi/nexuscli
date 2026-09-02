@@ -15,6 +15,11 @@ Usage modes::
     nexuscli -p "list all Python files"
     nexuscli -p "refactor this module" --mode plan
 
+    # Sessions
+    nexuscli sessions              # list saved conversations
+    nexuscli -c                    # continue the most recent session (REPL)
+    nexuscli --resume <id>         # resume a specific session (REPL)
+
     # Tooling
     nexuscli doctor              # system health check
     nexuscli serve               # Runtime HTTP API
@@ -29,6 +34,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -40,6 +46,11 @@ from nexuscli.agent import QueryEngine
 from nexuscli.bootstrap import build_tool_registry
 from nexuscli.config import get_config_paths, load_config
 from nexuscli.entrypoints.repl import start_repl
+from nexuscli.entrypoints.slash_commands import (
+    expand_custom_command,
+    load_slash_commands,
+    split_command_message,
+)
 from nexuscli.llm import create_llm_client
 from nexuscli.mcp import (
     load_mcp_server_specs,
@@ -49,6 +60,7 @@ from nexuscli.mcp import (
 )
 from nexuscli.runtime import RuntimeApiServer
 from nexuscli.runtime.api import runtime_api_key
+from nexuscli.session import SessionStore
 
 app = typer.Typer(
     name="nexuscli",
@@ -111,6 +123,19 @@ def main(
         bool,
         typer.Option("--json", help="Emit result, usage, and cost as JSON (single-prompt only)"),
     ] = False,
+    # --- Sessions ---
+    resume: Annotated[
+        str | None,
+        typer.Option("--resume", help="Resume a saved session by id (see `nexuscli sessions`)"),
+    ] = None,
+    continue_session: Annotated[
+        bool,
+        typer.Option(
+            "-c",
+            "--continue",
+            help="Resume the most recent session in this project",
+        ),
+    ] = False,
     # --- Workspace ---
     cwd: Annotated[
         Path | None,
@@ -161,6 +186,11 @@ def main(
             raise typer.BadParameter(
                 "worker-mode must be react or plan", param_hint="--worker-mode"
             )
+        prompt = _expand_custom_prompt(prompt, str(root))
+        history = _load_resume_history(str(root), resume=resume, continue_last=continue_session)
+        if history and selected_mode != "react":
+            typer.echo("Note: --resume/--continue only restores react mode history.", err=True)
+            history = []
         asyncio.run(
             _run_prompt(
                 prompt,
@@ -169,10 +199,58 @@ def main(
                 mode=selected_mode,
                 worker_mode=worker_mode,
                 json_output=json_output,
+                history=history,
             )
         )
+    elif resume or continue_session:
+        asyncio.run(start_repl(str(root), config, resume=resume, continue_last=continue_session))
     else:
         asyncio.run(start_repl(str(root), config))
+
+
+def _expand_custom_prompt(prompt: str, root: str) -> str:
+    """Expand a custom slash command in single-prompt mode, when one matches."""
+    parsed = split_command_message(prompt)
+    if parsed is None:
+        return prompt
+    name, args = parsed
+    command = load_slash_commands(root).get(name.lstrip("/"))
+    if command is None:
+        return prompt
+    return expand_custom_command(command, args)
+
+
+def _load_resume_history(
+    root: str,
+    *,
+    resume: str | None,
+    continue_last: bool,
+) -> list:
+    """Resolve a session transcript for resume; empty list when nothing to load."""
+    if not resume and not continue_last:
+        return []
+    store = SessionStore()
+    record = None
+    if resume:
+        record = store.resolve(resume, cwd=root)
+        if record is None:
+            typer.echo(f"Session not found: {resume}", err=True)
+            raise typer.Exit(1)
+    else:
+        recent = store.list(limit=1, cwd=root)
+        if not recent:
+            typer.echo("No previous session to continue in this project.", err=True)
+            raise typer.Exit(1)
+        record = store.load(recent[0].id)
+    if record is None:
+        typer.echo("Session transcript is unreadable.", err=True)
+        raise typer.Exit(1)
+    typer.echo(
+        f"Resuming session {record.meta.id} ({len(record.messages)} messages): "
+        f"{record.meta.title or '(untitled)'}",
+        err=True,
+    )
+    return record.messages
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +278,27 @@ def doctor(
         "config_paths": [str(path) for path in get_config_paths(root)],
     }
     console.print_json(json.dumps(checks, ensure_ascii=False))
+
+
+@app.command("sessions")
+def sessions_list(
+    cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
+    all_projects: Annotated[
+        bool, typer.Option("--all", help="List sessions from every project")
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum sessions to show")] = 20,
+) -> None:
+    """List saved conversation sessions (newest first)."""
+    root = str((cwd or Path.cwd()).resolve())
+    store = SessionStore()
+    metas = store.list(limit=limit, cwd=None if all_projects else root)
+    if not metas:
+        typer.echo("No saved sessions." if all_projects else f"No saved sessions in {root}")
+        return
+    for index, meta in enumerate(metas, 1):
+        updated = time.strftime("%Y-%m-%d %H:%M", time.localtime(meta.updated_at))
+        title = meta.title or "(untitled)"
+        typer.echo(f"{index}\t{meta.id}\t{meta.message_count} msgs\t{updated}\t{title}")
 
 
 @app.command("serve")
@@ -321,6 +420,7 @@ async def _run_prompt(
     mode: str = "react",
     worker_mode: str = "react",
     json_output: bool = False,
+    history: list | None = None,
 ) -> None:
     """Execute a single prompt and print the result."""
     config.render_mode = "plain"
@@ -348,7 +448,7 @@ async def _run_prompt(
         elif mode == "team":
             result = await engine.team_complete_async(prompt, worker_mode=worker_mode)
         else:
-            result = await engine.ask_complete_async(prompt)
+            result = await engine.ask_complete_async(prompt, history=history)
     except Exception as exc:  # noqa: BLE001 - CLI should report model/config errors cleanly
         typer.echo(f"Fatal error: {exc}", err=True)
         raise typer.Exit(1) from exc

@@ -12,6 +12,7 @@ from nexuscli.snapshot import SnapshotService
 from nexuscli.tools import file_ops as fops
 from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 from nexuscli.tools.file_ops import FileOpResult
+from nexuscli.tools.todo_store import TodoStore, format_todos
 from nexuscli.web import fetch_url, search_web
 
 
@@ -372,6 +373,47 @@ def get_builtin_tools() -> list[Tool]:
             danger_level="high",
             requires_approval=True,
         ),
+        Tool(
+            name="todo_write",
+            description=(
+                "Write the full task checklist for the current task. Send the COMPLETE list "
+                "every time: items are created, updated, and completed by replacing the whole "
+                "list. Use it for multi-step work (3+ steps) to plan up front and show progress; "
+                "mark items in_progress before starting and completed immediately after."
+            ),
+            parameters=object_schema(
+                {
+                    "todos": {
+                        "type": "array",
+                        "description": "Full todo list; replaces the previous list",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string", "description": "Task description"},
+                                "status": {
+                                    "type": "string",
+                                    "description": "pending, in_progress, or completed",
+                                },
+                                "priority": {
+                                    "type": "string",
+                                    "description": "high, medium, or low",
+                                },
+                            },
+                            "required": ["content", "status"],
+                        },
+                    }
+                },
+                ["todos"],
+            ),
+            required_keys=["todos"],
+            handler=_todo_write,
+        ),
+        Tool(
+            name="todo_read",
+            description="Read the current task checklist tracked with todo_write.",
+            parameters=object_schema({}, []),
+            handler=_todo_read,
+        ),
     ]
     return tools
 
@@ -666,6 +708,24 @@ async def _search_code(payload: dict[str, Any], context: ToolContext) -> ToolRes
 async def _revert_turn(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     record = SnapshotService(context.cwd).restore(str(payload["snapshot"]))
     return ToolResult(f"Restored snapshot {record.id}")
+
+
+# ---------------------------------------------------------------------------
+# Handlers: task checklist
+# ---------------------------------------------------------------------------
+
+
+async def _todo_write(payload: dict[str, Any], context: ToolContext) -> ToolResult:
+    store = TodoStore(context.cwd)
+    try:
+        todos = store.set(payload["todos"])
+    except ValueError as exc:
+        return ToolResult(f"Invalid todo list: {exc}", is_error=True)
+    return ToolResult(format_todos(todos))
+
+
+async def _todo_read(payload: dict[str, Any], context: ToolContext) -> ToolResult:
+    return ToolResult(format_todos(TodoStore(context.cwd).get()))
 
 
 # ---------------------------------------------------------------------------
