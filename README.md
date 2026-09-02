@@ -4,6 +4,8 @@ NexusCLI 是一个运行在终端里的 AI Agent CLI，面向真实项目开发�
 
 它不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路径有测试覆盖，也经过本地 smoke 和真实终端运行验证。
 
+> 第一次部署？看 [TUTORIAL.md](TUTORIAL.md)：从安装依赖、配置模型 API 到第一次跑通 Agent 任务的完整运行教程。
+
 ## 功能特性
 
 - 交互式终端 Agent，基于 Rich 和 prompt-toolkit 渲染
@@ -27,6 +29,10 @@ NexusCLI 是一个运行在终端里的 AI Agent CLI，面向真实项目开发�
 - 上下文预算与压缩：达到可用输入预算的 80% 后压缩旧轮次，保留近期消息和完整工具调用对
 - 完整 usage、缓存命中/未命中 Token、reasoning Token 和可配置成本估算
 - Agent run 前后自动创建快照，支持恢复现场
+- REPL 会话自动持久化为 JSONL 转录，支持 `sessions` 列表、`-c` / `--resume` 跨进程恢复，
+  以及 `/resume` 在会话内切换历史
+- 自定义斜杠命令：把 markdown 提示词放进 `~/.nexuscli/commands/` 或项目
+  `.nexuscli/commands/` 即可扩展 REPL 与 `-p` 模式（支持 `$ARGUMENTS` 与 frontmatter 描述）
 - 支持本地图片和远程图片输入，并根据模型能力自动降级
 
 ## 环境要求
@@ -68,6 +74,14 @@ uv run nexuscli --mode team --worker-mode plan -p "并行审计核心模块" --j
 
 ```bash
 uv run nexuscli doctor --cwd .
+```
+
+会话持久化与恢复（REPL 对话自动保存，可跨进程继续）：
+
+```bash
+uv run nexuscli sessions       # 列出当前项目的最近会话
+uv run nexuscli -c             # 继续本工程最近一次 REPL 会话
+uv run nexuscli --resume <id>  # 按会话 id 恢复
 ```
 
 ## 配置
@@ -128,6 +142,8 @@ uv run nexuscli -p "解释这个仓库"
 /help
 /exit
 /clear
+/resume
+/resume <index-or-id>
 /context
 /memory
 /memory search <query>
@@ -189,6 +205,8 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 - `save_skill`
 - `search_code`
 - `revert_turn`
+- `todo_write`
+- `todo_read`
 
 写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作，会经过 policy、HITL 和 audit 处理。
 `save_skill` 也必须经过 HITL；模型可以提议沉淀，但不会静默改变后续行为。
@@ -389,6 +407,63 @@ REPL 中可以使用：
 /restore 1
 /snapshot clean
 ```
+
+## 会话与恢复
+
+REPL 的每轮对话会自动追加到 `~/.nexuscli/sessions/<id>.jsonl`（首行为会话元信息，之后每行
+一条消息）。只打开不对话不会产生会话文件；`/clear` 会开启一个新会话。
+
+恢复方式：
+
+```bash
+uv run nexuscli sessions            # 列出当前项目的会话（--all 查看全部项目）
+uv run nexuscli -c                  # 继续本工程最近一次会话
+uv run nexuscli --resume <id>       # 按会话 id（或 id 前缀）恢复
+```
+
+会话内切换：
+
+```text
+/resume                             # 列出最近会话
+/resume 2                           # 按序号切换，后续对话继续追加到该会话
+/resume <id-前缀>
+```
+
+单次模式也支持恢复：`uv run nexuscli -p "继续刚才的任务" -c` 会把历史会话注入 react 模式
+（plan/team 单次模式不支持注入历史）。恢复只回放对话消息，usage/cost 从当前进程重新累计。
+
+## 任务清单（todo）
+
+Agent 处理多步任务时可以通过内置工具 `todo_write` 维护一份任务清单：每次提交完整列表，
+标记 `pending / in_progress / completed` 与优先级。清单保存在项目 `.nexuscli/todo.json`，
+可用 `todo_read` 读取，工具返回值即格式化后的清单状态，跨会话仍然有效。
+
+## 自定义斜杠命令
+
+把 markdown 文件放进命令目录，文件名（去掉 `.md`）就是命令名：
+
+- 用户级：`~/.nexuscli/commands/<命令名>.md`（跨项目可用）
+- 项目级：`.nexuscli/commands/<命令名>.md`（同名时覆盖用户级；该目录默认被 gitignore，
+  适合放个人常用命令）
+
+文件格式：
+
+```markdown
+---
+description: 对指定代码做快速 review
+---
+请对下面的目标做 code review：
+
+$ARGUMENTS
+```
+
+- `$ARGUMENTS` 会被替换为命令后面的参数；没有该占位符时，参数会追加到提示词末尾
+- frontmatter 的 `description` 可选，会显示在 `/help` 里
+- REPL 输入 `/命令名` 或单次模式 `nexuscli -p "/命令名 参数"` 都会展开为提示词发给模型
+- 示例见仓库 `examples/commands/`，复制到命令目录即可使用
+
+注意：在 Git Bash 里调用 `-p "/命令名"` 时，MSYS 可能把开头的 `/` 当路径转换；
+加 `MSYS_NO_PATHCONV=1` 前缀即可。交互模式不受影响。
 
 ## SDK
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -22,6 +23,12 @@ from nexuscli.agent import Agent, AgentOrchestrator, PlanExecuteAgent
 from nexuscli.bootstrap import build_tool_registry
 from nexuscli.config import NexusCliConfig, config_to_public_dict
 from nexuscli.entrypoints.model_selector import ModelSelectorState, run_model_selector
+from nexuscli.entrypoints.slash_commands import (
+    CustomCommand,
+    expand_custom_command,
+    load_slash_commands,
+    split_command_message,
+)
 from nexuscli.llm import create_llm_client
 from nexuscli.llm.model_profiles import (
     DEFAULT_MODEL_PROFILES,
@@ -35,6 +42,7 @@ from nexuscli.prompt import PromptAssembler
 from nexuscli.rag import CodeIndex
 from nexuscli.render import RichRenderer
 from nexuscli.runtime import DurableTaskManager
+from nexuscli.session import SessionStore, SessionWriter
 from nexuscli.skill import SkillRegistry
 from nexuscli.snapshot import SnapshotService
 from nexuscli.tools import ToolRegistry
@@ -43,6 +51,7 @@ SLASH_COMMANDS = [
     "/help",
     "/exit",
     "/clear",
+    "/resume",
     "/context",
     "/memory",
     "/save",
@@ -97,7 +106,21 @@ class PermissionModeController:
         return self.set("auto" if self.mode == "default" else "default")
 
 
-async def start_repl(cwd: str, config: NexusCliConfig) -> None:
+@dataclass
+class ReplSessionState:
+    """Live session transcript state: the store plus the current writer."""
+
+    store: SessionStore
+    writer: SessionWriter
+
+
+async def start_repl(
+    cwd: str,
+    config: NexusCliConfig,
+    *,
+    resume: str | None = None,
+    continue_last: bool = False,
+) -> None:
     console = Console()
     permission_mode = PermissionModeController(config)
     registry, mcp_manager = await build_tool_registry(config=config, cwd=cwd)
@@ -135,6 +158,24 @@ async def start_repl(cwd: str, config: NexusCliConfig) -> None:
         approval_callback=lambda request: _approval_prompt(request, console, permission_mode),
     )
 
+    session_store = SessionStore()
+    session_state = ReplSessionState(
+        store=session_store,
+        writer=session_store.new_writer(
+            cwd=cwd,
+            model=client.model_name,
+            provider=client.provider_name,
+        ),
+    )
+    _apply_resume(
+        console,
+        session_state,
+        agent,
+        resume=resume,
+        continue_last=continue_last,
+    )
+    custom_commands = load_slash_commands(cwd)
+
     history_path = Path.home() / ".nexuscli" / "history" / "prompt_history.txt"
     history_path.parent.mkdir(parents=True, exist_ok=True)
     session = PromptSession(
@@ -149,7 +190,10 @@ async def start_repl(cwd: str, config: NexusCliConfig) -> None:
             permission_mode=permission_mode.mode,
         ),
         history=FileHistory(str(history_path)),
-        completer=WordCompleter(SLASH_COMMANDS, ignore_case=True),
+        completer=WordCompleter(
+            SLASH_COMMANDS + [f"/{name}" for name in custom_commands],
+            ignore_case=True,
+        ),
         placeholder=[("class:placeholder", "Type your message or @path/to/file")],
         style=Style.from_dict(
             {
@@ -182,6 +226,11 @@ async def start_repl(cwd: str, config: NexusCliConfig) -> None:
         if not message:
             continue
         if message.startswith("/"):
+            custom_match = _match_custom_command(message, custom_commands)
+            if custom_match is not None:
+                await _run_agent(agent, renderer, custom_match[1])
+                _persist_history(session_state, agent, console)
+                continue
             should_exit = await _handle_slash(
                 message,
                 console,
@@ -191,15 +240,101 @@ async def start_repl(cwd: str, config: NexusCliConfig) -> None:
                 registry,
                 permission_mode,
                 renderer,
+                session_state,
+                custom_commands,
             )
             if should_exit:
                 return
             continue
         await _run_agent(agent, renderer, message)
+        _persist_history(session_state, agent, console)
 
 
 async def _run_agent(agent: Agent, renderer: RichRenderer, message: str) -> None:
     await _run_events(agent.run(message), renderer, agent.llm_client.max_context_window)
+
+
+def _match_custom_command(
+    message: str,
+    custom_commands: dict[str, CustomCommand],
+) -> tuple[CustomCommand, str] | None:
+    """Return ``(command, expanded_prompt)`` when *message* names a custom command."""
+    parsed = split_command_message(message)
+    if parsed is None:
+        return None
+    name, args = parsed
+    command = custom_commands.get(name.lstrip("/"))
+    if command is None:
+        return None
+    return command, expand_custom_command(command, args)
+
+
+def _persist_history(
+    session_state: ReplSessionState,
+    agent: Agent,
+    console: Console,
+) -> None:
+    try:
+        session_state.writer.append(agent.history)
+    except OSError as exc:
+        console.print(f"[yellow]Failed to persist session transcript:[/yellow] {exc}")
+
+
+def _apply_resume(
+    console: Console,
+    session_state: ReplSessionState,
+    agent: Agent,
+    *,
+    resume: str | None = None,
+    continue_last: bool = False,
+) -> None:
+    """Restore a previous transcript into the live agent, if requested."""
+    if not resume and not continue_last:
+        return
+    record = None
+    if resume:
+        record = session_state.store.resolve(resume, cwd=agent.cwd)
+        if record is None:
+            console.print(f"[red]Session not found:[/red] {resume}")
+            return
+    else:
+        recent = session_state.store.list(limit=1, cwd=agent.cwd)
+        if not recent:
+            console.print("[yellow]No previous session to continue.[/yellow]")
+            return
+        record = session_state.store.load(recent[0].id)
+    if record is None:
+        console.print("[yellow]Session transcript is unreadable; starting fresh.[/yellow]")
+        return
+    agent.history = list(record.messages)
+    session_state.writer = session_state.store.writer_for(record.meta, record.messages)
+    title = f" — {record.meta.title}" if record.meta.title else ""
+    console.print(
+        f"[green]Resumed session[/green] {record.meta.id} ({len(record.messages)} messages){title}"
+    )
+
+
+def _print_session_list(console: Console, store: SessionStore, cwd: str) -> None:
+    metas = store.list(limit=20, cwd=cwd)
+    if not metas:
+        console.print("(no saved sessions)")
+        return
+    table = Table(title="NexusCLI Sessions")
+    table.add_column("#", justify="right")
+    table.add_column("ID")
+    table.add_column("Title")
+    table.add_column("Messages", justify="right")
+    table.add_column("Updated")
+    for index, meta in enumerate(metas, 1):
+        table.add_row(
+            str(index),
+            meta.id,
+            meta.title or "(untitled)",
+            str(meta.message_count),
+            time.strftime("%Y-%m-%d %H:%M", time.localtime(meta.updated_at)),
+        )
+    console.print(table)
+    console.print("[dim]Resume with /resume <index-or-id>[/dim]")
 
 
 async def _run_events(events, renderer: RichRenderer, context_window: int | None = None) -> None:
@@ -222,6 +357,8 @@ async def _handle_slash(
     registry: ToolRegistry,
     permission_mode: PermissionModeController,
     renderer: RichRenderer,
+    session_state: ReplSessionState,
+    custom_commands: dict[str, CustomCommand] | None = None,
 ) -> bool:
     command, _, rest = raw.partition(" ")
     arg = rest.strip()
@@ -229,9 +366,32 @@ async def _handle_slash(
         return True
     if command == "/help":
         console.print("\n".join(SLASH_COMMANDS))
+        for name, custom in (custom_commands or {}).items():
+            description = f" — {custom.description}" if custom.description else ""
+            console.print(f"/{name}{description} [dim]({custom.source})[/dim]")
     elif command == "/clear":
         agent.clear_history()
+        session_state.writer = session_state.store.new_writer(
+            cwd=cwd,
+            model=agent.llm_client.model_name,
+            provider=agent.llm_client.provider_name,
+        )
         console.clear()
+    elif command == "/resume":
+        if not arg:
+            _print_session_list(console, session_state.store, cwd)
+        else:
+            record = session_state.store.resolve(arg, cwd=cwd)
+            if record is None:
+                console.print(f"[red]Session not found:[/red] {arg}")
+            else:
+                agent.history = list(record.messages)
+                session_state.writer = session_state.store.writer_for(record.meta, record.messages)
+                title = f" — {record.meta.title}" if record.meta.title else ""
+                console.print(
+                    f"[green]Resumed session[/green] {record.meta.id} "
+                    f"({len(record.messages)} messages){title}"
+                )
     elif command == "/context":
         memories = MemoryManager(config.memory.long_term_db_path, scope=cwd).list(limit=5)
         table = Table(title="NexusCLI Context")
