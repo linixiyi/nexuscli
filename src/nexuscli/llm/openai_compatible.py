@@ -76,6 +76,7 @@ class OpenAICompatibleClient:
         url = self.base_url.rstrip("/") + "/chat/completions"
 
         yield {"type": "message_start", "model": self.model}
+        pending_usage: dict[str, Any] | None = None
         try:
             async with (
                 httpx.AsyncClient(timeout=self.timeout, http2=False) as client,
@@ -90,7 +91,13 @@ class OpenAICompatibleClient:
                     except json.JSONDecodeError:
                         continue
                     async for parsed in self._parse_chunk(chunk):
-                        yield parsed
+                        # Streamed usage is a running total, not a delta, and some
+                        # gateways attach it to every chunk — keep only the last
+                        # one and emit it once so consumers don't multiply tokens.
+                        if parsed.get("type") == "usage":
+                            pending_usage = parsed
+                        else:
+                            yield parsed
         except httpx.TimeoutException:
             yield {
                 "type": "error",
@@ -115,6 +122,9 @@ class OpenAICompatibleClient:
                     "Check the network, VPN/proxy, and provider status, then retry."
                 ),
             }
+            return
+        if pending_usage is not None:
+            yield pending_usage
 
     def _build_payload(
         self,
@@ -233,7 +243,8 @@ class OpenAICompatibleClient:
 async def _iter_sse(response: httpx.Response) -> AsyncIterator[str]:
     buffer = ""
     async for text in response.aiter_text():
-        buffer += text
+        # SSE allows \r\n, \r, or \n separators; normalize so CRLF streams split.
+        buffer += text.replace("\r\n", "\n").replace("\r", "\n")
         while "\n\n" in buffer:
             event, buffer = buffer.split("\n\n", 1)
             data_lines = []

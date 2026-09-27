@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from collections import OrderedDict
@@ -89,9 +90,6 @@ class SkillContextBuffer:
     def is_empty(self) -> bool:
         return not self._items
 
-    def size(self) -> int:
-        return len(self._items)
-
 
 class SkillStateStore:
     def __init__(self, path: str | Path | None = None):
@@ -121,10 +119,14 @@ class SkillStateStore:
 
     def _write(self, disabled: set[str]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(
             json.dumps({"disabled": sorted(disabled)}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        # Atomic swap: a crash mid-write must not corrupt the state file, which
+        # would silently re-enable every disabled skill.
+        os.replace(tmp, self.path)
 
 
 class SkillRegistry:
@@ -249,22 +251,6 @@ class SkillRegistry:
             tags=tags if tags is not None else existing.tags,
             overwrite=True,
         )
-
-    def index_text(self, max_chars: int = 4000, max_skills: int = 20) -> str:
-        skills = self.enabled_skills()[:max_skills]
-        if not skills:
-            return ""
-        lines = [
-            "Available skills:",
-            "Load a skill with load_skill(name) when its description matches the task.",
-        ]
-        for skill in skills:
-            description = " ".join(skill.description.split())
-            if len(description) > 500:
-                description = description[:497] + "..."
-            lines.append(f"- {skill.name}: {description}")
-        text = "\n".join(lines)
-        return text[:max_chars]
 
     def _scope_root(self, scope: str) -> Path:
         if scope == "project":

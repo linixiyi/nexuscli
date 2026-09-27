@@ -326,22 +326,37 @@ class MemoryManager:
             columns = {
                 str(row["name"]) for row in conn.execute("pragma table_info(memories)").fetchall()
             }
-            migrations = {
-                "kind": "text not null default 'fact'",
-                "source": "text not null default 'legacy'",
-                "importance": "real not null default 0.5",
-                "confidence": "real not null default 1.0",
-                "updated_at": "text not null default ''",
-                "expires_at": "text",
-                "access_count": "integer not null default 0",
-                "content_hash": "text not null default ''",
-            }
-            for name, definition in migrations.items():
-                if name not in columns:
-                    conn.execute(f"alter table memories add column {name} {definition}")
+            if "kind" not in columns:
+                conn.execute("alter table memories add column kind text not null default 'fact'")
+            if "source" not in columns:
+                conn.execute(
+                    "alter table memories add column source text not null default 'legacy'"
+                )
+            if "importance" not in columns:
+                conn.execute("alter table memories add column importance real not null default 0.5")
+            if "confidence" not in columns:
+                conn.execute("alter table memories add column confidence real not null default 1.0")
+            if "updated_at" not in columns:
+                conn.execute("alter table memories add column updated_at text not null default ''")
+            if "expires_at" not in columns:
+                conn.execute("alter table memories add column expires_at text")
+            if "access_count" not in columns:
+                conn.execute(
+                    "alter table memories add column access_count integer not null default 0"
+                )
+            if "content_hash" not in columns:
+                conn.execute(
+                    "alter table memories add column content_hash text not null default ''"
+                )
 
-            conn.execute("drop index if exists idx_memories_scope_hash")
-            self._normalize_and_deduplicate(conn)
+            # The dedup pass rewrites every row; guard it with a version marker
+            # so constructing a manager (which the REPL does per command) does
+            # not take a write lock and rescan the whole table every time.
+            version = int(conn.execute("pragma user_version").fetchone()[0])
+            if version < 1:
+                conn.execute("drop index if exists idx_memories_scope_hash")
+                self._normalize_and_deduplicate(conn)
+                conn.execute("pragma user_version = 1")
             conn.execute("create index if not exists idx_memories_scope on memories(scope, id)")
             conn.execute(
                 """
@@ -364,7 +379,13 @@ class MemoryManager:
             self._enforce_quota(conn)
 
     def _normalize_and_deduplicate(self, conn: sqlite3.Connection) -> None:
-        rows = conn.execute(f"select {_ENTRY_COLUMNS} from memories order by id").fetchall()
+        rows = conn.execute(
+            f"""
+            select {_ENTRY_COLUMNS}
+            from memories
+            order by id
+            """
+        ).fetchall()
         seen: dict[tuple[str, str], dict[str, Any]] = {}
         now = _now_iso()
         for row in rows:

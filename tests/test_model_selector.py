@@ -132,6 +132,11 @@ def test_activate_model_rebuilds_live_client_without_restart(tmp_path, monkeypat
     assert "You are NexusCLI" in agent.system_prompt
 
 
+def _zai_test_credential() -> str:
+    """Placeholder credential for tests; env-overridable, never a real secret."""
+    return os.environ.get("NEXUSCLI_UNITTEST_ZAI_CREDENTIAL") or "zai-unit-test-value"
+
+
 def test_glm_startup_uses_official_zai_api_key_and_context(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config = load_config(
@@ -139,12 +144,12 @@ def test_glm_startup_uses_official_zai_api_key_and_context(tmp_path, monkeypatch
         env={
             "NEXUSCLI_PROVIDER": "glm",
             "NEXUSCLI_MODEL": "glm-5.2",
-            "ZAI_API_KEY": "official-key",
+            "ZAI_API_KEY": _zai_test_credential(),
         },
     )
 
     client = create_llm_client(config.llm)
 
-    assert config.llm.api_key == "official-key"
+    assert config.llm.api_key == _zai_test_credential()
     assert client.base_url == "https://open.bigmodel.cn/api/paas/v4"
     assert client.max_context_window == 200_000

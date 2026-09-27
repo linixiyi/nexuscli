@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -225,29 +226,35 @@ async def start_repl(
         message = user_input.strip()
         if not message:
             continue
-        if message.startswith("/"):
-            custom_match = _match_custom_command(message, custom_commands)
-            if custom_match is not None:
-                await _run_agent(agent, renderer, custom_match[1])
-                _persist_history(session_state, agent, console)
+        try:
+            if message.startswith("/"):
+                custom_match = _match_custom_command(message, custom_commands)
+                if custom_match is not None:
+                    await _run_agent(agent, renderer, custom_match[1])
+                    _persist_history(session_state, agent, console)
+                    continue
+                should_exit = await _handle_slash(
+                    message,
+                    console,
+                    cwd,
+                    config,
+                    agent,
+                    registry,
+                    permission_mode,
+                    renderer,
+                    session_state,
+                    custom_commands,
+                )
+                if should_exit:
+                    return
                 continue
-            should_exit = await _handle_slash(
-                message,
-                console,
-                cwd,
-                config,
-                agent,
-                registry,
-                permission_mode,
-                renderer,
-                session_state,
-                custom_commands,
-            )
-            if should_exit:
-                return
-            continue
-        await _run_agent(agent, renderer, message)
-        _persist_history(session_state, agent, console)
+            await _run_agent(agent, renderer, message)
+            _persist_history(session_state, agent, console)
+        except KeyboardInterrupt:
+            # Ctrl+C mid-turn aborts the turn, not the whole session.
+            console.print("\n[yellow]Interrupted — turn aborted.[/yellow]")
+        except Exception as exc:  # noqa: BLE001 - an unexpected error must not kill the REPL
+            console.print(f"[red]Error:[/red] {exc}")
 
 
 async def _run_agent(agent: Agent, renderer: RichRenderer, message: str) -> None:
@@ -341,10 +348,16 @@ async def _run_events(events, renderer: RichRenderer, context_window: int | None
     renderer.set_context_window(context_window)
     renderer.start_run()
     renderer.newline()
-    async for event in events:
-        renderer.handle(event)
-        if event.get("type") == "error":
-            break
+    try:
+        async for event in events:
+            renderer.handle(event)
+            if event.get("type") == "error":
+                break
+    finally:
+        # Close the async generator so agent-level finally blocks (post-turn
+        # snapshot, HTTP client cleanup) run even when we break early.
+        with suppress(Exception):
+            await events.aclose()
     renderer.newline()
 
 

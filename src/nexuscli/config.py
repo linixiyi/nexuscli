@@ -279,16 +279,25 @@ def _config_to_dict(config: NexusCliConfig) -> dict[str, Any]:
 
 
 def _dict_to_config(data: dict[str, Any]) -> NexusCliConfig:
+    # Unknown keys (e.g. typos in config.json) are dropped instead of raising,
+    # so one bad entry cannot prevent the CLI from starting.
     return NexusCliConfig(
-        llm=LlmConfig(**data.get("llm", {})),
+        llm=LlmConfig(**_filter_known(data.get("llm", {}), LlmConfig)),
         render_mode=data.get("render_mode", "inline"),
-        tools=ToolsConfig(**data.get("tools", {})),
-        mcp=McpConfig(**data.get("mcp", {})),
-        memory=MemoryConfig(**data.get("memory", {})),
-        policy=PolicyConfig(**data.get("policy", {})),
-        prompt=PromptConfig(**data.get("prompt", {})),
-        features=FeatureConfig(**data.get("features", {})),
+        tools=ToolsConfig(**_filter_known(data.get("tools", {}), ToolsConfig)),
+        mcp=McpConfig(**_filter_known(data.get("mcp", {}), McpConfig)),
+        memory=MemoryConfig(**_filter_known(data.get("memory", {}), MemoryConfig)),
+        policy=PolicyConfig(**_filter_known(data.get("policy", {}), PolicyConfig)),
+        prompt=PromptConfig(**_filter_known(data.get("prompt", {}), PromptConfig)),
+        features=FeatureConfig(**_filter_known(data.get("features", {}), FeatureConfig)),
     )
+
+
+def _filter_known(raw: Any, cls: type) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
+    return {key: value for key, value in raw.items() if key in known}
 
 
 def _expand_home(path: str) -> str:

@@ -65,10 +65,6 @@ class Task:
         self.error = error
         self.end_time = time.time()
 
-    def mark_skipped(self) -> None:
-        self.status = TaskStatus.SKIPPED
-        self.end_time = time.time()
-
     def is_executable(self, all_tasks: dict[str, Task]) -> bool:
         if self.status != TaskStatus.PENDING:
             return False
@@ -105,9 +101,6 @@ class ExecutionPlan:
 
     def all_tasks(self) -> list[Task]:
         return list(self.tasks.values())
-
-    def root_tasks(self) -> list[Task]:
-        return [task for task in self.tasks.values() if not task.dependencies]
 
     def executable_tasks(self) -> list[Task]:
         return [task for task in self.tasks.values() if task.is_executable(self.tasks)]
@@ -161,12 +154,6 @@ class ExecutionPlan:
             completed.update(batch_ids)
             remaining.difference_update(batch_ids)
         return batches
-
-    def progress(self) -> float:
-        if not self.tasks:
-            return 1.0
-        completed = sum(1 for task in self.tasks.values() if task.status == TaskStatus.COMPLETED)
-        return completed / len(self.tasks)
 
     def is_all_completed(self) -> bool:
         return all(task.status == TaskStatus.COMPLETED for task in self.tasks.values())

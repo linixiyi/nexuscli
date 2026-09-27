@@ -5,6 +5,7 @@ from typing import Any
 
 from nexuscli.policy import AuditLog
 from nexuscli.tools.base import Tool, ToolContext, ToolDecision, ToolResult
+from nexuscli.tools.commands import classify_command
 from nexuscli.tools.registry import ToolRegistry
 
 
@@ -130,13 +131,26 @@ class ToolExecutor:
             {
                 "tool_name": tool.name,
                 "input": payload,
-                "danger_level": tool.danger_level,
+                "danger_level": _display_danger_level(tool, payload),
                 "description": tool.description,
             }
         )
         if asyncio.iscoroutine(result):
             result = await result
         return result
+
+
+def _display_danger_level(tool: Tool, payload: dict[str, Any]) -> str:
+    """Refine the static tool danger level with the actual command content.
+
+    The static level stays the default; shell tools get a per-command rating so
+    the approval prompt distinguishes ``ls`` from ``rm -rf`` or ``curl | sh``.
+    """
+    if tool.name in {"bash", "execute_command"}:
+        command = str(payload.get("command") or "")
+        if command.strip():
+            return classify_command(command)
+    return tool.danger_level
 
 
 def _tool_call_name(call: dict[str, Any]) -> str:

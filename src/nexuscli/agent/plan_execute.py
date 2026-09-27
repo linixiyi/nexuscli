@@ -82,6 +82,7 @@ class PlanExecuteAgent:
                     final_text += str(event.get("text") or "")
                 yield event
             self.history = [
+                *self.history,
                 Message(role="user", content=message),
                 Message(role="assistant", content=final_text),
             ]
@@ -182,12 +183,13 @@ class PlanExecuteAgent:
         if result.error:
             result.task.mark_failed(str(result.error))
             yield {"type": "text_delta", "text": f"失败 [{result.task.id}]：{result.error}\n\n"}
-            return
-        result.task.mark_completed(result.text)
-        yield {
-            "type": "text_delta",
-            "text": f"已完成 [{result.task.id}]：{_preview(result.text)}\n\n",
-        }
+        else:
+            result.task.mark_completed(result.text)
+            yield {
+                "type": "text_delta",
+                "text": f"已完成 [{result.task.id}]：{_preview(result.text)}\n\n",
+            }
+        # Failed tasks still consumed tokens and turns — always report accounting.
         yield {
             "type": "usage",
             "usage": result.usage.to_dict(),

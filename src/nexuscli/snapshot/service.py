@@ -3,11 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-SKIP_DIRS = {".git", ".venv", "node_modules", "dist", "build", "target", "__pycache__"}
+# ".nexuscli" holds the CLI's own state (config, memory db, snapshots); it must
+# never be captured or restored, and skipping it also prevents snapshot trees
+# under $HOME from copying themselves into their own destination.
+SKIP_DIRS = {".git", ".venv", "node_modules", "dist", "build", "target", "__pycache__", ".nexuscli"}
 
 
 @dataclass(slots=True)
@@ -16,6 +19,7 @@ class SnapshotRecord:
     phase: str
     created_at: str
     path: Path
+    skipped: list[str] = field(default_factory=list)
 
 
 class SnapshotService:
@@ -30,12 +34,17 @@ class SnapshotService:
         snapshot_id = f"{phase}_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
         target = self.root / snapshot_id
         target.mkdir(parents=True, exist_ok=True)
-        self._copy_tree(self.project_root, target)
+        try:
+            skipped = self._copy_tree(self.project_root, target)
+        except Exception:
+            shutil.rmtree(target, ignore_errors=True)
+            raise
         record = SnapshotRecord(
             id=snapshot_id,
             phase=phase,
             created_at=datetime.now(UTC).isoformat(),
             path=target,
+            skipped=skipped,
         )
         with self.index_path.open("a", encoding="utf-8") as handle:
             handle.write(
@@ -45,6 +54,7 @@ class SnapshotService:
                         "phase": record.phase,
                         "created_at": record.created_at,
                         "path": str(record.path),
+                        "skipped": skipped,
                     },
                     ensure_ascii=False,
                 )
@@ -67,6 +77,7 @@ class SnapshotService:
                     phase=item["phase"],
                     created_at=item["created_at"],
                     path=Path(item["path"]),
+                    skipped=list(item.get("skipped") or []),
                 )
             )
         return records[-limit:][::-1]
@@ -82,6 +93,12 @@ class SnapshotService:
             record = next((item for item in records if item.id == snapshot_ref), None)
         if not record:
             raise ValueError(f"snapshot not found: {snapshot_ref}")
+        if not record.path.is_dir():
+            # Validate BEFORE wiping the workspace: a missing snapshot directory
+            # must never leave the project emptied.
+            raise ValueError(
+                f"snapshot directory is missing on disk: {record.path} — nothing was restored"
+            )
         self.create("pre-restore")
         self._restore_tree(record.path, self.project_root)
         return record
@@ -93,16 +110,26 @@ class SnapshotService:
         self.root.mkdir(parents=True, exist_ok=True)
         return count
 
-    def _copy_tree(self, source: Path, target: Path) -> None:
+    def _copy_tree(self, source: Path, target: Path) -> list[str]:
+        """Copy workspace files into *target*, skipping files that cannot be read.
+
+        Returns the skipped paths so a locked file degrades one snapshot instead
+        of silently disabling automatic snapshots altogether.
+        """
+        skipped: list[str] = []
         for item in source.iterdir():
             if _skip(item):
                 continue
             destination = target / item.name
-            if item.is_dir():
-                shutil.copytree(item, destination, ignore=_ignore)
-            elif item.is_file():
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(item, destination)
+            try:
+                if item.is_dir():
+                    shutil.copytree(item, destination, ignore=_ignore)
+                elif item.is_file():
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(item, destination)
+            except OSError:
+                skipped.append(item.name)
+        return skipped
 
     def _restore_tree(self, source: Path, target: Path) -> None:
         for item in target.iterdir():

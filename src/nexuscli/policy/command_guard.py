@@ -8,7 +8,13 @@ class CommandPolicyError(ValueError):
 
 
 class CommandGuard:
-    """Fast-fail obviously destructive shell commands before HITL."""
+    """Fast-fail obviously destructive shell commands before HITL.
+
+    This is a convenience tripwire, not a security boundary: blacklist entries are
+    substring-matched against the command line and the built-in patterns are
+    trivially bypassable (quoting, variables, interpreters, encodings). Real
+    enforcement is the HITL approval flow — keep it enabled for untrusted commands.
+    """
 
     def __init__(self, blacklist: list[str] | None = None):
         self.blacklist = blacklist or []

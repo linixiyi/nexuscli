@@ -325,13 +325,14 @@ class AgentOrchestrator:
                 raise ValueError(f"planner output could not be parsed:\n{plan_result.content}")
             yield {"type": "text_delta", "text": self.summarize_steps(steps) + "\n"}
             yield {"type": "text_delta", "text": "Phase 2: workers and reviewer\n\n"}
-            for event in await self._execute_steps(
+            async for event in self._execute_steps(
                 steps, lambda text: {"type": "text_delta", "text": text}
             ):
                 yield event
             final_text = self.build_final_result(steps)
             yield {"type": "text_delta", "text": final_text}
             self.history = [
+                *self.history,
                 Message(role="user", content=message),
                 Message(role="assistant", content=final_text),
             ]
@@ -357,8 +358,7 @@ class AgentOrchestrator:
         self,
         steps: list[ExecutionStep],
         event_factory,
-    ) -> list[dict[str, Any]]:
-        events: list[dict[str, Any]] = []
+    ) -> AsyncIterator[dict[str, Any]]:
         retry_count: dict[str, int] = {}
         worker_queue: asyncio.Queue[SubAgent] = asyncio.Queue()
         for worker in self.workers:
@@ -369,10 +369,8 @@ class AgentOrchestrator:
             if not executable:
                 break
             if len(executable) > 1:
-                events.append(
-                    event_factory(
-                        f"Parallel batch: {', '.join(step.id for step in executable)}\n\n"
-                    )
+                yield event_factory(
+                    f"Parallel batch: {', '.join(step.id for step in executable)}\n\n"
                 )
             await asyncio.gather(
                 *(
@@ -385,7 +383,6 @@ class AgentOrchestrator:
                     for step in executable
                 )
             )
-        return events
 
     async def _run_step_with_worker_queue(
         self,
@@ -465,9 +462,10 @@ class AgentOrchestrator:
             return []
         id_mapping: dict[str, str] = {}
         steps: list[ExecutionStep] = []
-        for index, node in enumerate(nodes, start=1):
-            if not isinstance(node, dict):
-                continue
+        dict_nodes = [
+            (index, node) for index, node in enumerate(nodes, start=1) if isinstance(node, dict)
+        ]
+        for index, node in dict_nodes:
             original_id = str(node.get("id") or f"step_{index}")
             new_id = f"step_{index}"
             id_mapping[original_id] = new_id
@@ -489,13 +487,14 @@ class AgentOrchestrator:
                     ),
                 )
             )
-        for index, node in enumerate(nodes, start=1):
-            if not isinstance(node, dict) or index > len(steps):
-                continue
+        # Position within the filtered dict-node list must match `steps`; using
+        # the raw enumerate index would misroute dependencies when any node is
+        # not a dict.
+        for position, (_index, node) in enumerate(dict_nodes, start=1):
             raw_deps = node.get("dependencies") or []
             if not isinstance(raw_deps, list):
                 continue
-            steps[index - 1].dependencies = [
+            steps[position - 1].dependencies = [
                 id_mapping.get(str(dep), str(dep)) for dep in raw_deps if str(dep)
             ]
         return steps
@@ -523,7 +522,15 @@ class AgentOrchestrator:
             positive = ["通过", "合格", '"approved": true']
             if any(item in lower for item in negative):
                 return False
-            return any(item in lower for item in positive)
+            negations = ("未", "不", "没", "无", "尚未")
+            for item in positive:
+                position = lower.find(item)
+                while position != -1:
+                    prefix = lower[max(0, position - 3) : position]
+                    if not any(neg in prefix for neg in negations):
+                        return True
+                    position = lower.find(item, position + 1)
+            return False
 
     def parse_review_issues(self, review_content: str | None) -> str:
         if not review_content:

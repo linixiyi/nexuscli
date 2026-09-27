@@ -5,6 +5,8 @@ import json
 import os
 import sqlite3
 import threading
+import time
+from contextlib import suppress
 from dataclasses import asdict
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,7 +31,7 @@ class RuntimeApiServer:
         *,
         cwd: str,
         config: NexusCliConfig,
-        api_key: str,
+        api_key: str | None = None,
         port: int = 8080,
         workers: int = 2,
     ):
@@ -47,6 +49,10 @@ class RuntimeApiServer:
         self._ensure_schema()
 
     def serve_forever(self) -> None:
+        if not self.api_key:
+            raise ValueError(
+                "Runtime API HTTP server requires an api_key; set NEXUSCLI_RUNTIME_API_KEY."
+            )
         self._start_workers()
 
         outer = self
@@ -181,10 +187,22 @@ class RuntimeApiServer:
         }
 
     def _worker_loop(self, worker_id: str) -> None:
+        last_requeue = 0.0
         while not self._stop.is_set():
-            task = self.task_manager.claim_next(worker_id, lease_seconds=300)
+            try:
+                task = self.task_manager.claim_next(worker_id, lease_seconds=300)
+            except Exception as exc:  # noqa: BLE001 - workers must survive transient DB errors
+                print(f"worker {worker_id}: claim failed: {exc}", flush=True)
+                self._stop.wait(1.0)
+                continue
             if not task:
                 self._stop.wait(0.5)
+                # Expired leases are requeued at startup; refresh periodically so
+                # stranded tasks recover without a process restart.
+                if time.monotonic() - last_requeue > 30:
+                    last_requeue = time.monotonic()
+                    with suppress(Exception):
+                        self.task_manager.requeue_expired()
                 continue
             heartbeat_stop = threading.Event()
             heartbeat = threading.Thread(
@@ -201,7 +219,10 @@ class RuntimeApiServer:
                 # cancel() owns the terminal state; never overwrite it from the worker.
                 pass
             except Exception as exc:  # noqa: BLE001
-                self.task_manager.fail(task.id, str(exc), worker_id=worker_id)
+                try:
+                    self.task_manager.fail(task.id, str(exc), worker_id=worker_id)
+                except Exception as fail_exc:  # noqa: BLE001
+                    print(f"worker {worker_id}: fail({task.id}) error: {fail_exc}", flush=True)
             finally:
                 heartbeat_stop.set()
                 heartbeat.join(timeout=1)
@@ -213,8 +234,11 @@ class RuntimeApiServer:
         stop: threading.Event,
     ) -> None:
         while not stop.wait(30):
-            if not self.task_manager.heartbeat(task_id, worker_id, lease_seconds=300):
-                return
+            try:
+                if not self.task_manager.heartbeat(task_id, worker_id, lease_seconds=300):
+                    return
+            except Exception:  # noqa: BLE001 - a dead heartbeat causes duplicate execution
+                continue
 
     async def _run_task(self, task: TaskRecord) -> str:
         self._ensure_llm_key()
@@ -244,6 +268,10 @@ class RuntimeApiServer:
             )
 
     def _authorized(self, request: BaseHTTPRequestHandler) -> bool:
+        if not self.api_key:
+            # Fail closed: worker-only mode never serves HTTP, but if an
+            # unauthenticated server somehow handles requests, reject them all.
+            return False
         auth = request.headers.get("authorization", "")
         token = request.headers.get("x-api-key", "")
         return auth == f"Bearer {self.api_key}" or token == self.api_key
@@ -358,12 +386,15 @@ class RuntimeApiServer:
 
 
 def _read_json(request: BaseHTTPRequestHandler) -> dict[str, Any]:
-    length = int(request.headers.get("content-length") or 0)
+    try:
+        length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        return {}
     if length == 0:
         return {}
     try:
         value = json.loads(request.rfile.read(length).decode("utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, OSError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
 

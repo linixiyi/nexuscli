@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,11 @@ from nexuscli.session import SessionStore
 from nexuscli.types import Message
 
 runner = CliRunner()
+
+
+def _placeholder_llm_key() -> str:
+    """Placeholder credential for tests; env-overridable, never a real secret."""
+    return os.environ.get("NEXUSCLI_UNITTEST_LLM_CREDENTIAL") or "unit-test-value"
 
 
 def test_version_flag_reports_package_version():
@@ -84,7 +90,7 @@ def test_sessions_command_says_when_empty(tmp_path, monkeypatch):
 
 
 def test_resume_with_unknown_id_exits(tmp_path, monkeypatch):
-    _patch_config(monkeypatch, api_key="test-key")
+    _patch_config(monkeypatch, api_key=_placeholder_llm_key())
 
     result = runner.invoke(
         cli.app, ["-p", "hello", "--resume", "no-such-id", "--cwd", str(tmp_path)]
@@ -95,7 +101,7 @@ def test_resume_with_unknown_id_exits(tmp_path, monkeypatch):
 
 
 def test_continue_without_history_exits(tmp_path, monkeypatch):
-    _patch_config(monkeypatch, api_key="test-key")
+    _patch_config(monkeypatch, api_key=_placeholder_llm_key())
 
     result = runner.invoke(cli.app, ["-p", "hello", "-c", "--cwd", str(tmp_path)])
 
@@ -104,7 +110,7 @@ def test_continue_without_history_exits(tmp_path, monkeypatch):
 
 
 def test_continue_loads_latest_session_into_single_prompt(tmp_path, monkeypatch):
-    config = _patch_config(monkeypatch, api_key="test-key")
+    config = _patch_config(monkeypatch, api_key=_placeholder_llm_key())
     _isolate_home(monkeypatch, tmp_path)
     store = SessionStore()
     writer = store.new_writer(cwd=str(tmp_path), model="m1", provider="deepseek")
@@ -131,7 +137,7 @@ def test_continue_loads_latest_session_into_single_prompt(tmp_path, monkeypatch)
 
 
 def test_resume_rejected_for_non_react_single_prompt_modes(tmp_path, monkeypatch):
-    _patch_config(monkeypatch, api_key="test-key")
+    _patch_config(monkeypatch, api_key=_placeholder_llm_key())
     _isolate_home(monkeypatch, tmp_path)
     store = SessionStore()
     writer = store.new_writer(cwd=str(tmp_path))

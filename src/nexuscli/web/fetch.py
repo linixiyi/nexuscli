@@ -15,8 +15,21 @@ class NetworkPolicyError(ValueError):
 
 async def fetch_url(url: str, max_length: int = 10_000, timeout: float = 15.0) -> str:
     _validate_public_url(url)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        response = await client.get(url, headers={"user-agent": "NexusCLI-Python/0.1.0"})
+    # Redirects are followed manually so every hop re-passes the public-URL check;
+    # httpx's automatic following would bypass it after the first validation.
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        current_url = url
+        response: httpx.Response | None = None
+        for _ in range(5):
+            response = await client.get(
+                current_url, headers={"user-agent": "NexusCLI-Python/0.1.0"}
+            )
+            if response.is_redirect and response.next_request is not None:
+                current_url = str(response.next_request.url)
+                _validate_public_url(current_url)
+                continue
+            break
+        assert response is not None
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
         text = response.text
@@ -55,9 +68,12 @@ def _validate_public_url(url: str) -> None:
     for info in infos:
         address = info[4][0]
         try:
-            _reject_private_ip(ipaddress.ip_address(address))
+            ip = ipaddress.ip_address(address)
         except ValueError:
-            continue
+            continue  # unparseable resolver answer — ignore this record
+        # Not caught above on purpose: NetworkPolicyError must propagate,
+        # otherwise every private address would silently pass validation.
+        _reject_private_ip(ip)
 
 
 def _reject_private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:

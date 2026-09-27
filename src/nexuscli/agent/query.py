@@ -71,7 +71,6 @@ async def query(
     while turn < max_turns:
         turn += 1
         text = ""
-        thinking = ""
         stop_reason = "end_turn"
         turn_usage = Usage()
         tool_states: dict[int, dict[str, Any]] = {}
@@ -102,9 +101,7 @@ async def query(
                 text += delta
                 yield {"type": "text_delta", "text": delta}
             elif event_type == "thinking_delta":
-                delta = str(event.get("thinking") or "")
-                thinking += delta
-                yield {"type": "thinking_delta", "thinking": delta}
+                yield {"type": "thinking_delta", "thinking": str(event.get("thinking") or "")}
             elif event_type == "tool_call_delta":
                 _merge_tool_delta(tool_states, event["tool_call"])
             elif event_type == "message_end":
@@ -119,12 +116,7 @@ async def query(
 
         total_usage = total_usage + turn_usage
         tool_calls = _finalize_tool_calls(tool_states)
-        assistant_message = Message(role="assistant", content=text, tool_calls=tool_calls)
-        if thinking and text:
-            assistant_message.content = text
-        elif thinking:
-            assistant_message.content = ""
-        messages.append(assistant_message)
+        messages.append(Message(role="assistant", content=text, tool_calls=tool_calls))
         yield {"type": "turn_complete", "turn": turn, "stop_reason": stop_reason}
 
         if stop_reason != "tool_use" and not tool_calls:
@@ -200,8 +192,15 @@ def _merge_tool_delta(tool_states: dict[int, dict[str, Any]], delta: dict[str, A
     function = delta.get("function") or {}
     if function.get("name"):
         state["function"]["name"] = function["name"]
-    if function.get("arguments"):
-        state["function"]["arguments"] += function["arguments"]
+    arguments = function.get("arguments")
+    if arguments:
+        if isinstance(arguments, str):
+            state["function"]["arguments"] += arguments
+        else:
+            # Some gateways send pre-parsed argument objects, not string deltas.
+            import json
+
+            state["function"]["arguments"] = json.dumps(arguments, ensure_ascii=False)
 
 
 def _finalize_tool_calls(tool_states: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:

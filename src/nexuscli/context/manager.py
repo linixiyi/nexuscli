@@ -77,8 +77,9 @@ class ContextWindowManager:
 
         split_at = self._recent_boundary(messages)
         if over_message_limit:
-            split_at = max(split_at, len(messages) - self.max_history_messages)
-            split_at = self._align_boundary(messages, split_at)
+            floor = len(messages) - self.max_history_messages
+            split_at = max(split_at, floor)
+            split_at = self._align_boundary(messages, split_at, floor=floor)
 
         older = messages[:split_at]
         recent = [_copy_message(message) for message in messages[split_at:]]
@@ -115,19 +116,30 @@ class ContextWindowManager:
         return self._align_boundary(messages, candidate)
 
     @staticmethod
-    def _align_boundary(messages: list[Message], candidate: int) -> int:
+    def _align_boundary(messages: list[Message], candidate: int, floor: int = 0) -> int:
         candidate = min(max(candidate, 0), len(messages))
-        # Prefer starting the retained slice at a user turn. This keeps an assistant tool call
-        # and all of its tool results on the same side of the compression boundary.
-        for index in range(candidate, -1, -1):
-            if index < len(messages) and messages[index].role == "user":
-                return index
-        for index in range(candidate, len(messages)):
+        floor = max(0, min(floor, candidate))
+        # A boundary is safe when the retained slice starts at a user turn or an
+        # assistant turn: tool results always follow their assistant tool-call,
+        # so splitting there never orphans a tool result on the summarized side.
+        # User turns are preferred, but long agent tool loops contain no second
+        # user turn — refusing assistant boundaries would make compression a
+        # no-op exactly when it is needed most.
+        for index in range(candidate, floor, -1):
             if messages[index].role == "user":
+                return index
+        for index in range(candidate, floor, -1):
+            if messages[index].role == "assistant":
+                return index
+        # No safe boundary at/after the floor: split forward at the first
+        # assistant turn so the older side keeps at least the opening turn.
+        for index in range(max(1, floor), len(messages)):
+            if messages[index].role == "assistant":
                 return index
         return candidate
 
     def _summarize(self, messages: list[Message], max_chars: int) -> str:
+        closing = "</conversation-summary>"
         lines = [
             '<conversation-summary trust="untrusted-session-data">',
             "Older conversation was compacted. Preserve goals, decisions, files, results, and "
@@ -144,8 +156,14 @@ class ContextWindowManager:
             if text:
                 label = message.name or message.role
                 lines.append(f"- {label}: {text}")
-        lines.append("</conversation-summary>")
-        return "\n".join(lines)[:max_chars]
+        text = "\n".join(lines)
+        # Keep the closing tag intact so the prompt never contains an
+        # unterminated summary block.
+        if len(text) + 1 + len(closing) > max_chars:
+            text = text[: max_chars - len(closing) - 2].rstrip() + "\n" + closing
+        else:
+            text = text + "\n" + closing
+        return text
 
     def _truncate_tool_payloads(self, messages: list[Message]) -> list[Message]:
         result: list[Message] = []
@@ -176,7 +194,13 @@ class ContextWindowManager:
             remaining = max(128, self.budget.compression_target_tokens - fixed_tokens)
             max_chars = max(256, min(len(result[0].content), remaining * 3))
             if len(result[0].content) > max_chars:
-                result[0].content = result[0].content[: max_chars - 3] + "..."
+                closing = "</conversation-summary>"
+                if result[0].content.rstrip().endswith(closing):
+                    body = result[0].content.rpartition(closing)[0]
+                    keep = max_chars - len(closing) - 6
+                    result[0].content = body[:keep].rstrip() + "\n...\n" + closing
+                else:
+                    result[0].content = result[0].content[: max_chars - 3] + "..."
         return result
 
     @staticmethod

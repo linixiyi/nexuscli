@@ -73,16 +73,6 @@ class Planner:
 
         yield {"type": "plan_created", "plan": self.parse_plan(goal, text)}
 
-    async def replan(self, failed_plan: ExecutionPlan, failure_reason: str) -> ExecutionPlan:
-        completed = "\n".join(
-            f"- {task.id}: {task.description}"
-            for task in failed_plan.all_tasks()
-            if task.result and not task.error
-        )
-        return await self.create_plan(
-            f"{failed_plan.goal}\n失败原因：{failure_reason}\n已完成任务：\n{completed}"
-        )
-
     def parse_plan(self, goal: str, plan_json: str) -> ExecutionPlan:
         data = _parse_json_object(plan_json)
         task_nodes = data.get("tasks") or data.get("steps") or []
@@ -125,35 +115,6 @@ class Planner:
         if not plan.compute_execution_order():
             raise ValueError("plan contains a cyclic dependency")
         return plan
-
-
-async def _collect_text(
-    llm_client: LlmClient,
-    messages: list[Message],
-    *,
-    system_prompt: str,
-) -> str:
-    text, _usage = await _collect_text_and_usage(llm_client, messages, system_prompt=system_prompt)
-    return text
-
-
-async def _collect_text_and_usage(
-    llm_client: LlmClient,
-    messages: list[Message],
-    *,
-    system_prompt: str,
-) -> tuple[str, Usage]:
-    text = ""
-    usage = Usage()
-    async for event in llm_client.chat(messages, [], system_prompt=system_prompt):
-        event_type = event.get("type")
-        if event_type == "text_delta":
-            text += str(event.get("text") or "")
-        elif event_type == "usage":
-            usage = usage + Usage.from_mapping(event.get("usage") or {})
-        elif event_type == "error":
-            raise event["error"]
-    return text, usage
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:

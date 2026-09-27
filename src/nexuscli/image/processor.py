@@ -35,7 +35,12 @@ def parse_image_references(message: str, cwd: str) -> str | list[dict]:
 def _image_part(reference: str, cwd: str) -> dict:
     if reference.startswith(("http://", "https://")):
         return {"type": "image_url", "image_url": {"url": reference}}
-    path = _resolve_image_path(reference, cwd)
+    try:
+        path = _resolve_image_path(reference, cwd)
+    except FileNotFoundError:
+        return {"type": "text", "text": f"[image not found: {reference}]"}
+    except ValueError:
+        return {"type": "text", "text": f"[image outside workspace: {reference}]"}
     data_url, width, height = _encode_image(path)
     return {
         "type": "image_url",

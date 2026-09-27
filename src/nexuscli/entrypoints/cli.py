@@ -336,7 +336,6 @@ def task_worker(
     RuntimeApiServer(
         cwd=str(root),
         config=config,
-        api_key="worker-only-not-exposed",
         workers=workers,
     ).work_forever()
 

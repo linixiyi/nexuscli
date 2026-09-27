@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from contextlib import asynccontextmanager
+import re
+from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -200,7 +201,7 @@ class McpClientManager:
                 env={**os.environ, **spec.env},
                 cwd=spec.cwd or self.project_root,
             )
-            with open(os.devnull, "w", encoding="utf-8") as errlog:
+            with self._stderr_log(spec) as errlog:
                 async with (
                     stdio_client(params, errlog=errlog) as (read, write),
                     ClientSession(read, write) as session,
@@ -223,6 +224,24 @@ class McpClientManager:
                 yield session
             return
         raise ValueError(f"Unsupported MCP transport: {spec.type}")
+
+    @contextmanager
+    def _stderr_log(self, spec: McpServerSpec):
+        """Keep server stderr out of the CLI's stderr without losing it entirely.
+
+        Stdio servers commonly print banners and warnings on startup, so their
+        output goes to a per-server log file for debugging broken servers; if the
+        log location is unwritable, fall back to discarding it.
+        """
+        log_dir = Path(self.project_root) / ".nexuscli" / "mcp-logs"
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", spec.name)
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            path: str = str(log_dir / f"{safe_name}.log")
+        except OSError:
+            path = os.devnull
+        with open(path, "a", encoding="utf-8") as handle:
+            yield handle
 
 
 def _content_to_text(content: Any) -> str:

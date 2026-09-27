@@ -30,7 +30,7 @@ from nexuscli.snapshot import SnapshotService
 from nexuscli.tools.base import ToolContext
 from nexuscli.tools.executor import ToolExecutor
 from nexuscli.tools.registry import ToolRegistry
-from nexuscli.types import Message, QueryResult, Usage
+from nexuscli.types import Message, Usage
 
 AgentMode = Literal["react", "plan", "team"]
 
@@ -149,26 +149,6 @@ class Agent:
             with suppress(Exception):
                 snapshot.create("post-turn")
 
-    async def run_complete(self, message: str) -> QueryResult:
-        """Run the agent synchronously (collect all events) and return a result."""
-        text = ""
-        tokens = 0
-        turns = 0
-        usage = Usage()
-        cost: dict[str, Any] = {}
-        async for event in self.run(message):
-            event_type = event.get("type")
-            if event_type == "text_delta":
-                text += str(event.get("text") or "")
-            elif event_type == "error":
-                raise event["error"]  # type: ignore[arg-type]
-            elif event_type == "done":
-                tokens = int(event.get("total_tokens") or 0)
-                turns = int(event.get("total_turns") or 0)
-                usage = Usage.from_mapping(event.get("usage") or {})
-                cost = dict(event.get("cost") or {})
-        return QueryResult(text=text, total_tokens=tokens, turns=turns, usage=usage, cost=cost)
-
     # ------------------------------------------------------------------
     # History management
     # ------------------------------------------------------------------
@@ -236,7 +216,6 @@ class Agent:
         while turn < self.max_turns:
             turn += 1
             text = ""
-            thinking = ""
             stop_reason = "end_turn"
             turn_usage = Usage()
             tool_states: dict[int, dict[str, Any]] = {}
@@ -269,9 +248,7 @@ class Agent:
                     text += delta
                     yield {"type": "text_delta", "text": delta}
                 elif event_type == "thinking_delta":
-                    delta = str(event.get("thinking") or "")
-                    thinking += delta
-                    yield {"type": "thinking_delta", "thinking": delta}
+                    yield {"type": "thinking_delta", "thinking": str(event.get("thinking") or "")}
                 elif event_type == "tool_call_delta":
                     _merge_tool_delta(tool_states, event["tool_call"])
                 elif event_type == "message_end":
@@ -286,14 +263,7 @@ class Agent:
 
             total_usage = total_usage + turn_usage
             tool_calls = _finalize_tool_calls(tool_states)
-            assistant_msg = Message(
-                role="assistant",
-                content=text or "",
-                tool_calls=tool_calls,
-            )
-            if thinking and not text:
-                assistant_msg.content = ""
-            messages.append(assistant_msg)
+            messages.append(Message(role="assistant", content=text or "", tool_calls=tool_calls))
             yield {"type": "turn_complete", "turn": turn, "stop_reason": stop_reason}
 
             # If the model didn't request any tools, we're done.
@@ -391,6 +361,7 @@ class Agent:
             approval_callback=self.approval_callback,
             default_worker_mode="react",
         )
+        orchestrator.history = list(self.history)
         async for event in orchestrator.run(message):
             if event.get("type") == "done":
                 self.history = list(event.get("messages") or [])
@@ -438,8 +409,15 @@ def _merge_tool_delta(tool_states: dict[int, dict[str, Any]], delta: dict[str, A
     function = delta.get("function") or {}
     if function.get("name"):
         state["function"]["name"] = function["name"]
-    if function.get("arguments"):
-        state["function"]["arguments"] += function["arguments"]
+    arguments = function.get("arguments")
+    if arguments:
+        if isinstance(arguments, str):
+            state["function"]["arguments"] += arguments
+        else:
+            # Some gateways send pre-parsed argument objects, not string deltas.
+            import json
+
+            state["function"]["arguments"] = json.dumps(arguments, ensure_ascii=False)
 
 
 def _finalize_tool_calls(tool_states: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:

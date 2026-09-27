@@ -10,6 +10,7 @@ into ``Agent.history`` so the conversation continues with full context.
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -133,13 +134,13 @@ class SessionStore:
         """Most recent sessions first, optionally filtered by working directory."""
         if not self.root.exists():
             return []
-        cwd_filter = str(Path(cwd).resolve()) if cwd is not None else None
+        cwd_filter = os.path.normcase(str(Path(cwd).resolve())) if cwd is not None else None
         metas: list[SessionMeta] = []
         for path in self.root.glob("*.jsonl"):
             meta = self._read_meta(path)
             if meta is None:
                 continue
-            if cwd_filter is not None and meta.cwd != cwd_filter:
+            if cwd_filter is not None and os.path.normcase(meta.cwd) != cwd_filter:
                 continue
             metas.append(meta)
         metas.sort(key=lambda item: (item.updated_at, item.created_at), reverse=True)
@@ -237,46 +238,57 @@ class SessionWriter:
         if not self.meta.title:
             self.meta.title = _title_from(messages[: self.persisted + 1] or messages)
         self.store.root.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            for message in fresh:
-                handle.write(json.dumps(_message_to_dict(message), ensure_ascii=False) + "\n")
         self.persisted += len(fresh)
         self.meta.message_count = self.persisted
         self.meta.updated_at = time.time()
-        self._write_meta()
+        body = self._read_body()
+        body.extend(json.dumps(_message_to_dict(message), ensure_ascii=False) for message in fresh)
+        self._atomic_write(self._compose(body))
         return len(fresh)
 
     def _rewrite(self, messages: list[Message]) -> int:
         self.store.root.mkdir(parents=True, exist_ok=True)
-        lines = [json.dumps(_message_to_dict(message), ensure_ascii=False) for message in messages]
-        payload = ""
-        if lines:
-            payload = "\n".join(lines) + "\n"
-        self.path.write_text(payload, encoding="utf-8")
         self.persisted = len(messages)
         self.meta.message_count = self.persisted
         self.meta.updated_at = time.time()
-        self._write_meta()
+        body = [json.dumps(_message_to_dict(message), ensure_ascii=False) for message in messages]
+        self._atomic_write(self._compose(body))
         return self.persisted
 
     def _write_meta(self) -> None:
+        """Rewrite the meta line in place (used to bump ordering metadata)."""
         self.store.root.mkdir(parents=True, exist_ok=True)
-        existing: list[str] = []
-        if self.path.is_file():
-            existing = self.path.read_text(encoding="utf-8").splitlines()
-        body: list[str] = existing
-        if existing:
-            try:
-                head = json.loads(existing[0])
-            except json.JSONDecodeError:
-                head = None
-            if isinstance(head, dict) and head.get("type") == "meta":
-                body = existing[1:]
+        self._atomic_write(self._compose(self._read_body()))
+
+    def _compose(self, body: list[str]) -> str:
         meta_line = json.dumps(
             {"type": "meta", **self.meta.to_dict()},
             ensure_ascii=False,
         )
-        self.path.write_text(
-            "\n".join([meta_line, *body]) + ("\n" if body else ""),
-            encoding="utf-8",
-        )
+        return "\n".join([meta_line, *body]) + ("\n" if body else "")
+
+    def _read_body(self) -> list[str]:
+        """Message lines of the transcript (everything after the meta line)."""
+        if not self.path.is_file():
+            return []
+        try:
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        if not lines:
+            return []
+        try:
+            head = json.loads(lines[0])
+        except json.JSONDecodeError:
+            head = None
+        if isinstance(head, dict) and head.get("type") == "meta":
+            return lines[1:]
+        # Meta line missing (legacy/corrupt file): keep the messages and let
+        # the next write self-heal by prepending fresh metadata.
+        return lines
+
+    def _atomic_write(self, text: str) -> None:
+        """Write via temp file + rename so a crash never truncates the transcript."""
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, self.path)

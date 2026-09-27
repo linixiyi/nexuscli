@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
 import threading
 
 from nexuscli.config import load_config
 from nexuscli.runtime import DurableTaskManager
 from nexuscli.runtime.api import RuntimeApiServer, _engine_events
+
+
+def _runtime_test_key() -> str:
+    """Placeholder credential for tests; env-overridable, never a real secret."""
+    return os.environ.get("NEXUSCLI_UNITTEST_RUNTIME_CREDENTIAL") or "unit-test-value"
 
 
 def test_durable_task_lifecycle(tmp_path):
@@ -99,7 +105,7 @@ def test_runtime_thread_history_persists_between_turns(tmp_path, monkeypatch):
     server = RuntimeApiServer(
         cwd=str(tmp_path),
         config=load_config(project_root=tmp_path),
-        api_key="test-key",
+        api_key=_runtime_test_key(),
         workers=1,
     )
     thread_id = server._create_thread()

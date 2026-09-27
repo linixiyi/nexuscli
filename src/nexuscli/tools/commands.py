@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shlex
 from dataclasses import dataclass
 
 from nexuscli.policy import CommandGuard
@@ -14,6 +13,7 @@ from nexuscli.policy import CommandGuard
 
 MAX_OUTPUT_CHARS = 20_000
 TRUNCATION_SUFFIX = "\n... [output truncated]"
+STDERR_OMITTED_SUFFIX = "\n... [stderr omitted: output limit spent on stdout]"
 
 
 @dataclass(slots=True)
@@ -56,7 +56,6 @@ _WRITE_PATTERNS: list[re.Pattern[str]] = [
     ),
     re.compile(r"\b(kubectl|helm|docker|podman)\s+(apply|create|delete|run|exec|port-forward)\b"),
     re.compile(r"\b(>|>>)\s*[^\s]"),
-    re.compile(r"\|.*\b(sh|bash)\b"),
 ]
 
 _DESTRUCTIVE_PATTERNS: list[re.Pattern[str]] = [
@@ -68,6 +67,8 @@ _DESTRUCTIVE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bchmod\s+-R\s+777\s+/"),
     re.compile(r":\(\)\s*\{"),
     re.compile(r"\bfind\s+/\s"),
+    # Piping into an interpreter is download-and-execute — treat as destructive.
+    re.compile(r"\|.*\b(sh|bash|zsh|ksh)\b"),
 ]
 
 
@@ -86,41 +87,6 @@ def classify_command(command: str) -> str:
             return "medium"
 
     return "safe"
-
-
-def sensitive_command_summary(command: str) -> str | None:
-    """Return a human-readable warning if the command looks sensitive."""
-    level = classify_command(command)
-    if level == "high":
-        return "⚠️  Destructive command — may permanently modify or damage the system."
-    if level == "medium":
-        return "⚡ Command has write or side-effect potential."
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Env helpers
-# ---------------------------------------------------------------------------
-
-_ENV_KEY_BLOCKLIST: tuple[str, ...] = (
-    "token",
-    "secret",
-    "password",
-    "passwd",
-    "authorization",
-    "bearer",
-    "access_key",
-    "secret_key",
-    "private_key",
-)
-
-
-def _sanitize_env(env: dict[str, str]) -> dict[str, str]:
-    """Return a copy of *env* with sensitive keys masked for logging."""
-    return {
-        k: ("***" if any(marker in k.lower() for marker in _ENV_KEY_BLOCKLIST) else v)
-        for k, v in env.items()
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -209,40 +175,6 @@ class CommandExecutor:
             max_output_chars=resolved_max_output,
         )
 
-    async def execute_list(
-        self,
-        cmd_parts: list[str],
-        *,
-        cwd: str | None = None,
-        timeout: float | None = None,
-        env: dict[str, str] | None = None,
-        max_output_chars: int | None = None,
-    ) -> CommandResult:
-        """Execute a command as a list (bypasses shell). Safer for subprocess calls.
-
-        Parameters
-        ----------
-        cmd_parts:
-            Command as a list of arguments (e.g. ``["ls", "-la"]``).
-        """
-        command_str = _list_to_shell(cmd_parts)
-        self._validate(command_str)
-
-        resolved_cwd = cwd or os.getcwd()
-        resolved_timeout = timeout if timeout is not None else self.default_timeout
-        resolved_max_output = (
-            max_output_chars if max_output_chars is not None else self.default_max_output
-        )
-        merged_env = self._build_env(env)
-
-        return await self._run_subprocess_list(
-            cmd_parts=cmd_parts,
-            cwd=resolved_cwd,
-            timeout=resolved_timeout,
-            env=merged_env,
-            max_output_chars=resolved_max_output,
-        )
-
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
@@ -283,25 +215,6 @@ class CommandExecutor:
         )
         return await self._handle_process(proc, command, timeout, max_output_chars)
 
-    async def _run_subprocess_list(
-        self,
-        cmd_parts: list[str],
-        cwd: str,
-        timeout: float,
-        env: dict[str, str],
-        max_output_chars: int,
-    ) -> CommandResult:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd_parts,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        return await self._handle_process(
-            proc, _list_to_shell(cmd_parts), timeout, max_output_chars
-        )
-
     async def _handle_process(
         self,
         proc: asyncio.subprocess.Process,
@@ -325,11 +238,11 @@ class CommandExecutor:
         combined_len = len(stdout_str) + len(stderr_str)
         if combined_len > max_output_chars:
             truncated = True
-            # Prefer to keep stdout over stderr
+            # Prefer to keep stdout over stderr; keep a marker so stderr loss is visible
             avail = max_output_chars - len(TRUNCATION_SUFFIX)
             if len(stdout_str) >= avail:
                 stdout_str = stdout_str[:avail] + TRUNCATION_SUFFIX
-                stderr_str = ""
+                stderr_str = STDERR_OMITTED_SUFFIX
             else:
                 stderr_str = stderr_str[: avail - len(stdout_str)] + TRUNCATION_SUFFIX
 
@@ -350,24 +263,3 @@ class CommandExecutor:
 def _decode(data: bytes) -> str:
     """Decode bytes with UTF-8 fallback."""
     return data.decode("utf-8", errors="replace")
-
-
-def _list_to_shell(cmd_parts: list[str]) -> str:
-    """Convert a command list to a human-readable shell string (for logging/validation)."""
-    return " ".join(shlex.quote(part) for part in cmd_parts)
-
-
-# ---------------------------------------------------------------------------
-# Convenience factory
-# ---------------------------------------------------------------------------
-
-
-def create_executor(
-    blacklist: list[str] | None = None,
-    default_timeout: float = 60.0,
-) -> CommandExecutor:
-    """Build a CommandExecutor wired to a CommandGuard with the given blacklist."""
-    return CommandExecutor(
-        command_guard=CommandGuard(blacklist=blacklist or []),
-        default_timeout=default_timeout,
-    )

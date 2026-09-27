@@ -85,21 +85,30 @@ def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
                 include_builtin=False,
             ),
         )
-    context = config.context_window or 64_000
-    return OpenAICompatibleClient(
-        provider_name=provider,
-        model=config.model,
-        api_key=config.api_key,
-        base_url=config.base_url or DEEPSEEK_BASE_URL,
-        max_tokens=config.max_tokens,
-        temperature=config.temperature,
-        timeout=config.timeout,
-        max_context_window=context,
-        prompt_cache=False,
-        price_profile=resolve_price_profile(
-            config.model,
-            context_window=context,
-            overrides=config.prices,
-            include_builtin=False,
-        ),
+    # Unknown provider name: only honor it when an explicit base_url says where
+    # to send credentials. Defaulting to a known vendor endpoint would silently
+    # transmit the user's API key to a third party on a typo like "oepnai".
+    if config.base_url:
+        context = config.context_window or 64_000
+        return OpenAICompatibleClient(
+            provider_name=provider,
+            model=config.model,
+            api_key=config.api_key,
+            base_url=config.base_url,
+            max_tokens=config.max_tokens,
+            temperature=config.temperature,
+            timeout=config.timeout,
+            max_context_window=context,
+            prompt_cache=False,
+            price_profile=resolve_price_profile(
+                config.model,
+                context_window=context,
+                overrides=config.prices,
+                include_builtin=False,
+            ),
+        )
+    valid = ", ".join(["deepseek", "openai", "openai-compatible", *PROVIDER_BASE_URLS])
+    raise ValueError(
+        f"unknown LLM provider {config.provider!r} without a base_url. "
+        f"Set llm.base_url or use one of: {valid}"
     )
