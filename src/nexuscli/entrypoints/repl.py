@@ -23,13 +23,16 @@ from nexuscli import __version__
 from nexuscli.agent import Agent, AgentOrchestrator, PlanExecuteAgent
 from nexuscli.bootstrap import build_tool_registry
 from nexuscli.config import NexusCliConfig, config_to_public_dict
+from nexuscli.context import ContextBudget, ContextWindowManager
 from nexuscli.entrypoints.model_selector import ModelSelectorState, run_model_selector
 from nexuscli.entrypoints.slash_commands import (
+    CommandExpansion,
     CustomCommand,
-    expand_custom_command,
+    expand_command,
     load_slash_commands,
     split_command_message,
 )
+from nexuscli.hooks import fire_event, has_hooks
 from nexuscli.llm import create_llm_client
 from nexuscli.llm.model_profiles import (
     DEFAULT_MODEL_PROFILES,
@@ -54,6 +57,7 @@ SLASH_COMMANDS = [
     "/clear",
     "/resume",
     "/context",
+    "/compact",
     "/memory",
     "/save",
     "/config",
@@ -75,12 +79,12 @@ SLASH_COMMANDS = [
 ]
 
 
-PermissionMode = Literal["default", "auto"]
+PermissionMode = Literal["default", "auto", "plan"]
 
 
 @dataclass
 class PermissionModeController:
-    """Apply one of the two interactive permission modes to the live config."""
+    """Apply one of the three interactive permission modes to the live config."""
 
     config: NexusCliConfig
     mode: PermissionMode = "default"
@@ -97,14 +101,19 @@ class PermissionModeController:
             self.config.policy.hitl_mode = "never"
             self.config.policy.path_guard_enabled = False
             self.config.policy.command_guard_enabled = False
+            self.config.policy.plan_mode = False
         else:
+            # "plan" restores the configured HITL/guard values exactly like
+            # "default": plan mode is a read-only constraint, not an
+            # approval bypass — writes are hard-rejected by the executor.
             self.config.policy.hitl_mode = self._default_hitl_mode
             self.config.policy.path_guard_enabled = self._default_path_guard_enabled
             self.config.policy.command_guard_enabled = self._default_command_guard_enabled
+            self.config.policy.plan_mode = mode == "plan"
         return self.mode
 
     def toggle(self) -> PermissionMode:
-        return self.set("auto" if self.mode == "default" else "default")
+        return self.set({"default": "auto", "auto": "plan", "plan": "default"}[self.mode])
 
 
 @dataclass
@@ -177,6 +186,10 @@ async def start_repl(
     )
     custom_commands = load_slash_commands(cwd)
 
+    # SessionStart hooks run once before the prompt loop; they cannot block
+    # the session, so only their errors and additional context are shown.
+    await _fire_session_start_hooks(config, console, cwd)
+
     history_path = Path.home() / ".nexuscli" / "history" / "prompt_history.txt"
     history_path.parent.mkdir(parents=True, exist_ok=True)
     session = PromptSession(
@@ -211,6 +224,7 @@ async def start_repl(
                 "toolbar.cwd.value": "noreverse #c084fc bg:#000000",
                 "toolbar.mode.default": "noreverse bold #22c55e bg:#000000",
                 "toolbar.mode.auto": "noreverse bold #f59e0b bg:#000000",
+                "toolbar.mode.plan": "noreverse bold #38bdf8 bg:#000000",
                 "toolbar.gap": "noreverse #ffffff bg:#000000",
             }
         ),
@@ -228,9 +242,15 @@ async def start_repl(
             continue
         try:
             if message.startswith("/"):
-                custom_match = _match_custom_command(message, custom_commands)
+                custom_match = await _match_custom_command(message, custom_commands, config)
                 if custom_match is not None:
-                    await _run_agent(agent, renderer, custom_match[1])
+                    await _run_custom_command(
+                        agent,
+                        renderer,
+                        console,
+                        permission_mode,
+                        custom_match[1],
+                    )
                     _persist_history(session_state, agent, console)
                     continue
                 should_exit = await _handle_slash(
@@ -261,11 +281,85 @@ async def _run_agent(agent: Agent, renderer: RichRenderer, message: str) -> None
     await _run_events(agent.run(message), renderer, agent.llm_client.max_context_window)
 
 
-def _match_custom_command(
+async def _fire_session_start_hooks(
+    config: NexusCliConfig,
+    console: Console,
+    cwd: str,
+) -> None:
+    """Fire SessionStart hooks once before the prompt loop (repl-side trigger).
+
+    SessionStart hooks cannot block the session, so only their errors and
+    additional context are surfaced. Unconfigured events are a no-op.
+    """
+    if not has_hooks(config, "SessionStart"):
+        return
+    outcome = await fire_event(config, "SessionStart", {}, cwd)
+    for error in outcome.errors:
+        console.print(f"[yellow]Hook error:[/yellow] {error}")
+    if outcome.additional_context:
+        console.print(outcome.additional_context)
+
+
+async def _run_custom_command(
+    agent: Agent,
+    renderer: RichRenderer,
+    console: Console,
+    permission_mode: PermissionModeController,
+    expansion: CommandExpansion,
+) -> None:
+    """Run an expanded custom command with its frontmatter hints applied.
+
+    ``mode: plan`` switches the permission controller into plan mode so the
+    executor's read-only gate covers the whole run; ``react`` / ``team``
+    switch the agent runner mode instead. ``allowed-tools`` temporarily
+    narrows the live registry to the whitelist. Every override is restored
+    in ``finally`` so a failed run cannot leak session state.
+    """
+    original_agent_mode = agent.mode
+    original_permission_mode = permission_mode.mode
+    original_registry = agent.tool_registry
+    for marker in expansion.rejected_injections:
+        console.print(f"[yellow]Refused injection:[/yellow] {marker}")
+    switched_permission_mode = False
+    try:
+        if expansion.mode == "plan":
+            permission_mode.set("plan")
+            switched_permission_mode = True
+        elif expansion.mode:
+            agent.mode = expansion.mode  # type: ignore[assignment]
+        if expansion.allowed_tools:
+            agent.tool_registry = _narrow_registry(original_registry, expansion.allowed_tools)
+        await _run_agent(agent, renderer, expansion.prompt)
+    finally:
+        if switched_permission_mode:
+            permission_mode.set(original_permission_mode)
+        agent.mode = original_agent_mode
+        agent.tool_registry = original_registry
+
+
+def _narrow_registry(
+    registry: ToolRegistry,
+    allowed_tools: tuple[str, ...],
+) -> ToolRegistry:
+    """Build a registry holding only the whitelisted tools of *registry*.
+
+    Mirrors the subagent whitelist filtering: unknown names are dropped
+    silently, and an empty result simply means every call misses the registry.
+    """
+    narrowed = ToolRegistry()
+    for name in allowed_tools:
+        tool = registry.get(name)
+        if tool is not None:
+            narrowed.register(tool)
+    return narrowed
+
+
+async def _match_custom_command(
     message: str,
     custom_commands: dict[str, CustomCommand],
-) -> tuple[CustomCommand, str] | None:
-    """Return ``(command, expanded_prompt)`` when *message* names a custom command."""
+    config: NexusCliConfig,
+) -> tuple[CustomCommand, CommandExpansion] | None:
+    """Return ``(command, expansion)`` when *message* names a custom command."""
     parsed = split_command_message(message)
     if parsed is None:
         return None
@@ -273,7 +367,7 @@ def _match_custom_command(
     command = custom_commands.get(name.lstrip("/"))
     if command is None:
         return None
-    return command, expand_custom_command(command, args)
+    return command, await expand_command(command, args, config)
 
 
 def _persist_history(
@@ -417,6 +511,33 @@ async def _handle_slash(
         table.add_row("memory", f"{len(memories)} recent entries")
         table.add_row("tools", str(len(registry.list_names())))
         console.print(table)
+    elif command == "/compact":
+        if len(agent.history) <= 1:
+            console.print("(no conversation history to compact)")
+        else:
+            manager = ContextWindowManager(
+                ContextBudget(
+                    context_window=agent.llm_client.max_context_window,
+                    max_output_tokens=config.llm.max_tokens,
+                    compression_threshold=config.memory.compression_threshold,
+                    compression_target=config.memory.compression_target,
+                    reserve_tokens=config.memory.compression_reserve_tokens,
+                ),
+                max_history_messages=config.memory.max_conversation_history,
+                min_recent_messages=config.memory.min_recent_messages,
+                summary_max_chars=config.memory.summary_max_chars,
+            )
+            result = manager.compact_now(agent.history, focus=arg)
+            agent.history = result.messages
+            table = Table(title="NexusCLI Compaction")
+            table.add_column("Field")
+            table.add_column("Value")
+            table.add_row("tokens before", str(result.estimated_tokens_before))
+            table.add_row("tokens after", str(result.estimated_tokens_after))
+            table.add_row("summarized messages", str(result.summarized_messages))
+            if arg:
+                table.add_row("focus", arg)
+            console.print(table)
     elif command == "/memory":
         await _memory_command(arg, console, cwd, config)
     elif command == "/save":
@@ -888,7 +1009,11 @@ def _permission_key_bindings(permission_mode: PermissionModeController) -> KeyBi
 
 
 def _permission_mode_label(mode: PermissionMode) -> str:
-    return "Auto (full access)" if mode == "auto" else "Default"
+    if mode == "auto":
+        return "Auto (full access)"
+    if mode == "plan":
+        return "plan (read-only)"
+    return "Default"
 
 
 def _prompt_message(

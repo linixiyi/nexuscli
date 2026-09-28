@@ -414,6 +414,37 @@ def get_builtin_tools() -> list[Tool]:
             parameters=object_schema({}, []),
             handler=_todo_read,
         ),
+        Tool(
+            name="task",
+            description=(
+                "Delegate a self-contained task to a subagent — an independent agent session "
+                "with its own history and toolset — and return its final report. Use for "
+                "research, code exploration, or multi-step work that does not need the main "
+                "conversation context."
+            ),
+            parameters=object_schema(
+                {
+                    "description": {
+                        "type": "string",
+                        "description": "Short task summary (3-5 words)",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Complete task instructions for the subagent",
+                    },
+                    "agent_type": {
+                        "type": "string",
+                        "description": "Subagent type (default: general-purpose)",
+                    },
+                },
+                ["description", "prompt"],
+            ),
+            required_keys=["description", "prompt"],
+            handler=_task,
+            is_read_only=False,
+            is_concurrency_safe=False,
+            danger_level="medium",
+        ),
     ]
     return tools
 
@@ -726,6 +757,35 @@ async def _todo_write(payload: dict[str, Any], context: ToolContext) -> ToolResu
 
 async def _todo_read(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     return ToolResult(format_todos(TodoStore(context.cwd).get()))
+
+
+# ---------------------------------------------------------------------------
+# Handler: subagent delegation
+# ---------------------------------------------------------------------------
+
+
+async def _task(payload: dict[str, Any], context: ToolContext) -> ToolResult:
+    # Imported lazily: agent.subagent imports agent.agent, which transitively
+    # imports this package, so a module-level import would be circular.
+    from nexuscli.agent.subagent import load_subagents, run_subagent
+
+    agent_type = str(payload.get("agent_type") or "general-purpose")
+    definitions = load_subagents(context.cwd)
+    agent_def = definitions.get(agent_type)
+    if agent_def is None:
+        available = ", ".join(sorted(definitions))
+        return ToolResult(
+            f'Unknown agent type "{agent_type}". Available agents: {available}',
+            is_error=True,
+        )
+    try:
+        report = await run_subagent(agent_def, str(payload["prompt"]), context)
+    except ValueError as exc:
+        return ToolResult(f"task failed: {exc}", is_error=True)
+    return ToolResult(
+        f"Subagent report ({agent_type}):\n{report}",
+        display_summary=f"Subagent {agent_type} finished",
+    )
 
 
 # ---------------------------------------------------------------------------

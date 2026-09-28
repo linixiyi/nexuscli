@@ -176,7 +176,7 @@ uv run nexuscli
 - 输入 `/help` 查看全部命令，`/exit` 或 `Ctrl+C` 退出
 - `/tools` 查看可用工具，`/config` 查看运行时配置，`/usage` 查看上次用量
 - `/model` 打开交互式模型选择器（可保存多套 BYOK 配置到 `~/.nexuscli/models.json`）
-- `Shift+Tab` 切换会话权限模式：`Default`（危险操作需人工确认）↔ `Auto (full access)`（免审批，谨慎使用）
+- `Shift+Tab` 循环切换会话权限模式：`Default`（危险操作需人工确认）→ `Auto (full access)`（免审批，谨慎使用）→ `plan (read-only)`（只读审阅，非只读工具被拒绝）→ 回到 `Default`
 
 常用斜杠命令速查：
 
@@ -189,6 +189,7 @@ uv run nexuscli
 | `/index [路径]` | 建本地代码索引，配合 `/search <query>` |
 | `/snapshot` / `/restore <id>` | 项目快照与恢复现场 |
 | `/resume` / `/resume <序号\|id>` | 查看/切换历史会话 |
+| `/compact [重点]` | 手动压缩会话历史，可指定摘要保留重点 |
 | `/skill list` | 查看已装的 Skill |
 | `/clear` | 清空当前会话上下文（并开启新会话） |
 
@@ -215,6 +216,59 @@ uv run nexuscli --mode plan -p "先读取 README，再验证项目"
 # 多 Agent 协作模式
 uv run nexuscli --mode team --worker-mode plan -p "并行审计核心模块"
 ```
+
+### 5.4 平台能力速览
+
+跑通基础流程后，建议按下面三步把平台能力用起来。全程只需要两个文件加三次按键。
+
+**第一步：配置权限规则和 Hooks**（项目 `.nexuscli/config.json`）：
+
+```json
+{
+  "permissions": {
+    "allow": ["read_file", "bash(git diff:*)", "write_file(src/**)"],
+    "deny": ["bash(curl | sh)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "write_file",
+        "hooks": [
+          { "type": "command", "command": "python .nexuscli/hooks/check.py", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+这样 `git diff`、写 `src/**` 不再弹审批，`curl | sh` 直接被拒；每次写文件前 `check.py` 会先通过 stdin 收到 JSON 载荷，脚本以 exit 2 退出即可阻断这次写入。
+
+**第二步：定义一个自定义命令**（项目 `.nexuscli/commands/review.md`）：
+
+```markdown
+---
+description: 只读评审指定文件
+mode: plan
+allowed-tools: read_file, grep, glob_files
+argument-hint: <文件路径>
+---
+请只读评审 $1 的问题，按严重程度列出，不要修改任何文件。
+```
+
+**第三步：进 REPL 体验完整闭环**：
+
+```text
+uv run nexuscli
+> Shift+Tab            # 切到 Auto，再按一次切到 plan (read-only)，状态栏变蓝
+> /review src/nexuscli/config.py
+  （mode: plan 生效，Agent 只读调研并给出评审结论，写文件会被硬拒绝）
+> Shift+Tab            # 切回 Default
+> （让 Agent 按结论修改代码，这次写操作正常走审批）
+> /compact 权限评审结论  # 会话太长时手动压缩，摘要优先保留指定重点
+```
+
+`Shift+Tab` 在 `Default → Auto (full access) → plan (read-only)` 三态间循环；`/compact [focus]` 会立即压缩历史并输出 tokens before/after 统计。各能力的完整说明见 README 的[权限规则](README.md#-权限规则)、[Hooks](README.md#-hooks-生命周期钩子)、[Plan 模式](README.md#-plan-模式)与[自定义斜杠命令](README.md#-自定义斜杠命令)章节。
 
 ## 6. 把 Agent 用起来（下一步建议)
 

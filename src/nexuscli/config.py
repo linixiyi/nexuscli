@@ -81,6 +81,61 @@ class PolicyConfig:
         ]
     )
     audit_log_path: str = "~/.nexuscli/audit.jsonl"
+    # Runtime session stamp, rewritten by the Agent at startup the same way
+    # hitl_mode is rewritten live by the permission-mode controller.
+    session_id: str = ""
+    # Runtime plan-mode flag, flipped by the permission-mode controller. When
+    # True the executor hard-rejects every non-read-only tool call.
+    plan_mode: bool = False
+
+
+@dataclass(slots=True)
+class PermissionsConfig:
+    """Pattern-based permission rules (deny > ask > allow), evaluated before HITL."""
+
+    allow: list[str] = field(default_factory=list)
+    deny: list[str] = field(default_factory=list)
+    ask: list[str] = field(default_factory=list)
+
+
+# Lifecycle hook events as they appear in config.json, mapped to the
+# snake_case fields of :class:`HooksConfig`. Shared with the hooks package so
+# config parsing and event lookup never drift apart.
+HOOK_EVENT_FIELDS: dict[str, str] = {
+    "SessionStart": "session_start",
+    "UserPromptSubmit": "user_prompt_submit",
+    "PreToolUse": "pre_tool_use",
+    "PostToolUse": "post_tool_use",
+    "Stop": "stop",
+}
+
+
+@dataclass(slots=True)
+class HookCommandConfig:
+    """One hook command (Claude Code style); only ``type="command"`` exists."""
+
+    type: str = "command"
+    command: str = ""
+    timeout: int = 60  # seconds
+
+
+@dataclass(slots=True)
+class HookMatcherConfig:
+    """A matcher group: regex over the tool name plus the hooks it selects."""
+
+    matcher: str = "*"  # regex matched against tool names; tool events only
+    hooks: list[HookCommandConfig] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class HooksConfig:
+    """Lifecycle hooks, keyed by event in config.json (camelCase keys)."""
+
+    session_start: list[HookMatcherConfig] = field(default_factory=list)
+    user_prompt_submit: list[HookMatcherConfig] = field(default_factory=list)
+    pre_tool_use: list[HookMatcherConfig] = field(default_factory=list)
+    post_tool_use: list[HookMatcherConfig] = field(default_factory=list)
+    stop: list[HookMatcherConfig] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -108,6 +163,8 @@ class NexusCliConfig:
     mcp: McpConfig = field(default_factory=McpConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
+    permissions: PermissionsConfig = field(default_factory=PermissionsConfig)
+    hooks: HooksConfig = field(default_factory=HooksConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
 
@@ -129,6 +186,8 @@ def load_config(
         project_config = _read_json(root / ".nexuscli" / "config.json")
         if project_config:
             data = _deep_merge(data, project_config)
+            data = _merge_permission_lists(data, user_config, project_config)
+            data = _merge_hook_lists(data, user_config, project_config)
         project_env = _read_env(root / ".env")
         if project_env:
             data = _apply_env(data, project_env)
@@ -274,6 +333,66 @@ def _deep_merge(target: dict[str, Any], source: dict[str, Any]) -> dict[str, Any
     return result
 
 
+def _merge_permission_lists(
+    data: dict[str, Any],
+    user_config: dict[str, Any] | None,
+    project_config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Concatenate permission rule lists across config layers.
+
+    Generic deep-merge replaces lists, but permission rules must append: a
+    project config defining ``permissions.allow`` must never silently erase
+    the user-level ``deny`` list.
+    """
+
+    def _str_list(raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    merged = data.setdefault("permissions", {})
+    for action in ("allow", "deny", "ask"):
+        user_rules = _str_list((user_config or {}).get("permissions", {}).get(action))
+        project_rules = _str_list((project_config or {}).get("permissions", {}).get(action))
+        combined = [*user_rules, *project_rules]
+        if combined:
+            merged[action] = list(dict.fromkeys(combined))
+    return data
+
+
+def _merge_hook_lists(
+    data: dict[str, Any],
+    user_config: dict[str, Any] | None,
+    project_config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Concatenate hook matcher lists across config layers.
+
+    Same story as permission rules: generic deep-merge replaces lists, so a
+    project config defining ``hooks.PreToolUse`` would silently erase the
+    user-level hooks for that event. User matchers come first, project
+    matchers are appended after them.
+    """
+
+    def _matchers(config: dict[str, Any] | None, event_key: str) -> list[Any]:
+        section = (config or {}).get("hooks")
+        if not isinstance(section, dict):
+            return []
+        items = section.get(event_key)
+        if not isinstance(items, list):
+            return []
+        return [item for item in items if isinstance(item, dict)]
+
+    merged = data.setdefault("hooks", {})
+    for event_key in HOOK_EVENT_FIELDS:
+        combined = [
+            *_matchers(user_config, event_key),
+            *_matchers(project_config, event_key),
+        ]
+        if combined:
+            merged[event_key] = combined
+    return data
+
+
 def _config_to_dict(config: NexusCliConfig) -> dict[str, Any]:
     return asdict(config)
 
@@ -288,9 +407,42 @@ def _dict_to_config(data: dict[str, Any]) -> NexusCliConfig:
         mcp=McpConfig(**_filter_known(data.get("mcp", {}), McpConfig)),
         memory=MemoryConfig(**_filter_known(data.get("memory", {}), MemoryConfig)),
         policy=PolicyConfig(**_filter_known(data.get("policy", {}), PolicyConfig)),
+        permissions=PermissionsConfig(
+            **_filter_known(data.get("permissions", {}), PermissionsConfig)
+        ),
+        hooks=_dict_to_hooks(data.get("hooks")),
         prompt=PromptConfig(**_filter_known(data.get("prompt", {}), PromptConfig)),
         features=FeatureConfig(**_filter_known(data.get("features", {}), FeatureConfig)),
     )
+
+
+def _dict_to_hooks(raw: Any) -> HooksConfig:
+    """Parse the ``hooks`` config section.
+
+    Keys are camelCase event names (``PreToolUse``) mapping to snake_case
+    ``HooksConfig`` fields; unknown events and malformed entries are dropped
+    instead of raising, so one bad entry cannot prevent the CLI from starting.
+    """
+    if not isinstance(raw, dict):
+        return HooksConfig()
+    fields: dict[str, list[HookMatcherConfig]] = {}
+    for event_key, matchers in raw.items():
+        field_name = HOOK_EVENT_FIELDS.get(str(event_key))
+        if field_name is None or not isinstance(matchers, list):
+            continue
+        fields[field_name] = [_dict_to_matcher(item) for item in matchers if isinstance(item, dict)]
+    return HooksConfig(**fields)
+
+
+def _dict_to_matcher(raw: dict[str, Any]) -> HookMatcherConfig:
+    fields = _filter_known(raw, HookMatcherConfig)
+    hooks_raw = raw.get("hooks")
+    fields["hooks"] = [
+        HookCommandConfig(**_filter_known(item, HookCommandConfig))
+        for item in (hooks_raw if isinstance(hooks_raw, list) else [])
+        if isinstance(item, dict)
+    ]
+    return HookMatcherConfig(**fields)
 
 
 def _filter_known(raw: Any, cls: type) -> dict[str, Any]:

@@ -62,8 +62,14 @@ def test_permission_mode_controller_toggle_restores_policy_defaults():
     assert config.policy.hitl_mode == "never"
 
     controller.toggle()
+    assert controller.mode == "plan"
+    assert config.policy.hitl_mode == original_hitl
+    assert config.policy.plan_mode
+
+    controller.toggle()
     assert controller.mode == "default"
     assert config.policy.hitl_mode == original_hitl
+    assert not config.policy.plan_mode
 
 
 def test_toolbar_and_label_helpers():

@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from nexuscli.policy import AuditLog
+from nexuscli.hooks import fire_event, has_hooks
+from nexuscli.policy import AuditLog, PermissionDecision, evaluate_permissions
 from nexuscli.tools.base import Tool, ToolContext, ToolDecision, ToolResult
 from nexuscli.tools.commands import classify_command
 from nexuscli.tools.registry import ToolRegistry
@@ -52,6 +53,14 @@ class ToolExecutor:
         tool: Tool | None,
         context: ToolContext,
     ) -> ToolResult:
+        """Run one tool call through the gate order.
+
+        Gates run in sequence: unknown tool → plan-mode read-only stop →
+        permission rules → PreToolUse hooks → HITL approval → execute. The
+        plan-mode stop short-circuits before rules, hooks, audit and
+        approval: no approval decision ever happened, so nothing is audited
+        and no hook (pre or post) fires for a rejected call.
+        """
         tool_call_id = str(call.get("id") or "")
         name = _tool_call_name(call)
         payload = _tool_call_arguments(call)
@@ -70,7 +79,67 @@ class ToolExecutor:
         approver = "none"
         try:
             data = tool.validate(payload)
-            decision = await self._approval_decision(tool, data, context)
+            # Plan mode is a hard read-only gate: non-read-only tools are
+            # rejected before permission rules, hooks or approval can weigh
+            # in. Read-only tools keep flowing through the normal chain, so
+            # deny rules still apply to them in plan mode.
+            if context.config.policy.plan_mode and not tool.is_read_only:
+                return ToolResult(
+                    tool_use_id=tool_call_id,
+                    content=(
+                        f'Tool "{tool.name}" is not allowed in plan mode. '
+                        "Only read-only tools are permitted. "
+                        "Press Shift+Tab to switch back to default mode and run the plan."
+                    ),
+                    is_error=True,
+                )
+            permission = evaluate_permissions(context.config.permissions, tool.name, data)
+            if permission and permission.action == "deny":
+                if context.config.features.audit_log:
+                    audit.record(
+                        tool_name=tool.name,
+                        input_data=data,
+                        outcome="deny",
+                        approver="permission-rule",
+                        cwd=context.cwd,
+                    )
+                return ToolResult(
+                    tool_use_id=tool_call_id,
+                    content=f'Tool "{tool.name}" was denied by permission rule: {permission.rule}',
+                    is_error=True,
+                )
+            # PreToolUse hooks: a blocked hook denies the call exactly like a
+            # permission rule; an "ask" hint forces the approval prompt even
+            # when rules/mode would have auto-approved. ("allow" is recorded
+            # on the outcome but intentionally never bypasses approval.)
+            force_prompt = False
+            if has_hooks(context.config, "PreToolUse"):
+                pre = await fire_event(
+                    context.config,
+                    "PreToolUse",
+                    {"tool_name": tool.name, "tool_input": data},
+                    context.cwd,
+                )
+                if pre.blocked:
+                    if context.config.features.audit_log:
+                        audit.record(
+                            tool_name=tool.name,
+                            input_data=data,
+                            outcome="deny",
+                            approver="hook",
+                            cwd=context.cwd,
+                        )
+                    return ToolResult(
+                        tool_use_id=tool_call_id,
+                        content=(
+                            f'Tool "{tool.name}" was denied by pre-tool-use hook: {pre.reason}'
+                        ),
+                        is_error=True,
+                    )
+                force_prompt = pre.permission_hint == "ask"
+            decision = await self._approval_decision(
+                tool, data, context, permission, force_prompt=force_prompt
+            )
             if decision in {"deny", "skip"}:
                 approver = "hitl"
                 audit.record(
@@ -85,7 +154,13 @@ class ToolExecutor:
                     content=f'Tool "{tool.name}" was {decision}ed by approval policy.',
                     is_error=True,
                 )
-            if tool.requires_approval or context.config.policy.hitl_mode == "always":
+            if (
+                permission
+                and permission.action == "allow"
+                and context.config.policy.hitl_mode != "always"
+            ):
+                approver = "permission-rule"
+            elif tool.requires_approval or context.config.policy.hitl_mode == "always":
                 approver = "hitl"
 
             result = await tool.execute(data, context)
@@ -98,6 +173,24 @@ class ToolExecutor:
                     approver=approver,
                     cwd=context.cwd,
                 )
+            # PostToolUse hooks are informational only: they never change the
+            # result that has already been produced. A blocked post-hook is
+            # audited; errors would only be surfaced to the user.
+            if has_hooks(context.config, "PostToolUse"):
+                post_payload = {
+                    "tool_name": tool.name,
+                    "tool_input": data,
+                    "tool_response": result.content,
+                }
+                post = await fire_event(context.config, "PostToolUse", post_payload, context.cwd)
+                if post.blocked and context.config.features.audit_log:
+                    audit.record(
+                        tool_name=tool.name,
+                        input_data=data,
+                        outcome="deny",
+                        approver="hook",
+                        cwd=context.cwd,
+                    )
             return result
         except Exception as exc:  # noqa: BLE001 - tool errors must flow back to the model
             if context.config.features.audit_log and tool and not tool.is_read_only:
@@ -119,12 +212,27 @@ class ToolExecutor:
         tool: Tool,
         payload: dict[str, Any],
         context: ToolContext,
+        permission: PermissionDecision | None = None,
+        force_prompt: bool = False,
     ) -> ToolDecision:
         mode = context.config.policy.hitl_mode
-        if mode == "never":
-            return "approve"
-        if mode == "auto" and not tool.requires_approval:
-            return "approve"
+        action = permission.action if permission is not None else None
+        if not force_prompt:
+            if action == "ask":
+                if mode == "never":
+                    # Fail closed: no human is available to ask in never mode.
+                    return "deny"
+                # Any other mode: an explicit ask falls through to the
+                # approval prompt below — it must never be silently
+                # auto-approved, even when the tool is not requires_approval.
+            elif action == "allow":
+                # Allow rules skip the prompt in auto/never; hitl_mode ==
+                # "always" is the explicit confirm-everything mode and still
+                # prompts.
+                if mode != "always":
+                    return "approve"
+            elif mode == "never" or mode == "auto" and not tool.requires_approval:
+                return "approve"
         if not context.approval_callback:
             return "deny"
         result = context.approval_callback(
