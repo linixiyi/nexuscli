@@ -27,6 +27,7 @@ class ToolContext:
         None
     )
     skill_context_buffer: Any | None = None
+    subagent_depth: int = 0
 
 
 @dataclass(slots=True)

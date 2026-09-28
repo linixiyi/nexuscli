@@ -37,7 +37,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 ### 模型与上下文
 
 - OpenAI-compatible 流式 LLM 客户端，默认面向 DeepSeek 配置，支持 `DEEPSEEK_API_KEY` 等 provider-specific API Key
-- 上下文预算与压缩：达到可用输入预算的 80% 后压缩旧轮次，保留近期消息和完整工具调用对
+- 上下文预算与压缩：达到可用输入预算的 80% 后自动压缩旧轮次，保留近期消息和完整工具调用对；`/compact` 支持随时手动压缩并可指定保留重点
 - 完整 usage、缓存命中/未命中 Token、reasoning Token 和可配置成本估算
 - 本地图片和远程图片输入，并根据模型能力自动降级
 
@@ -47,7 +47,8 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - MCP client，支持 stdio 和 Streamable HTTP MCP server；附 Chrome DevTools MCP 配置助手
 - NexusCLI 自身也可以作为 MCP server 暴露内置工具
 - Skill 系统：builtin / user / project 分层、输入 Top-K 匹配、`load_skill` 当前回合懒加载，以及经 HITL 确认的 `save_skill` 流程沉淀
-- 自定义斜杠命令：把 markdown 提示词放进 `~/.nexuscli/commands/` 或项目 `.nexuscli/commands/` 即可扩展 REPL 与 `-p` 模式
+- 自定义斜杠命令：把 markdown 提示词放进 `~/.nexuscli/commands/` 或项目 `.nexuscli/commands/` 即可扩展 REPL 与 `-p` 模式；frontmatter 支持 `mode` / `allowed-tools` / `argument-hint`，正文可用 `$1..$9` 位置参数与 `` !`cmd` `` 输出注入
+- 子代理 `task` 工具：把自包含任务委派给独立子代理执行并回收报告，内置 `general-purpose` / `explore`，也支持 `.nexuscli/agents/*.md` 自定义代理
 
 ### 记忆与持久化
 
@@ -58,6 +59,9 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 ### 安全与治理
 
 - HITL 人工确认、命令/路径安全策略和 JSONL 审计日志
+- 权限规则：config.json 里声明 `permissions.allow / deny / ask`，按 deny > ask > allow 在 HITL 之前评估
+- Hooks 生命周期钩子：`SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Stop` 五个事件可挂 shell 命令，exit 2 或输出 JSON 即可阻断/追问
+- Plan 模式：`Shift+Tab` 三态循环（default → auto → plan），plan 态只放行只读工具，适合先审阅再执行
 - `save_skill` 等沉淀类操作默认强制人工确认，模型不会静默改变后续行为
 
 ### Runtime API
@@ -72,8 +76,11 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - [环境要求](#-环境要求)
 - [快速开始](#-快速开始)
 - [配置](#-配置)
+- [权限规则](#-权限规则)
+- [Hooks 生命周期钩子](#-hooks-生命周期钩子)
 - [交互命令](#-交互命令)
 - [内置工具](#-内置工具)
+- [Plan 模式](#-plan-模式)
 - [Skill 匹配与沉淀](#-skill-匹配与沉淀)
 - [记忆、动态 Prompt 与上下文压缩](#-记忆动态-prompt-与上下文压缩)
 - [模型、Token 与费用](#-模型token-与费用)
@@ -84,6 +91,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - [快照](#-快照)
 - [会话与恢复](#-会话与恢复)
 - [任务清单](#-任务清单)
+- [子代理 task 工具](#-子代理-task-工具)
 - [自定义斜杠命令](#-自定义斜杠命令)
 - [SDK](#-sdk)
 - [开发](#-开发)
@@ -190,6 +198,72 @@ NEXUSCLI_MODEL=qwen2.5-coder \
 uv run nexuscli -p "解释这个仓库"
 ```
 
+## 🔐 权限规则
+
+在 config.json 的 `permissions` 里声明 `allow` / `deny` / `ask` 三组规则，就能在 HITL 之前自动放行安全操作、追问可疑调用或直接拦截高危动作：
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "read_file",
+      "bash(git diff:*)",
+      "bash(npm run *)",
+      "write_file(src/**)"
+    ],
+    "ask": ["web_fetch(domain:github.com)"],
+    "deny": ["bash(curl | sh)", "mcp__github__delete_*"]
+  }
+}
+```
+
+规则写法（`工具(参数)` 或裸工具名）：
+
+| 写法 | 匹配逻辑 |
+|---|---|
+| `read_file` | 该工具的每次调用 |
+| `bash(git diff:*)` | 命令前缀匹配（`:*` 结尾表示"以此开头"） |
+| `bash(npm run *)` | 对完整命令串做 fnmatch 通配 |
+| `write_file(src/**)` | 对工具载荷里的路径做 fnmatch 通配 |
+| `web_fetch(domain:github.com)` | 域名精确或子域匹配 |
+| `mcp__github__*` | 工具名支持 `*` / `?` 通配 |
+
+评估优先级是 **deny > ask > allow**：
+
+- `deny` 命中立即拒绝，错误信息与审计日志都带规则原文（approver 记为 `permission-rule`）
+- `ask` 强制走人工确认，即使同一次调用也命中了更宽的 `allow`
+- `allow` 命中时跳过审批弹窗；但 `hitl_mode: "always"`（逐切确认）下仍会提示；`hitl_mode: "never"` 时 `ask` 按失败关闭原则直接拒绝
+
+规则与 HITL 一样按层拼接：用户级和项目级 config.json 的同名列表会合并去重，项目规则不会覆盖掉用户级 `deny`。
+
+## 🪝 Hooks 生命周期钩子
+
+在 config.json 的 `hooks` 里给五个生命周期事件挂 shell 命令（事件键为 camelCase）：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "bash|write_file",
+        "hooks": [
+          { "type": "command", "command": "python .nexuscli/hooks/guard.py", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "notify-send done" }] }
+    ]
+  }
+}
+```
+
+- 五个事件：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`；`matcher` 是对工具名的正则（默认 `*` 全匹配，仅工具事件使用）
+- 每条 hook 是 `{"type": "command", "command": "...", "timeout": 60}`；进程 stdin 收到 JSON 载荷（`hook_event_name`、`session_id`、`cwd`，工具事件另有 `tool_name` / `tool_input`，`PostToolUse` 另有 `tool_response`，`UserPromptSubmit` 另有 `prompt`）
+- 协议：**exit 2 阻断**（stderr 作为拒绝原因），exit 0 时 stdout 可输出 JSON（`decision: block` 或 `hookSpecificOutput.permissionDecision: deny/ask`）同样生效；超时与其他退出码只作为非阻断错误提示
+- 安全边界：hook 返回 `allow` 只做记录，**不会绕过审批**——hooks 只能拒绝、追问或补充上下文，不能替人工放行
+- 未配置对应事件时零开销；用户级与项目级的 hook 列表同样按层拼接
+
 ## 💬 交互命令
 
 进入 `uv run nexuscli` 后，可以使用这些 slash commands：
@@ -201,6 +275,7 @@ uv run nexuscli -p "解释这个仓库"
 /resume
 /resume <index-or-id>
 /context
+/compact [focus]
 /memory
 /memory search <query>
 /memory stats
@@ -252,14 +327,26 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 | 记忆 | `save_memory` · `search_memory` |
 | Skill | `load_skill` · `save_skill` |
 | 任务清单 | `todo_write` · `todo_read` |
+| 子代理 | `task` |
 | 会话 | `revert_turn` |
 
 写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作，会经过 policy、HITL 和 audit 处理。`save_skill` 也必须经过 HITL；模型可以提议沉淀，但不会静默改变后续行为。
 
-交互模式下按 `Shift+Tab` 可在两种会话权限模式间切换：
+交互模式下按 `Shift+Tab` 可在三种会话权限模式间循环切换（详见 [Plan 模式](#-plan-模式)）：
 
 - `Default`：使用启动时的 HITL、工作区路径和命令安全策略。
-- `Auto (full access)`：当前会话内不再请求审批，并关闭路径与命令守卫；再次按 `Shift+Tab` 会恢复启动时的默认策略。
+- `Auto (full access)`：当前会话内不再请求审批，并关闭路径与命令守卫。
+- `plan (read-only)`：只读约束态，非只读工具被硬拒绝；再次按 `Shift+Tab` 回到默认策略。
+
+## 📋 Plan 模式
+
+`Shift+Tab` 按 `Default → Auto (full access) → plan (read-only) → Default` 循环。plan 态不是免审批态：它会恢复启动时的 HITL 与安全策略，同时打开只读闸门——
+
+- 执行器在权限规则、Hooks、审批之前硬拒一切非只读工具（`write_file`、`bash`、`task` 等），错误信息会提示按 `Shift+Tab` 切回默认模式再执行
+- 只读工具（`read_file`、`grep`、`glob_files` 等）正常放行，其上的 deny 权限规则依然生效
+- 被拒绝的调用不产生审批决策、不写审计、不触发 Hooks
+
+典型用法：先切到 plan 态让 Agent 只读地调研并给出方案，审阅满意后再切回 Default 让它落地执行。
 
 ## 🎯 Skill 匹配与沉淀
 
@@ -286,6 +373,15 @@ NexusCLI 把记忆分成三层：
 Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态前缀承载身份、规则和项目指令；动态后缀承载当前时间、cwd、模型、工具以及与当前问题相关的记忆。
 
 可用输入预算按 `context_window - max_output_tokens - reserve_tokens` 计算。默认在该预算的 80% 触发压缩，压到 55% 左右，为后续输出、工具结果和无 tokenizer 估算误差留出空间。压缩摘要只属于短期会话，不会自动晋升为长期记忆。
+
+除了自动压缩，REPL 里可随时手动压缩：
+
+```text
+/compact                 # 立即压缩一次当前会话历史
+/compact 权限规则的实现细节  # 指定保留重点，摘要会优先保留相关内容
+```
+
+`/compact` 走与自动压缩相同的确定性流程（不额外调用 LLM）：近端消息原样保留、旧轮次汇总为摘要，并输出压缩统计（tokens before/after 与被摘要的消息条数），方便确认压缩收益。历史为空时会友好提示，不会报错。
 
 ## 💰 模型、Token 与费用
 
@@ -480,6 +576,31 @@ uv run nexuscli --resume <id>       # 按会话 id（或 id 前缀）恢复
 
 Agent 处理多步任务时可以通过内置工具 `todo_write` 维护一份任务清单：每次提交完整列表，标记 `pending / in_progress / completed` 与优先级。清单保存在项目 `.nexuscli/todo.json`，可用 `todo_read` 读取，工具返回值即格式化后的清单状态，跨会话仍然有效。
 
+## 🧩 子代理 task 工具
+
+`task` 工具把一个自包含任务委派给独立的子代理：子代理有自己的历史、Skill 缓冲和工具集，跑完后只把最终报告交回主会话。模型侧的调用形如 `task(description="调研压缩实现", prompt="...", agent_type="explore")`。
+
+内置两个代理，始终可用：
+
+- `general-purpose`：通用任务求解，适合研究、多步实现与代码分析（默认值）
+- `explore`：只读代码探索，工具集固定为 `read_file`、`glob_files`、`grep`、`search_code` 等检索类白名单，绝不修改任何内容
+
+自定义代理放进 `~/.nexuscli/agents/*.md`（用户级）或 `.nexuscli/agents/*.md`（项目级，同名覆盖），frontmatter 用简单的 `key: value` 逐行写法，正文即系统提示：
+
+```markdown
+---
+name: reviewer
+description: 只读代码评审代理，输出带文件行号的问题清单
+tools: read_file, grep, glob_files, search_code
+---
+你是严格的代码评审代理。只读代码，不做任何修改，
+按严重程度输出问题清单，每条附绝对路径与行号。
+```
+
+- `name` 与 `description` 必填，缺一则跳过该文件；`tools` 为逗号分隔白名单，省略则可用全部内置工具；`model` 目前解析但忽略（预留字段）
+- 深度限制为 1：子代理不能再委派子代理，且 `task` 工具默认从子代理工具集中移除，双保险防递归
+- 权限规则、HITL 审批回调原样透传给子代理；plan 态下 `task` 与其他非只读工具一样被硬拒绝
+
 ## 🪄 自定义斜杠命令
 
 把 markdown 文件放进命令目录，文件名（去掉 `.md`）就是命令名：
@@ -487,19 +608,25 @@ Agent 处理多步任务时可以通过内置工具 `todo_write` 维护一份任
 - 用户级：`~/.nexuscli/commands/<命令名>.md`（跨项目可用）
 - 项目级：`.nexuscli/commands/<命令名>.md`（同名时覆盖用户级；该目录默认被 gitignore，适合放个人常用命令）
 
-文件格式：
+文件格式（frontmatter 全部可选）：
 
 ```markdown
 ---
 description: 对指定代码做快速 review
+mode: plan
+allowed-tools: read_file, grep, glob_files
+argument-hint: <文件路径>
 ---
 请对下面的目标做 code review：
 
 $ARGUMENTS
 ```
 
-- `$ARGUMENTS` 会被替换为命令后面的参数；没有该占位符时，参数会追加到提示词末尾
-- frontmatter 的 `description` 可选，会显示在 `/help` 里
+- `$ARGUMENTS` 会被替换为命令后面的参数；`$1`..`$9` 依次接收前九个位置参数（按空白切分、支持引号，越界替换为空串）；没有任何占位符时，参数会追加到提示词末尾
+- frontmatter 的 `description` 会显示在 `/help` 里，`argument-hint` 提示参数写法
+- `mode: react|plan|team` 让命令在指定模式下运行（如 `plan` 只读审阅），运行完恢复原模式
+- `allowed-tools` 逗号分隔，命令运行期间只保留白名单内的工具，结束后恢复
+- 正文支持 `` !`cmd` `` 注入：展开时先执行命令并把 stdout 替换进提示词（30 秒超时）。被命令守卫判为高危的命令会被拒绝，原片段替换为 `[refused: <cmd> — blocked by command guard]` 标记，不会静默执行也不会炸掉整个展开
 - REPL 输入 `/命令名` 或单次模式 `nexuscli -p "/命令名 参数"` 都会展开为提示词发给模型
 - 示例见仓库 `examples/commands/`，复制到命令目录即可使用
 

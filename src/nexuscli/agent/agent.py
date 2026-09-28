@@ -17,11 +17,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from typing import Any, Literal
+from uuid import uuid4
 
 from nexuscli.agent.orchestrator import AgentOrchestrator
 from nexuscli.agent.plan_execute import PlanExecuteAgent
 from nexuscli.config import NexusCliConfig
 from nexuscli.context import ContextBudget, ContextWindowManager
+from nexuscli.hooks import fire_event, has_hooks
 from nexuscli.image import parse_image_references
 from nexuscli.llm.base import LlmClient
 from nexuscli.prompt import PromptAssembler
@@ -68,6 +70,8 @@ class Agent:
         system_prompt: str | None = None,
         max_turns: int = 20,
         max_plan_depth: int = 1,
+        subagent_depth: int = 0,
+        session_id: str | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -77,6 +81,18 @@ class Agent:
         self.mode = mode
         self.max_turns = max_turns
         self.max_plan_depth = max_plan_depth
+        # Recursion guard threaded into every ToolContext this agent builds
+        # (see run_subagent / SUBAGENT_DEPTH_LIMIT).
+        self.subagent_depth = subagent_depth
+
+        # Runtime session stamp, mirrored into PolicyConfig so hook payloads
+        # and tools can correlate executions (same live-rewrite pattern as
+        # policy.hitl_mode in the permission-mode controller). Subagents pass
+        # the parent's session_id down, so the shared config keeps the main
+        # session's stamp instead of being rewritten on every task call.
+        self.session_id = session_id or uuid4().hex[:12]
+        if not self.config.policy.session_id:
+            self.config.policy.session_id = self.session_id
 
         # Build the base system prompt from personality profile and config.
         self.system_prompt = (
@@ -136,6 +152,25 @@ class Agent:
             snapshot.create("pre-turn")
 
         try:
+            # UserPromptSubmit hooks gate the message before it reaches any
+            # runner: a blocked hook refuses the input without calling the LLM.
+            if has_hooks(self.config, "UserPromptSubmit"):
+                gate = await fire_event(
+                    self.config,
+                    "UserPromptSubmit",
+                    {"prompt": message},
+                    self.cwd,
+                )
+                if gate.blocked:
+                    yield {
+                        "type": "error",
+                        "error": RuntimeError(
+                            f"Prompt rejected by user-prompt-submit hook: {gate.reason}"
+                        ),
+                    }
+                    return
+                if gate.additional_context:
+                    message = f"{message}\n\n{gate.additional_context}"
             if self.mode == "plan":
                 async for event in self._run_plan(message):
                     yield event
@@ -148,6 +183,16 @@ class Agent:
         finally:
             with suppress(Exception):
                 snapshot.create("post-turn")
+
+        # Stop hooks fire once the turn loop ended normally; a block is only a
+        # notice to the user, it never forces the agent to keep running.
+        if has_hooks(self.config, "Stop"):
+            stop = await fire_event(self.config, "Stop", {}, self.cwd)
+            if stop.blocked:
+                yield {
+                    "type": "text_delta",
+                    "text": f"\nStop hook: {stop.reason or 'blocked by hook'}\n",
+                }
 
     # ------------------------------------------------------------------
     # History management
@@ -183,6 +228,7 @@ class Agent:
             config=self.config,
             approval_callback=self.approval_callback,
             skill_context_buffer=self.skill_context_buffer,
+            subagent_depth=self.subagent_depth,
         )
 
         # Build the dynamic part of the system prompt (tool list, cwd, etc.).

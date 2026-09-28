@@ -83,7 +83,14 @@ def test_permission_mode_toggle_applies_and_restores_full_access_policy(tmp_path
     assert not config.policy.path_guard_enabled
     assert not config.policy.command_guard_enabled
 
+    assert controller.toggle() == "plan"
+    assert config.policy.plan_mode
+    assert config.policy.hitl_mode == "always"
+    assert config.policy.path_guard_enabled
+    assert config.policy.command_guard_enabled
+
     assert controller.toggle() == "default"
+    assert not config.policy.plan_mode
     assert config.policy.hitl_mode == "always"
     assert config.policy.path_guard_enabled
     assert config.policy.command_guard_enabled
