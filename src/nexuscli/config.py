@@ -156,6 +156,19 @@ class FeatureConfig:
 
 
 @dataclass(slots=True)
+class AgentConfig:
+    """Agent loop settings for long-running tasks.
+
+    ``max_turns`` caps the react tool loop per user message; the default of
+    200 favours long-running tasks over a low hard stop. At load time values
+    are clamped to at least 1 (0 or a negative number would turn every run
+    into a no-op; see :func:`_dict_to_agent`).
+    """
+
+    max_turns: int = 200
+
+
+@dataclass(slots=True)
 class NexusCliConfig:
     llm: LlmConfig = field(default_factory=LlmConfig)
     render_mode: str = "inline"
@@ -167,6 +180,7 @@ class NexusCliConfig:
     hooks: HooksConfig = field(default_factory=HooksConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
 
 
 def load_config(
@@ -413,7 +427,27 @@ def _dict_to_config(data: dict[str, Any]) -> NexusCliConfig:
         hooks=_dict_to_hooks(data.get("hooks")),
         prompt=PromptConfig(**_filter_known(data.get("prompt", {}), PromptConfig)),
         features=FeatureConfig(**_filter_known(data.get("features", {}), FeatureConfig)),
+        agent=_dict_to_agent(data.get("agent")),
     )
+
+
+def _dict_to_agent(raw: Any) -> AgentConfig:
+    """Parse the ``agent`` config section, clamping ``max_turns`` to >= 1.
+
+    A zero or negative ``max_turns`` would make every agent run a no-op, so
+    it is clamped to 1 at load time; non-numeric values fall back to the
+    default instead of raising, so one bad entry cannot prevent the CLI from
+    starting.
+    """
+    if not isinstance(raw, dict):
+        return AgentConfig()
+    fields = _filter_known(raw, AgentConfig)
+    default = AgentConfig()
+    try:
+        fields["max_turns"] = max(1, int(fields.get("max_turns", default.max_turns)))
+    except (TypeError, ValueError):
+        fields["max_turns"] = default.max_turns
+    return AgentConfig(**fields)
 
 
 def _dict_to_hooks(raw: Any) -> HooksConfig:

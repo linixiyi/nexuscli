@@ -28,6 +28,7 @@ from nexuscli.entrypoints.model_selector import ModelSelectorState, run_model_se
 from nexuscli.entrypoints.slash_commands import (
     CommandExpansion,
     CustomCommand,
+    build_init_prompt,
     expand_command,
     load_slash_commands,
     split_command_message,
@@ -67,6 +68,7 @@ SLASH_COMMANDS = [
     "/audit",
     "/index",
     "/search",
+    "/init",
     "/plan",
     "/team",
     "/model",
@@ -166,6 +168,7 @@ async def start_repl(
         cwd=cwd,
         config=config,
         approval_callback=lambda request: _approval_prompt(request, console, permission_mode),
+        max_turns=config.agent.max_turns,
     )
 
     session_store = SessionStore()
@@ -587,6 +590,11 @@ async def _handle_slash(
                 RichRenderer(),
                 agent.llm_client.max_context_window,
             )
+    elif command == "/init":
+        # Unlike /plan (which spawns a fresh PlanExecuteAgent), /init runs on
+        # the current agent so the react loop and session context carry over.
+        init_prompt = build_init_prompt(arg, cwd)
+        await _run_agent(agent, renderer, init_prompt)
     elif command == "/team":
         if not arg:
             console.print("[red]Usage:[/red] /team <task>")

@@ -20,6 +20,9 @@ class PlainRenderer:
             marker = "error" if event.get("is_error") else "result"
             sys.stdout.write(f"[tool:{marker}] {event.get('name')}: {event.get('result')}\n")
             sys.stdout.flush()
+        elif event_type == "warning":
+            sys.stdout.write(f"\n[warning] {event.get('message')}\n")
+            sys.stdout.flush()
 
     def newline(self) -> None:
         sys.stdout.write("\n")

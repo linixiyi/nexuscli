@@ -139,6 +139,10 @@ class RichRenderer:
             self._flush_thinking()
             self._flush_markdown(title="Assistant Output")
             self.console.print(f"[red]Error:[/red] {event.get('error')}")
+        elif event_type == "warning":
+            self._flush_thinking()
+            self._flush_markdown(title="Assistant Output")
+            self.console.print(f"[yellow]Warning:[/yellow] {event.get('message')}")
         elif event_type == "done":
             self._flush_thinking()
             self._flush_markdown(title="Final Output")

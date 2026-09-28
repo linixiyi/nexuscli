@@ -4,10 +4,19 @@ import asyncio
 from typing import Any
 
 from nexuscli.hooks import fire_event, has_hooks
-from nexuscli.policy import AuditLog, PermissionDecision, evaluate_permissions
+from nexuscli.policy import (
+    AuditLog,
+    PermissionDecision,
+    evaluate_permissions,
+    is_readonly_bash_command,
+)
 from nexuscli.tools.base import Tool, ToolContext, ToolDecision, ToolResult
 from nexuscli.tools.commands import classify_command
 from nexuscli.tools.registry import ToolRegistry
+
+# Tools whose command string can be statically judged read-only (see
+# nexuscli.policy.bash_readonly): such commands bypass the HITL prompt.
+_COMMAND_TOOLS = {"bash", "execute_command"}
 
 
 class ToolExecutor:
@@ -60,6 +69,14 @@ class ToolExecutor:
         plan-mode stop short-circuits before rules, hooks, audit and
         approval: no approval decision ever happened, so nothing is audited
         and no hook (pre or post) fires for a rejected call.
+
+        For shell tools a statically read-only command string (see
+        ``nexuscli.policy.bash_readonly``) counts as read-only for the plan
+        gate and the HITL prompt, while the call is still audited and
+        deny/ask rules and hook hints keep their priority. The audit record
+        names ``readonly-rule`` as approver when the static judgment bypassed
+        the prompt (no human was involved) and ``hitl`` only when a person
+        actually decided.
         """
         tool_call_id = str(call.get("id") or "")
         name = _tool_call_name(call)
@@ -79,11 +96,20 @@ class ToolExecutor:
         approver = "none"
         try:
             data = tool.validate(payload)
-            # Plan mode is a hard read-only gate: non-read-only tools are
-            # rejected before permission rules, hooks or approval can weigh
-            # in. Read-only tools keep flowing through the normal chain, so
-            # deny rules still apply to them in plan mode.
-            if context.config.policy.plan_mode and not tool.is_read_only:
+            # Statically read-only shell commands (git status, ls, ...) count
+            # as read-only for the plan gate and the HITL prompt below. The
+            # permission chain still weighs in: deny/ask rules and PreToolUse
+            # hooks keep their priority, and the call is still audited as a
+            # non-read-only tool — pass-through is not trace-free.
+            command_readonly = tool.name in _COMMAND_TOOLS and is_readonly_bash_command(
+                str(data.get("command") or "")
+            )
+            # Plan mode is a hard read-only gate: tools that are not
+            # read-only (statically or per command) are rejected before
+            # permission rules, hooks or approval can weigh in. Read-only
+            # tools keep flowing through the normal chain, so deny rules
+            # still apply to them in plan mode.
+            if context.config.policy.plan_mode and not (tool.is_read_only or command_readonly):
                 return ToolResult(
                     tool_use_id=tool_call_id,
                     content=(
@@ -137,8 +163,16 @@ class ToolExecutor:
                         is_error=True,
                     )
                 force_prompt = pre.permission_hint == "ask"
+            readonly_passthrough = _readonly_passthrough(
+                command_readonly, force_prompt, permission, context.config.policy.hitl_mode
+            )
             decision = await self._approval_decision(
-                tool, data, context, permission, force_prompt=force_prompt
+                tool,
+                data,
+                context,
+                permission,
+                force_prompt=force_prompt,
+                readonly_command=command_readonly,
             )
             if decision in {"deny", "skip"}:
                 approver = "hitl"
@@ -160,6 +194,10 @@ class ToolExecutor:
                 and context.config.policy.hitl_mode != "always"
             ):
                 approver = "permission-rule"
+            elif readonly_passthrough:
+                # The static read-only judgment bypassed the prompt: no human
+                # approved, so the audit must not attribute the call to "hitl".
+                approver = "readonly-rule"
             elif tool.requires_approval or context.config.policy.hitl_mode == "always":
                 approver = "hitl"
 
@@ -214,8 +252,14 @@ class ToolExecutor:
         context: ToolContext,
         permission: PermissionDecision | None = None,
         force_prompt: bool = False,
+        readonly_command: bool = False,
     ) -> ToolDecision:
         mode = context.config.policy.hitl_mode
+        # A statically read-only command skips the prompt — but only while no
+        # explicit interceptor disagrees: an ask rule, a PreToolUse hook that
+        # forces prompting, or hitl_mode "always" all keep their right of way.
+        if _readonly_passthrough(readonly_command, force_prompt, permission, mode):
+            return "approve"
         action = permission.action if permission is not None else None
         if not force_prompt:
             if action == "ask":
@@ -246,6 +290,23 @@ class ToolExecutor:
         if asyncio.iscoroutine(result):
             result = await result
         return result
+
+
+def _readonly_passthrough(
+    readonly_command: bool,
+    force_prompt: bool,
+    permission: PermissionDecision | None,
+    mode: str,
+) -> bool:
+    """True when a statically read-only command skips the approval prompt.
+
+    Single source of truth for two consumers: the approval decision (the
+    prompt is bypassed) and the audit attribution — under this exact
+    condition no human approved the call, so the audit record must name
+    ``readonly-rule`` instead of ``hitl``.
+    """
+    action = permission.action if permission is not None else None
+    return readonly_command and not force_prompt and action != "ask" and mode != "always"
 
 
 def _display_danger_level(tool: Tool, payload: dict[str, Any]) -> str:

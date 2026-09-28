@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 
 from nexuscli.agent.agent import Agent
 from nexuscli.agent.orchestrator import AgentOrchestrator
@@ -43,6 +44,7 @@ class QueryEngine:
             cwd=self.cwd,
             config=self.config,
             approval_callback=self.approval_callback,
+            max_turns=self.config.agent.max_turns,
         )
         agent.history = list(history or [])
         async for event in agent.run(message):
@@ -76,22 +78,7 @@ class QueryEngine:
         message: str,
         history: list[Message] | None = None,
     ) -> QueryResult:
-        text = ""
-        tokens = 0
-        turns = 0
-        usage = Usage()
-        cost = {}
-        async for event in self.ask(message, history):
-            if event.get("type") == "text_delta":
-                text += str(event.get("text") or "")
-            elif event.get("type") == "error":
-                raise event["error"]
-            elif event.get("type") == "done":
-                tokens = int(event.get("total_tokens") or 0)
-                turns = int(event.get("total_turns") or 0)
-                usage = Usage.from_mapping(event.get("usage") or {})
-                cost = dict(event.get("cost") or {})
-        return QueryResult(text=text, total_tokens=tokens, turns=turns, usage=usage, cost=cost)
+        return await self._complete_from_events(self.ask(message, history))
 
     async def plan_complete_async(self, message: str) -> QueryResult:
         return await self._complete_from_events(self.plan(message))
@@ -119,6 +106,12 @@ class QueryEngine:
                 text += str(event.get("text") or "")
             elif event.get("type") == "error":
                 raise event["error"]
+            elif event.get("type") == "warning":
+                # Single-shot (-p) mode has no renderer, so agent warnings
+                # (e.g. the agent.max_turns truncation notice) would otherwise
+                # be silently dropped. Surface them on stderr; stdout stays
+                # reserved for the answer text (and --json output).
+                print(f"[warning] {event.get('message')}", file=sys.stderr)
             elif event.get("type") == "done":
                 tokens += int(event.get("total_tokens") or 0)
                 turns += int(event.get("total_turns") or 0)

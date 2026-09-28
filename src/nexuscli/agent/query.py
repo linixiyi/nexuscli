@@ -27,7 +27,7 @@ async def query(
     config: NexusCliConfig,
     approval_callback=None,
     skill_context_buffer=None,
-    max_turns: int = 20,
+    max_turns: int = 200,
 ) -> AsyncIterator[dict[str, Any]]:
     original_user_message = user_message
     user_message = _prepend_skill_candidates(user_message, cwd, config)

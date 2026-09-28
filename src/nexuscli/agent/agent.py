@@ -68,7 +68,7 @@ class Agent:
         approval_callback: Callable | None = None,
         mode: AgentMode = "react",
         system_prompt: str | None = None,
-        max_turns: int = 20,
+        max_turns: int = 200,
         max_plan_depth: int = 1,
         subagent_depth: int = 0,
         session_id: str | None = None,
@@ -141,6 +141,10 @@ class Agent:
         ``context_compressed``
             {"type": "context_compressed", "before_tokens": ..., "after_tokens": ...,
              "summarized_messages": int}
+        ``warning``
+            {"type": "warning", "message": "..."} — emitted (once, before
+            ``done``) when the react loop hit ``max_turns`` while the model
+            still wanted to keep the tool loop running.
         ``error``
             {"type": "error", "error": Exception}
         ``done``
@@ -258,6 +262,10 @@ class Agent:
 
         total_usage = Usage()
         turn = 0
+        # Set when the loop exits because max_turns ran out while the model
+        # still wanted to continue the tool loop; surfaced as an explicit
+        # warning event instead of a silent truncation.
+        hit_limit = False
 
         while turn < self.max_turns:
             turn += 1
@@ -316,6 +324,12 @@ class Agent:
             if stop_reason != "tool_use" and not tool_calls:
                 break
 
+            # Final allowed turn and the model still wants to keep the tool
+            # loop going — flag it so the stream ends with an explicit
+            # warning instead of a silent hard stop.
+            if turn == self.max_turns and (stop_reason == "tool_use" or tool_calls):
+                hit_limit = True
+
             # Run tools.
             for call in tool_calls:
                 name = call.get("function", {}).get("name", "unknown")
@@ -364,6 +378,16 @@ class Agent:
         # Persist history for next user message and report final usage.
         self.history = list(messages)
         self.last_usage = total_usage
+
+        if hit_limit:
+            yield {
+                "type": "warning",
+                "message": (
+                    f"Reached the agent.max_turns limit ({self.max_turns}); the task "
+                    "may be unfinished. Raise agent.max_turns in config.json to "
+                    "continue longer."
+                ),
+            }
 
         done_event: dict[str, Any] = {
             "type": "done",

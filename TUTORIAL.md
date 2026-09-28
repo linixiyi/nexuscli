@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | Python | 3.11 或更新 | 运行时 | `python --version` |
 | [uv](https://docs.astral.sh/uv/) | 任意近期版本 | 包管理 + 运行入口，**必装** | `uv --version` |
-| rg (ripgrep) | 可选 | 更快的本地代码搜索 | `rg --version` |
+| rg (ripgrep) | 可选 | doctor 检测项；Agent 可经 bash 手动使用 | `rg --version` |
 | Node.js | 20.19+（可选） | 仅 Chrome DevTools MCP 需要 | `node --version` |
 
 没装 uv 的话，Windows PowerShell 一行安装：
@@ -176,7 +176,7 @@ uv run nexuscli
 - 输入 `/help` 查看全部命令，`/exit` 或 `Ctrl+C` 退出
 - `/tools` 查看可用工具，`/config` 查看运行时配置，`/usage` 查看上次用量
 - `/model` 打开交互式模型选择器（可保存多套 BYOK 配置到 `~/.nexuscli/models.json`）
-- `Shift+Tab` 循环切换会话权限模式：`Default`（危险操作需人工确认）→ `Auto (full access)`（免审批，谨慎使用）→ `plan (read-only)`（只读审阅，非只读工具被拒绝）→ 回到 `Default`
+- `Shift+Tab` 循环切换会话权限模式：`Default`（危险操作需人工确认）→ `Auto (full access)`（免审批，谨慎使用）→ `plan (read-only)`（只读审阅，非只读工具被拒绝，判定为只读的 bash 命令如 `git status`、`ls` 仍放行）→ 回到 `Default`
 
 常用斜杠命令速查：
 

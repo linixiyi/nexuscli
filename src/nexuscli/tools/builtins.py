@@ -10,6 +10,7 @@ from nexuscli.rag import CodeIndex
 from nexuscli.skill import SkillRegistry
 from nexuscli.snapshot import SnapshotService
 from nexuscli.tools import file_ops as fops
+from nexuscli.tools.background import DEFAULT_TAIL_BYTES, background_registry
 from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 from nexuscli.tools.file_ops import FileOpResult
 from nexuscli.tools.todo_store import TodoStore, format_todos
@@ -187,11 +188,18 @@ def get_builtin_tools() -> list[Tool]:
         ),
         Tool(
             name="bash",
-            description="Execute a shell command in the current workspace.",
+            description=(
+                "Execute a shell command in the current workspace. "
+                "Read-only commands (e.g. git status, ls, rg) are auto-approved without HITL."
+            ),
             parameters=object_schema(
                 {
                     "command": {"type": "string", "description": "Shell command"},
                     "timeout": {"type": "number", "description": "Timeout seconds"},
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "Run in the background; returns a task id immediately",
+                    },
                 },
                 ["command"],
             ),
@@ -204,11 +212,18 @@ def get_builtin_tools() -> list[Tool]:
         ),
         Tool(
             name="execute_command",
-            description="Alias of bash. Execute a shell command in the current workspace.",
+            description=(
+                "Alias of bash. Execute a shell command in the current workspace. "
+                "Read-only commands (e.g. git status, ls, rg) are auto-approved without HITL."
+            ),
             parameters=object_schema(
                 {
                     "command": {"type": "string", "description": "Shell command"},
                     "timeout": {"type": "number", "description": "Timeout seconds"},
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "Run in the background; returns a task id immediately",
+                    },
                 },
                 ["command"],
             ),
@@ -358,6 +373,42 @@ def get_builtin_tools() -> list[Tool]:
             ),
             required_keys=["query"],
             handler=_search_code,
+        ),
+        Tool(
+            name="task_output",
+            description=(
+                "Read the current status and the last bytes of output of a background task "
+                "started with bash run_in_background."
+            ),
+            parameters=object_schema(
+                {
+                    "task_id": {"type": "string", "description": "Background task id"},
+                    "tail_bytes": {
+                        "type": "number",
+                        "description": "Bytes to read from the end of the output (default 8192)",
+                    },
+                },
+                ["task_id"],
+            ),
+            required_keys=["task_id"],
+            handler=_task_output,
+        ),
+        Tool(
+            name="task_stop",
+            description=(
+                "Terminate a background task started with bash run_in_background. Check it "
+                "with task_output first to see whether it is still running."
+            ),
+            parameters=object_schema(
+                {"task_id": {"type": "string", "description": "Background task id"}},
+                ["task_id"],
+            ),
+            required_keys=["task_id"],
+            handler=_task_stop,
+            is_read_only=False,
+            is_concurrency_safe=False,
+            danger_level="medium",
+            requires_approval=True,
         ),
         Tool(
             name="revert_turn",
@@ -547,6 +598,16 @@ async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     command = str(payload["command"])
     if context.config.policy.command_guard_enabled:
         CommandGuard(context.config.policy.command_blacklist).validate(command)
+    if bool(payload.get("run_in_background")):
+        # Background mode: spawn and hand back the task id at once — the
+        # timeout budget does not apply, the turn must not block on the
+        # process. Output lands in the task's log file on disk.
+        task = await background_registry.start(command, context.cwd)
+        return ToolResult(
+            f"Started background task {task.task_id}. Output file: {task.output_path}. "
+            "Use task_output/task_stop with this id.",
+            display_summary=f"Background: {command[:40]}",
+        )
     timeout = float(payload.get("timeout") or context.config.tools.timeout)
     proc = await asyncio.create_subprocess_shell(
         command,
@@ -567,6 +628,36 @@ async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     return ToolResult(
         output or f"(exit {proc.returncode}, no output)",
         is_error=proc.returncode != 0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Handlers: background task management
+# ---------------------------------------------------------------------------
+
+
+async def _task_output(payload: dict[str, Any], _context: ToolContext) -> ToolResult:
+    task_id = str(payload["task_id"])
+    task = background_registry.get(task_id)
+    if task is None:
+        return ToolResult(f'Unknown background task id "{task_id}".', is_error=True)
+    # The subprocess transport reports the exit code on the running loop, so
+    # returncode below is fresh as soon as the process has exited.
+    status = background_registry.status(task_id)
+    tail = background_registry.read_tail(
+        task_id, max_bytes=int(payload.get("tail_bytes") or DEFAULT_TAIL_BYTES)
+    )
+    return ToolResult(f"[{status}] exit={task.process.returncode}\n{tail}")
+
+
+async def _task_stop(payload: dict[str, Any], _context: ToolContext) -> ToolResult:
+    task_id = str(payload["task_id"])
+    if background_registry.get(task_id) is None:
+        return ToolResult(f'Unknown background task id "{task_id}".', is_error=True)
+    status = await background_registry.stop(task_id)
+    return ToolResult(
+        f"Background task {task_id} stopped (status: {status}).",
+        display_summary=f"Stopped task {task_id}",
     )
 
 

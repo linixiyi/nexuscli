@@ -10,6 +10,12 @@ name, ``$1..$9`` receive the first nine positional arguments, and
 commands are refused by the command guard). When no placeholder is present,
 arguments are appended to the prompt. The expanded prompt is sent to the agent
 as a normal message.
+
+The built-in ``/init`` command is not file-backed: :func:`build_init_prompt`
+expands ``/init [notes]`` (REPL branch and ``-p "/init"`` in cli.py) into a
+Chinese initialization prompt that has the current agent inspect the workspace
+and create or incrementally update ``AGENTS.md`` at the workspace root. A
+custom command named ``init`` keeps priority over the built-in one.
 """
 
 from __future__ import annotations
@@ -279,3 +285,58 @@ def expand_custom_command(command: CustomCommand, args: str) -> str:
     if args:
         return f"{command.body.rstrip()}\n\n{args}"
     return command.body
+
+
+# ---------------------------------------------------------------------------
+# Built-in /init command (workspace AGENTS.md bootstrap)
+# ---------------------------------------------------------------------------
+
+# Model-facing prompt behind ``/init [notes]``. Chinese on purpose: it is
+# consumed by the model, not by the user (repo convention, see subagent.py).
+_INIT_PROMPT_TEMPLATE = """\
+你是 NexusCLI 内置 /init 命令的执行者，目标是为后续 Agent 生成或增量更新一份工作区指南。
+
+目标位置：
+- 工作区根目录：{root}
+- 目标文件：{target}（文件名必须是 AGENTS.md；只针对当前工作区，不要写到用户主目录）
+
+执行要求：
+1. 先只读地调研工作区，此阶段不做任何修改：浏览目录结构；阅读 README 与构建配置\
+（如 pyproject.toml / package.json / Makefile），归纳真实存在的构建、测试、lint 命令；\
+检查工作区是否已存在 AGENTS.md 与 NEXUS.md，存在则先完整读取。
+2. 若 {target} 不存在，用 write_file 新建；若已存在，必须用 edit_file 增量更新、\
+严禁整体覆盖：保留仍然准确的内容，只修正过时或缺失的部分。
+3. AGENTS.md 内容须涵盖（只写从仓库核实到的事实，不得编造）：
+   - 构建 / 测试 / lint 命令；
+   - 代码风格与目录结构约定；
+   - 安全边界：权限规则、HITL 审批、审计日志等既有约定；
+   - Agent 协作注意事项（如先只读探索再动手、改动最小化、如何验证改动）。
+4. 所有写入必须通过 write_file / edit_file 工具完成（从而走审批链），\
+禁止用 bash 重定向（>、>>、tee 等）绕过审批。
+5. 完成后用一小段话总结新建或更新了哪些章节，并给出文件路径。
+"""
+
+# Appended to the prompt only when the user passed notes after ``/init``.
+_INIT_NOTES_SECTION = """
+
+用户随 /init 附带的重点关注（作为额外关注点融入 AGENTS.md，不得因此省略上面的常规内容）：
+{notes}
+"""
+
+
+def build_init_prompt(notes: str, cwd: str) -> str:
+    """Build the Chinese prompt behind the built-in ``/init [notes]`` command.
+
+    The prompt has the current agent first inspect the workspace read-only,
+    then create or incrementally update ``AGENTS.md`` at the workspace root —
+    editing the existing file instead of overwriting it — and write only via
+    ``write_file`` / ``edit_file`` so the normal approval chain applies.
+    *notes* carries the user's extra focus points; when empty the notes
+    section is omitted entirely.
+    """
+    root = Path(cwd)
+    prompt = _INIT_PROMPT_TEMPLATE.format(root=str(root), target=str(root / "AGENTS.md"))
+    stripped = notes.strip()
+    if stripped:
+        prompt += _INIT_NOTES_SECTION.format(notes=stripped)
+    return prompt

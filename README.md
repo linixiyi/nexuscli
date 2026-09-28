@@ -7,15 +7,44 @@
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![uv](https://img.shields.io/badge/uv-package%20manager-DE5FE9)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/tests-pytest%20%2B%20ruff-brightgreen)
+![Tests](https://github.com/linixiyi/nexuscli/actions/workflows/ci.yml/badge.svg)
 
-[交互式架构图](docs/architecture.html) · [运行教程](TUTORIAL.md) · [快速开始](#-快速开始)
+[交互式架构图](docs/architecture.html) · [运行教程](TUTORIAL.md) · [快速开始](#-快速开始) · [Spec 任务包工作流](docs/spec-skill.md)
 
 ---
 
 NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路径有测试覆盖，也经过本地 smoke 和真实终端运行验证。
 
 > 第一次部署？看 [TUTORIAL.md](TUTORIAL.md)：从安装依赖、配置模型 API 到第一次跑通 Agent 任务的完整运行教程。
+
+## 📚 目录
+
+- [架构总览](#-架构总览)
+- [功能特性](#-功能特性)
+- [环境要求](#-环境要求)
+- [快速开始](#-快速开始)
+- [配置](#-配置)
+- [权限规则](#-权限规则)
+- [Hooks 生命周期钩子](#-hooks-生命周期钩子)
+- [交互命令](#-交互命令)
+- [内置工具](#-内置工具)
+- [Plan 模式](#-plan-模式)
+- [Skill 匹配与沉淀](#-skill-匹配与沉淀)
+- [记忆、动态 Prompt 与上下文压缩](#-记忆动态-prompt-与上下文压缩)
+- [代码索引与检索](#-代码索引与检索)
+- [模型、Token 与费用](#-模型token-与费用)
+- [联网工具](#-联网工具)
+- [MCP](#-mcp)
+- [Runtime API](#-runtime-api)
+- [图片输入](#-图片输入)
+- [快照](#-快照)
+- [会话与恢复](#-会话与恢复)
+- [任务清单](#-任务清单)
+- [子代理 task 工具](#-子代理-task-工具)
+- [自定义斜杠命令](#-自定义斜杠命令)
+- [SDK](#-sdk)
+- [开发](#-开发)
+- [License](#-license)
 
 ## 📐 架构总览
 
@@ -44,6 +73,8 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 ### 工具与扩展
 
 - 内置文件、Shell、grep、glob、记忆、网页搜索、网页抓取、代码搜索等工具
+- 写文件/编辑 .py 文件后自动 py_compile 语法诊断，错误就地回传给模型（详见内置工具）
+- bash / execute_command 支持 `run_in_background` 后台执行：立即返回任务 id 与落盘输出文件路径，`task_output` 读取尾部输出、`task_stop` 终止任务
 - MCP client，支持 stdio 和 Streamable HTTP MCP server；附 Chrome DevTools MCP 配置助手
 - NexusCLI 自身也可以作为 MCP server 暴露内置工具
 - Skill 系统：builtin / user / project 分层、输入 Top-K 匹配、`load_skill` 当前回合懒加载，以及经 HITL 确认的 `save_skill` 流程沉淀
@@ -61,7 +92,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - HITL 人工确认、命令/路径安全策略和 JSONL 审计日志
 - 权限规则：config.json 里声明 `permissions.allow / deny / ask`，按 deny > ask > allow 在 HITL 之前评估
 - Hooks 生命周期钩子：`SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Stop` 五个事件可挂 shell 命令，exit 2 或输出 JSON 即可阻断/追问
-- Plan 模式：`Shift+Tab` 三态循环（default → auto → plan），plan 态只放行只读工具，适合先审阅再执行
+- Plan 模式：`Shift+Tab` 三态循环（default → auto → plan），plan 态只放行只读工具与判定为只读的 bash 命令，适合先审阅再执行
 - `save_skill` 等沉淀类操作默认强制人工确认，模型不会静默改变后续行为
 
 ### Runtime API
@@ -69,47 +100,19 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - 有历史的 thread、turn、事件日志，对外提供 HTTP 接入
 - 持久化后台任务：原子抢占、租约恢复、取消保护、项目隔离，支持 `react|plan|team` 模式
 
-## 📚 目录
-
-- [架构总览](#-架构总览)
-- [功能特性](#-功能特性)
-- [环境要求](#-环境要求)
-- [快速开始](#-快速开始)
-- [配置](#-配置)
-- [权限规则](#-权限规则)
-- [Hooks 生命周期钩子](#-hooks-生命周期钩子)
-- [交互命令](#-交互命令)
-- [内置工具](#-内置工具)
-- [Plan 模式](#-plan-模式)
-- [Skill 匹配与沉淀](#-skill-匹配与沉淀)
-- [记忆、动态 Prompt 与上下文压缩](#-记忆动态-prompt-与上下文压缩)
-- [模型、Token 与费用](#-模型token-与费用)
-- [联网工具](#-联网工具)
-- [MCP](#-mcp)
-- [Runtime API](#-runtime-api)
-- [图片输入](#-图片输入)
-- [快照](#-快照)
-- [会话与恢复](#-会话与恢复)
-- [任务清单](#-任务清单)
-- [子代理 task 工具](#-子代理-task-工具)
-- [自定义斜杠命令](#-自定义斜杠命令)
-- [SDK](#-sdk)
-- [开发](#-开发)
-- [License](#-license)
-
 ## 🧭 环境要求
 
 - Python 3.11 或更新版本
 - [uv](https://docs.astral.sh/uv/)
-- 可选：`rg`，用于更快的本地搜索
+- 可选：rg（ripgrep）——doctor 会检测它；Agent 也可经 bash 工具手动使用，内置 grep 工具不依赖它
 - 可选：Chrome DevTools MCP 需要 Node.js 20.19.0 LTS 或更新版本、npm/npx 和 Chrome
 
 ## 🚀 快速开始
 
 ```bash
-git clone <your-repo-url>/nexuscli.git
+git clone https://github.com/linixiyi/nexuscli.git
 cd nexuscli
-uv sync --extra dev
+uv sync --extra dev --frozen
 uv run nexuscli --help
 ```
 
@@ -198,71 +201,35 @@ NEXUSCLI_MODEL=qwen2.5-coder \
 uv run nexuscli -p "解释这个仓库"
 ```
 
+Agent 工具循环的回合上限由 `agent.max_turns` 控制（默认 200，加载时最小钳到 1）：单条消息内最多执行这么多轮工具调用；到达上限而模型仍想继续时，会输出显式 warning 提示任务可能未完成，长程任务可在 config.json 的 `"agent"` 段调大该值。
+
 ## 🔐 权限规则
 
-在 config.json 的 `permissions` 里声明 `allow` / `deny` / `ask` 三组规则，就能在 HITL 之前自动放行安全操作、追问可疑调用或直接拦截高危动作：
+在 config.json 的 `permissions` 里声明 `allow` / `deny` / `ask` 三组规则，就能在 HITL 之前自动放行安全操作、追问可疑调用或直接拦截高危动作。评估优先级是 **deny > ask > allow**，用户级与项目级的同名列表按层拼接合并去重。
 
 ```json
 {
-  "permissions": {
-    "allow": [
-      "read_file",
-      "bash(git diff:*)",
-      "bash(npm run *)",
-      "write_file(src/**)"
-    ],
-    "ask": ["web_fetch(domain:github.com)"],
-    "deny": ["bash(curl | sh)", "mcp__github__delete_*"]
-  }
+  "permissions": { "allow": ["read_file", "bash(git diff:*)"], "deny": ["bash(curl | sh)"] }
 }
 ```
 
-规则写法（`工具(参数)` 或裸工具名）：
+另外，`bash` / `execute_command` 会先对命令串做 argv 级只读静态判定：判定为只读的命令（如 `git status`、`ls`、`cat` 这类白名单内的只读命令）在默认模式下免 HITL 审批直通执行，拿不准的命令一律回落正常审批链。直通不改变既有优先级——`deny` / `ask` 权限规则命中仍照常拦截或追问，PreToolUse hook 的阻断与 ask 提示同样优先。直通也不等于无痕：直通调用仍写审计日志（approver 记为 `readonly-rule`）。
 
-| 写法 | 匹配逻辑 |
-|---|---|
-| `read_file` | 该工具的每次调用 |
-| `bash(git diff:*)` | 命令前缀匹配（`:*` 结尾表示"以此开头"） |
-| `bash(npm run *)` | 对完整命令串做 fnmatch 通配 |
-| `write_file(src/**)` | 对工具载荷里的路径做 fnmatch 通配 |
-| `web_fetch(domain:github.com)` | 域名精确或子域匹配 |
-| `mcp__github__*` | 工具名支持 `*` / `?` 通配 |
-
-评估优先级是 **deny > ask > allow**：
-
-- `deny` 命中立即拒绝，错误信息与审计日志都带规则原文（approver 记为 `permission-rule`）
-- `ask` 强制走人工确认，即使同一次调用也命中了更宽的 `allow`
-- `allow` 命中时跳过审批弹窗；但 `hitl_mode: "always"`（逐切确认）下仍会提示；`hitl_mode: "never"` 时 `ask` 按失败关闭原则直接拒绝
-
-规则与 HITL 一样按层拼接：用户级和项目级 config.json 的同名列表会合并去重，项目规则不会覆盖掉用户级 `deny`。
+规则写法、通配匹配、`ask` 与 `hitl_mode` 的交互等完整说明见 [docs/permissions.md](docs/permissions.md)。
 
 ## 🪝 Hooks 生命周期钩子
 
-在 config.json 的 `hooks` 里给五个生命周期事件挂 shell 命令（事件键为 camelCase）：
+在 config.json 的 `hooks` 里给 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 五个生命周期事件挂 shell 命令（事件键为 camelCase）。协议：hook 进程的 stdin 收到 JSON 载荷，**exit 2 阻断**（stderr 作为拒绝原因）；exit 0 时 stdout 输出 JSON（`decision: block` 或 `hookSpecificOutput.permissionDecision: deny/ask`）同样生效；hook 返回 `allow` 只做记录，**不会绕过审批**。
 
 ```json
 {
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "bash|write_file",
-        "hooks": [
-          { "type": "command", "command": "python .nexuscli/hooks/guard.py", "timeout": 10 }
-        ]
-      }
-    ],
-    "Stop": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "notify-send done" }] }
-    ]
+    "PreToolUse": [{ "matcher": "bash|write_file", "hooks": [{ "type": "command", "command": "python .nexuscli/hooks/guard.py", "timeout": 10 }] }]
   }
 }
 ```
 
-- 五个事件：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`；`matcher` 是对工具名的正则（默认 `*` 全匹配，仅工具事件使用）
-- 每条 hook 是 `{"type": "command", "command": "...", "timeout": 60}`；进程 stdin 收到 JSON 载荷（`hook_event_name`、`session_id`、`cwd`，工具事件另有 `tool_name` / `tool_input`，`PostToolUse` 另有 `tool_response`，`UserPromptSubmit` 另有 `prompt`）
-- 协议：**exit 2 阻断**（stderr 作为拒绝原因），exit 0 时 stdout 可输出 JSON（`decision: block` 或 `hookSpecificOutput.permissionDecision: deny/ask`）同样生效；超时与其他退出码只作为非阻断错误提示
-- 安全边界：hook 返回 `allow` 只做记录，**不会绕过审批**——hooks 只能拒绝、追问或补充上下文，不能替人工放行
-- 未配置对应事件时零开销；用户级与项目级的 hook 列表同样按层拼接
+JSON 载荷字段、超时语义与安全边界的完整说明见 [docs/hooks.md](docs/hooks.md)。
 
 ## 💬 交互命令
 
@@ -276,6 +243,7 @@ uv run nexuscli -p "解释这个仓库"
 /resume <index-or-id>
 /context
 /compact [focus]
+/init [notes]
 /memory
 /memory search <query>
 /memory stats
@@ -322,7 +290,7 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 |---|---|
 | 文件 | `read_file` · `write_file` · `list_dir` |
 | 检索 | `glob` / `glob_files` · `grep` / `grep_code` · `search_code` |
-| 执行 | `bash` / `execute_command` |
+| 执行 | `bash` / `execute_command` · `task_output` · `task_stop` |
 | 网络 | `web_search` · `web_fetch` |
 | 记忆 | `save_memory` · `search_memory` |
 | Skill | `load_skill` · `save_skill` |
@@ -342,7 +310,8 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 
 `Shift+Tab` 按 `Default → Auto (full access) → plan (read-only) → Default` 循环。plan 态不是免审批态：它会恢复启动时的 HITL 与安全策略，同时打开只读闸门——
 
-- 执行器在权限规则、Hooks、审批之前硬拒一切非只读工具（`write_file`、`bash`、`task` 等），错误信息会提示按 `Shift+Tab` 切回默认模式再执行
+- 执行器在权限规则、Hooks、审批之前硬拒一切非只读工具（`write_file`、`task` 等），错误信息会提示按 `Shift+Tab` 切回默认模式再执行
+- `bash` / `execute_command` 按命令级判定参与该闸门：判定为只读的命令（`git status`、`ls` 等）放行，写操作命令仍被硬拒
 - 只读工具（`read_file`、`grep`、`glob_files` 等）正常放行，其上的 deny 权限规则依然生效
 - 被拒绝的调用不产生审批决策、不写审计、不触发 Hooks
 
@@ -365,7 +334,7 @@ Skill 按 `builtin -> user -> project` 加载，同名时后层覆盖前层：
 NexusCLI 把记忆分成三层：
 
 - 短期记忆：当前 thread/session 的原始消息、工具调用和工具结果
-- 静态长期记忆：`AGENTS.md`、`NEXUS.md`、`.nexuscli/NEXUS.md` 及自定义 prompt 文件；人工维护、可版本控制
+- 静态长期记忆：`AGENTS.md`、`NEXUS.md`、`.nexuscli/NEXUS.md` 及自定义 prompt 文件；人工维护、可版本控制；`/init [notes]` 可让 Agent 检查工作区并生成或增量更新根 `AGENTS.md`，写入经 write_file 审批
 - 动态长期记忆：按项目 scope 隔离的 SQLite 记录；包含 kind、source、importance、confidence、TTL、访问次数和内容哈希
 
 动态记忆不会再无条件取“最近 8 条”。每个请求会按当前问题自动召回 Top-K，并把结果放进明确标注为 untrusted data 的动态 Prompt；模型觉得候选不足时，还可以调用 `search_memory` 深搜。写入端会拒绝空值/超长值，通过规范化哈希去重，并按项目容量淘汰低价值记录。
@@ -383,6 +352,15 @@ Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态�
 
 `/compact` 走与自动压缩相同的确定性流程（不额外调用 LLM）：近端消息原样保留、旧轮次汇总为摘要，并输出压缩统计（tokens before/after 与被摘要的消息条数），方便确认压缩收益。历史为空时会友好提示，不会报错。
 
+## 🗂 代码索引与检索
+
+`/index [path]` 扫描工作区中的文本文件，把逐行内容写入 `.nexuscli/code_index.sqlite3` 的 `code_chunks` 表建立本地代码索引，默认跳过 `.git`、`.venv`、`node_modules` 等目录。`/search <query>` 与内置 `search_code` 工具基于同一索引做关键词检索，多个关键词按 AND 匹配，返回 `路径:行号: 代码行` 形式的结果；代码变动后重新运行 `/index` 即可刷新。
+
+```text
+/index .
+/search 权限评估
+```
+
 ## 💰 模型、Token 与费用
 
 默认 provider/model 是 `deepseek/deepseek-v4-flash`。DeepSeek V4 Flash/Pro 的内置 profile 使用 1M 上下文，并带有截至 2026-07-17 的官方每百万 Token 价格；价格会变化，因此可以用 `llm.context_window` 和 `llm.prices` 覆盖，未知 OpenAI-compatible 模型应显式配置。
@@ -399,122 +377,17 @@ Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态�
 
 ## 🔌 MCP
 
-NexusCLI 可以连接 MCP server，并把远端工具动态注册为：
+NexusCLI 可以连接 MCP server，并把远端工具动态注册为 `mcp__<server-name>__<tool-name>`；也可以把自身作为 MCP server 暴露给外部客户端：`uv run nexuscli mcp serve --transport stdio` 或 `uv run nexuscli mcp serve --transport http --port 3000`。
 
-```text
-mcp__<server-name>__<tool-name>
-```
+> ⚠️ **部署边界**：作为 MCP server 运行时，NexusCLI 会在协议层强制关闭人工审批（`hitl_mode = "never"`），这意味着接入该 server 的任何客户端都获得了**无需审批的完整工具能力（包括执行命令、读写文件）**。只把 server 暴露给可信客户端；HTTP 传输默认只绑定 localhost，不要手动开放到公网。
 
-初始化项目级 Chrome DevTools MCP 配置：
-
-```bash
-uv run nexuscli mcp init-chrome --scope project
-```
-
-它会写入 `.nexuscli/mcp.json`，内容类似：
-
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "chrome-devtools-mcp@latest",
-        "--no-usage-statistics"
-      ]
-    }
-  }
-}
-```
-
-连接已有 remote-debugging Chrome：
-
-```bash
-uv run nexuscli mcp init-chrome \
-  --scope project \
-  --browser-url http://127.0.0.1:9222
-```
-
-查看已配置的 MCP server：
-
-```bash
-uv run nexuscli mcp list
-```
-
-把 NexusCLI 自身作为 MCP server 暴露：
-
-```bash
-uv run nexuscli mcp serve --transport stdio
-uv run nexuscli mcp serve --transport http --port 3000
-```
-
-HTTP smoke：
-
-```bash
-curl -sS -X POST http://127.0.0.1:3000 \
-  -H 'content-type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-```
-
-> ⚠️ **部署边界**：作为 MCP server 运行时，NexusCLI 会在协议层强制关闭人工审批（`hitl_mode = "never"`），否则无法应答远端 `tools/call` 请求。这意味着接入该 server 的任何客户端都获得了**无需审批的完整工具能力（包括执行命令、读写文件）**。只把 server 暴露给可信客户端；HTTP 传输默认只绑定 localhost，不要手动开放到公网。
-
-Chrome DevTools MCP 会把浏览器页面和 DevTools 状态暴露给 Agent。不要随意把包含个人账号、敏感数据或生产后台的 Chrome 会话授权给 Agent。
+`mcp init-chrome` 配置助手、remote-debugging 连接、`mcp list` 与 HTTP smoke 的完整说明见 [docs/mcp.md](docs/mcp.md)。
 
 ## 📡 Runtime API
 
-NexusCLI 内置轻量 Runtime API，适合外部系统接入线程、turn、事件和后台任务。
+NexusCLI 内置轻量 Runtime API，适合外部系统接入线程、turn、事件和后台任务：`uv run nexuscli serve --http --port 8080` 启动（请求头带 `x-api-key`），也可以只启动队列消费者而不暴露 HTTP：`uv run nexuscli worker --workers 2 --cwd .`。任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。
 
-启动服务：
-
-```bash
-NEXUSCLI_RUNTIME_API_KEY=dev-key \
-uv run nexuscli serve --http --port 8080
-```
-
-创建线程：
-
-```bash
-curl -sS -X POST http://127.0.0.1:8080/v1/threads \
-  -H 'x-api-key: dev-key'
-```
-
-发送 turn：
-
-```bash
-curl -sS -X POST http://127.0.0.1:8080/v1/threads/<thread_id>/turns \
-  -H 'content-type: application/json' \
-  -H 'x-api-key: dev-key' \
-  -d '{"message":"总结这个项目"}'
-```
-
-读取事件：
-
-```bash
-curl -sS http://127.0.0.1:8080/v1/threads/<thread_id>/events \
-  -H 'x-api-key: dev-key'
-```
-
-创建并查看后台任务：
-
-```bash
-curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
-  -H 'content-type: application/json' \
-  -H 'x-api-key: dev-key' \
-  -d '{"message":"后台总结这个仓库","mode":"plan"}'
-
-curl -sS http://127.0.0.1:8080/v1/tasks \
-  -H 'x-api-key: dev-key'
-```
-
-也可以只启动队列消费者，不暴露 HTTP：
-
-```bash
-uv run nexuscli worker --workers 2 --cwd .
-```
-
-任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。
+线程 / turn / 事件与后台任务的完整端点和 curl 示例见 [docs/runtime-api.md](docs/runtime-api.md)。
 
 ## 📷 图片输入
 
@@ -578,59 +451,15 @@ Agent 处理多步任务时可以通过内置工具 `todo_write` 维护一份任
 
 ## 🧩 子代理 task 工具
 
-`task` 工具把一个自包含任务委派给独立的子代理：子代理有自己的历史、Skill 缓冲和工具集，跑完后只把最终报告交回主会话。模型侧的调用形如 `task(description="调研压缩实现", prompt="...", agent_type="explore")`。
+`task` 工具把一个自包含任务委派给独立的子代理：子代理有自己的历史、Skill 缓冲和工具集，跑完后只把最终报告交回主会话。内置 `general-purpose`（通用任务求解，默认值）与 `explore`（只读代码探索，检索类工具白名单，绝不修改内容）两个代理，始终可用；自定义代理放进 `~/.nexuscli/agents/*.md`（用户级）或 `.nexuscli/agents/*.md`（项目级，同名覆盖），frontmatter 声明 `name` / `description` / `tools`，正文即系统提示。
 
-内置两个代理，始终可用：
-
-- `general-purpose`：通用任务求解，适合研究、多步实现与代码分析（默认值）
-- `explore`：只读代码探索，工具集固定为 `read_file`、`glob_files`、`grep`、`search_code` 等检索类白名单，绝不修改任何内容
-
-自定义代理放进 `~/.nexuscli/agents/*.md`（用户级）或 `.nexuscli/agents/*.md`（项目级，同名覆盖），frontmatter 用简单的 `key: value` 逐行写法，正文即系统提示：
-
-```markdown
----
-name: reviewer
-description: 只读代码评审代理，输出带文件行号的问题清单
-tools: read_file, grep, glob_files, search_code
----
-你是严格的代码评审代理。只读代码，不做任何修改，
-按严重程度输出问题清单，每条附绝对路径与行号。
-```
-
-- `name` 与 `description` 必填，缺一则跳过该文件；`tools` 为逗号分隔白名单，省略则可用全部内置工具；`model` 目前解析但忽略（预留字段）
-- 深度限制为 1：子代理不能再委派子代理，且 `task` 工具默认从子代理工具集中移除，双保险防递归
-- 权限规则、HITL 审批回调原样透传给子代理；plan 态下 `task` 与其他非只读工具一样被硬拒绝
+深度限制为 1：子代理不能再委派子代理；权限规则与 HITL 审批回调原样透传给子代理，plan 态下 `task` 与其他非只读工具一样被硬拒绝。frontmatter 写法、字段语义与完整示例见 [docs/subagents.md](docs/subagents.md)。spec 技能的 sidecar 委派合同也可直接映射到上述自定义代理机制。
 
 ## 🪄 自定义斜杠命令
 
-把 markdown 文件放进命令目录，文件名（去掉 `.md`）就是命令名：
+把 markdown 提示词文件放进命令目录，文件名（去掉 `.md`）就是命令名：用户级 `~/.nexuscli/commands/<命令名>.md`（跨项目可用），项目级 `.nexuscli/commands/<命令名>.md`（同名时覆盖用户级；该目录默认被 gitignore，适合放个人常用命令）。REPL 输入 `/命令名` 或单次模式 `nexuscli -p "/命令名 参数"` 都会展开为提示词发给模型。
 
-- 用户级：`~/.nexuscli/commands/<命令名>.md`（跨项目可用）
-- 项目级：`.nexuscli/commands/<命令名>.md`（同名时覆盖用户级；该目录默认被 gitignore，适合放个人常用命令）
-
-文件格式（frontmatter 全部可选）：
-
-```markdown
----
-description: 对指定代码做快速 review
-mode: plan
-allowed-tools: read_file, grep, glob_files
-argument-hint: <文件路径>
----
-请对下面的目标做 code review：
-
-$ARGUMENTS
-```
-
-- `$ARGUMENTS` 会被替换为命令后面的参数；`$1`..`$9` 依次接收前九个位置参数（按空白切分、支持引号，越界替换为空串）；没有任何占位符时，参数会追加到提示词末尾
-- frontmatter 的 `description` 会显示在 `/help` 里，`argument-hint` 提示参数写法
-- `mode: react|plan|team` 让命令在指定模式下运行（如 `plan` 只读审阅），运行完恢复原模式
-- `allowed-tools` 逗号分隔，命令运行期间只保留白名单内的工具，结束后恢复
-- 正文支持 `` !`cmd` `` 注入：展开时先执行命令并把 stdout 替换进提示词（30 秒超时）。被命令守卫判为高危的命令会被拒绝，原片段替换为 `[refused: <cmd> — blocked by command guard]` 标记，不会静默执行也不会炸掉整个展开
-- REPL 输入 `/命令名` 或单次模式 `nexuscli -p "/命令名 参数"` 都会展开为提示词发给模型
-- 示例见仓库 `examples/commands/`，复制到命令目录即可使用
-
-注意：在 Git Bash 里调用 `-p "/命令名"` 时，MSYS 可能把开头的 `/` 当路径转换；加 `MSYS_NO_PATHCONV=1` 前缀即可。交互模式不受影响。
+frontmatter 全部可选：`description` 显示在 `/help`，`argument-hint` 提示参数写法，`mode: react|plan|team` 让命令在指定模式下运行（运行完恢复原模式），`allowed-tools` 逗号分隔白名单（命令运行期间生效，结束后恢复）；正文支持 `$ARGUMENTS`、`$1`..`$9` 位置参数与 `` !`cmd` `` 输出注入。完整写法、占位符规则、命令守卫与示例见 [docs/slash-commands.md](docs/slash-commands.md)。
 
 ## 🐍 SDK
 
@@ -650,15 +479,22 @@ team_result = engine.team_complete("让多个 Agent 并行检查核心模块")
 安装开发依赖：
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev --frozen
 ```
 
-运行检查：
+运行检查（与 CI 完全一致）：
 
 ```bash
-uv run python -m ruff check .
-uv run python -m ruff format --check .
+uv run ruff check .
+uv run ruff format --check .
 uv run python -m pytest
+```
+
+### 构建
+
+发布/安装产物时使用，CI 不执行：
+
+```bash
 uv build
 ```
 

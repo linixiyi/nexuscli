@@ -47,6 +47,7 @@ from nexuscli.bootstrap import build_tool_registry
 from nexuscli.config import get_config_paths, load_config
 from nexuscli.entrypoints.repl import start_repl
 from nexuscli.entrypoints.slash_commands import (
+    build_init_prompt,
     expand_custom_command,
     load_slash_commands,
     split_command_message,
@@ -209,13 +210,21 @@ def main(
 
 
 def _expand_custom_prompt(prompt: str, root: str) -> str:
-    """Expand a custom slash command in single-prompt mode, when one matches."""
+    """Expand a custom slash command (or built-in ``/init``) in one-shot mode.
+
+    Custom commands win on name conflicts: a user/project ``init`` command is
+    looked up and expanded first, and the built-in initialization prompt is
+    only used when no custom command matched. Any other unmatched ``/name``
+    is returned unchanged as a plain prompt.
+    """
     parsed = split_command_message(prompt)
     if parsed is None:
         return prompt
     name, args = parsed
     command = load_slash_commands(root).get(name.lstrip("/"))
     if command is None:
+        if name.lstrip("/") == "init":
+            return build_init_prompt(args, root)
         return prompt
     return expand_custom_command(command, args)
 
