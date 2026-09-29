@@ -9,6 +9,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from nexuscli.plugins import load_plugins
+
 
 @dataclass(slots=True)
 class Skill:
@@ -287,6 +289,19 @@ class SkillRegistry:
                 continue
             for skill_file in sorted(root.glob("*/SKILL.md")):
                 skill = self._load_skill_file(skill_file, source, disabled)
+                if skill:
+                    skills[skill.name] = skill
+        # Plugin skills follow the existing layering: loaded with the fixed
+        # "project" source (no new layer), so the regular project rules apply —
+        # state_store.disable() and the enabled/enabled_skills flows work on
+        # them unchanged. Scanning after the project root means a plugin skill
+        # overrides a plain project skill on the same name ("last scan wins",
+        # same chain as builtin < user < project above).
+        for plugin in load_plugins(str(self.project_root)):
+            if plugin.skills_dir is None:
+                continue
+            for skill_file in sorted(plugin.skills_dir.glob("*/SKILL.md")):
+                skill = self._load_skill_file(skill_file, "project", disabled)
                 if skill:
                     skills[skill.name] = skill
         self._skills = skills

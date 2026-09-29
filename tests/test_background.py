@@ -23,7 +23,7 @@ import pytest
 
 from nexuscli.config import load_config
 from nexuscli.tools import ToolRegistry, get_builtin_tools
-from nexuscli.tools.background import background_registry
+from nexuscli.tools.background import BackgroundTask, background_registry
 from nexuscli.tools.base import ToolContext
 from nexuscli.tools.builtins import _task_output as task_output_handler
 from nexuscli.tools.builtins import _task_stop as task_stop_handler
@@ -220,6 +220,72 @@ def test_task_stop_terminates_process_and_freezes_output(tmp_path, background_ho
     # No further output after the stop: the log file settles.
     assert "hello" in tail_before
     assert tail_after == tail_before
+
+
+# ---------------------------------------------------------------------------
+# stop() escalation ladder: terminate -> kill (stubbed process)
+# ---------------------------------------------------------------------------
+
+
+class _IgnoreTerminateProcess:
+    """Stub subprocess whose terminate() is ignored, forcing the kill escalation.
+
+    A real child cannot reliably ignore terminate (on Windows terminate is a
+    hard kill), so the ladder in ``BackgroundTaskRegistry.stop()`` is
+    exercised with this duck-typed stub: ``BackgroundTask`` is a plain
+    dataclass and never validates the process type. The ``asyncio.Event`` is
+    created by the test body (outside any loop) and handed in, so ``wait()``
+    resolves only once ``kill()`` has fired.
+    """
+
+    def __init__(self, killed: asyncio.Event) -> None:
+        self.calls: list[str] = []
+        self.returncode: int | None = None
+        self._killed = killed
+
+    def terminate(self) -> None:
+        # Signal ignored: returncode stays None, so the grace-period wait
+        # times out and stop() must escalate to kill().
+        self.calls.append("terminate")
+
+    def kill(self) -> None:
+        self.calls.append("kill")
+        self.returncode = 1
+        self._killed.set()
+
+    async def wait(self) -> int:
+        await self._killed.wait()
+        return self.returncode
+
+
+def test_task_stop_escalates_to_kill_when_terminate_is_ignored(tmp_path, monkeypatch):
+    killed = asyncio.Event()
+    process = _IgnoreTerminateProcess(killed)
+    task = BackgroundTask(
+        task_id="escalate0001",
+        command="stub",
+        process=process,
+        output_path=tmp_path / "escalate.log",
+        started_at=time.time(),
+    )
+    # stop() reads the module global at call time, so patching it here
+    # shortens the grace period without touching anything else.
+    monkeypatch.setattr("nexuscli.tools.background._STOP_GRACE_SECONDS", 0.05)
+    background_registry._tasks[task.task_id] = task
+    try:
+        status = asyncio.run(background_registry.stop(task.task_id))
+    finally:
+        # The registry is process-wide shared state: drop the stub task so
+        # nothing leaks into the other tests.
+        background_registry._tasks.pop(task.task_id, None)
+        background_registry._stopped.discard(task.task_id)
+
+    # The kill-produced non-zero exit code is still reported as "stopped"
+    # because the registry recorded the task in its _stopped set.
+    assert status == "stopped"
+    # Order proves the ladder: terminate first, then the escalation to kill.
+    assert process.calls == ["terminate", "kill"]
+    assert process.returncode is not None
 
 
 # ---------------------------------------------------------------------------

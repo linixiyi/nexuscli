@@ -61,6 +61,7 @@ from nexuscli.mcp import (
 )
 from nexuscli.runtime import RuntimeApiServer
 from nexuscli.runtime.api import runtime_api_key
+from nexuscli.runtime.cron import CronError, cron_tasks_path, list_tasks, next_trigger, run_task
 from nexuscli.session import SessionStore
 
 app = typer.Typer(
@@ -71,6 +72,8 @@ app = typer.Typer(
 )
 mcp_app = typer.Typer(help="MCP server management")
 app.add_typer(mcp_app, name="mcp")
+cron_app = typer.Typer(help="Scheduled task management")
+app.add_typer(cron_app, name="cron")
 console = Console()
 
 
@@ -416,6 +419,51 @@ def mcp_list(
 
 
 # ---------------------------------------------------------------------------
+# Cron subcommands
+# ---------------------------------------------------------------------------
+
+
+@cron_app.command("list")
+def cron_list() -> None:
+    """List scheduled cron tasks."""
+    tasks = list_tasks(cron_tasks_path())
+    if not tasks:
+        typer.echo("No cron tasks.")
+        return
+    for task in tasks:
+        state = "enabled" if task.enabled else "disabled"
+        typer.echo(f"{task.id}\t{task.cron}\t{state}\t{task.prompt}")
+
+
+@cron_app.command("next")
+def cron_next() -> None:
+    """Show the next trigger time of every cron task (local time)."""
+    for task, upcoming in next_trigger(cron_tasks_path()):
+        if upcoming is None:
+            typer.echo(f"[warn] invalid cron expression: {task.cron}")
+            continue
+        typer.echo(f"{task.id}\t{upcoming.strftime('%Y-%m-%d %H:%M')}")
+
+
+@cron_app.command("run")
+def cron_run(
+    task_id: Annotated[str, typer.Argument(help="Task id")],
+) -> None:
+    """Print a task's prompt so an external scheduler can pipe it into ``nexuscli -p``.
+
+    Offline form — nothing is executed here. Windows Task Scheduler / system
+    cron invokes this command at the scheduled time and feeds the printed
+    prompt to ``nexuscli -p`` for the actual run.
+    """
+    try:
+        prompt = run_task(cron_tasks_path(), task_id)
+    except CronError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(prompt)
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -445,7 +493,7 @@ async def _run_prompt(
         for name, error in manager.last_errors.items():
             typer.echo(f"MCP server {name} failed to load: {error}", err=True)
     engine = QueryEngine(
-        llm_client=create_llm_client(config.llm),
+        llm_client=create_llm_client(config.llm, telemetry_enabled=config.telemetry.enabled),
         tool_registry=registry,
         config=config,
         cwd=cwd,

@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | Python | 3.11 或更新 | 运行时 | `python --version` |
 | [uv](https://docs.astral.sh/uv/) | 任意近期版本 | 包管理 + 运行入口，**必装** | `uv --version` |
-| rg (ripgrep) | 可选 | doctor 检测项；Agent 可经 bash 手动使用 | `rg --version` |
+| rg (ripgrep) | 可选 | doctor 检测项；Agent 可经 bash 手动使用；装了它内置 `grep` 工具的目录搜索会自动加速（没有也能跑，自动回退纯 Python） | `rg --version` |
 | Node.js | 20.19+（可选） | 仅 Chrome DevTools MCP 需要 | `node --version` |
 
 没装 uv 的话，Windows PowerShell 一行安装：
@@ -34,6 +34,13 @@ uv sync --extra dev
 ```
 
 uv 会自动创建虚拟环境（`.venv/`）、按 `pyproject.toml` + `uv.lock` 安装精确版本的依赖，并把本项目以可编辑方式装进去。之后所有命令都用 `uv run nexuscli ...` 的形式执行，不需要手动激活虚拟环境。
+
+两个可选依赖组按需追加（不影响基础功能）：
+
+```bash
+uv sync --extra pdf        # 让 read_file 能读 .pdf 文档（pypdf）
+uv sync --extra telemetry  # 启用 OpenTelemetry span（还需配置 telemetry.enabled=true）
+```
 
 首次验证安装成功：
 
@@ -190,6 +197,10 @@ uv run nexuscli
 | `/snapshot` / `/restore <id>` | 项目快照与恢复现场 |
 | `/resume` / `/resume <序号\|id>` | 查看/切换历史会话 |
 | `/compact [重点]` | 手动压缩会话历史，可指定摘要保留重点 |
+| `/usage stats [N天]` | 本地落库的近 N 天用量统计（默认 7 天） |
+| `/fork [标题]` | 分叉当前会话为新会话并切换过去（原会话不变） |
+| `/goal set <目标>` | 设置跨回合的长程目标，每回合自动提醒，`/goal clear` 清除 |
+| `/effort low` | 会话内切换推理力度（仅 openai/openai-compatible 类 provider 实际发送） |
 | `/skill list` | 查看已装的 Skill |
 | `/clear` | 清空当前会话上下文（并开启新会话） |
 

@@ -21,7 +21,10 @@ def get_builtin_tools() -> list[Tool]:
     tools = [
         Tool(
             name="read_file",
-            description="Read a text file from the current workspace.",
+            description=(
+                "Read a text file from the current workspace. PDF files (.pdf) are read as "
+                "extracted text when the pdf extra (pypdf) is installed."
+            ),
             parameters=object_schema(
                 {
                     "path": {"type": "string", "description": "Path to read"},
@@ -487,6 +490,12 @@ def get_builtin_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Subagent type (default: general-purpose)",
                     },
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": (
+                            "Run in the background; returns a task id and report path immediately"
+                        ),
+                    },
                 },
                 ["description", "prompt"],
             ),
@@ -640,7 +649,23 @@ async def _task_output(payload: dict[str, Any], _context: ToolContext) -> ToolRe
     task_id = str(payload["task_id"])
     task = background_registry.get(task_id)
     if task is None:
-        return ToolResult(f'Unknown background task id "{task_id}".', is_error=True)
+        # Not a bash background task — it may be a background subagent.
+        # Imported lazily for the same anti-cycle reason as in _task above.
+        from nexuscli.agent.bg_tasks import bg_subagent_registry
+
+        entry = bg_subagent_registry.get(task_id)
+        status = bg_subagent_registry.status(task_id)
+        if entry is None or status is None:
+            return ToolResult(f'Unknown background task id "{task_id}".', is_error=True)
+        if status == "running":
+            return ToolResult(
+                f"[running] {entry.agent_type}: {entry.description} (report: {entry.report_path})"
+            )
+        result = bg_subagent_registry.result(task_id)
+        # A terminal status is only published together with the cached result,
+        # so the fallback below never triggers in practice.
+        body = result.report or result.error if result is not None else ""
+        return ToolResult(f"[{status}] report_path={entry.report_path}\n{body}")
     # The subprocess transport reports the exit code on the running loop, so
     # returncode below is fresh as soon as the process has exited.
     status = background_registry.status(task_id)
@@ -868,6 +893,27 @@ async def _task(payload: dict[str, Any], context: ToolContext) -> ToolResult:
         return ToolResult(
             f'Unknown agent type "{agent_type}". Available agents: {available}',
             is_error=True,
+        )
+    if payload.get("run_in_background"):
+        # Imported lazily for the same anti-cycle reason as run_subagent
+        # above: agent.bg_tasks transitively imports this package.
+        from nexuscli.agent.bg_tasks import bg_subagent_registry
+
+        # Background mode: register the subagent and hand back the task id at
+        # once — the turn must not block on the delegation. Same shape as the
+        # bash background branch: id + on-disk report path + what to do next.
+        task = bg_subagent_registry.start(
+            agent_def,
+            str(payload["prompt"]),
+            context,
+            agent_type=agent_type,
+            description=str(payload["description"]),
+        )
+        return ToolResult(
+            f"Started background subagent task {task.task_id} ({agent_type}). "
+            f"Report file: {task.report_path}. You will be notified when it "
+            "completes; check task_output with this id.",
+            display_summary=f"Started background subagent {task.task_id}",
         )
     try:
         report = await run_subagent(agent_def, str(payload["prompt"]), context)

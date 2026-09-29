@@ -26,8 +26,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from nexuscli.config import NexusCliConfig
+from nexuscli.plugins import load_plugins
 from nexuscli.policy.command_guard import CommandGuard, CommandPolicyError
 from nexuscli.tools.commands import CommandExecutor
+from nexuscli.workflow import WorkflowGraph, WorkflowStep
 
 ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"
 
@@ -143,7 +145,11 @@ def _parse_command_file(path: Path, source: str) -> CustomCommand | None:
 
 
 def load_slash_commands(cwd: str, home: Path | None = None) -> dict[str, CustomCommand]:
-    """Load custom commands; project scope overrides user scope per name."""
+    """Load custom commands; project scope overrides user scope per name.
+
+    Plugin commands (``<cwd>/.nexuscli/plugins/<name>/commands/``) merge after
+    both scopes and win on name conflicts.
+    """
     base = home if home is not None else Path.home()
     scopes = [
         (Path(base) / ".nexuscli" / "commands", "user"),
@@ -155,6 +161,17 @@ def load_slash_commands(cwd: str, home: Path | None = None) -> dict[str, CustomC
             continue
         for path in sorted(directory.glob("*.md")):
             command = _parse_command_file(path, source)
+            if command is not None:
+                commands[command.name] = command
+    # Plugin commands merge last with the fixed "project" source (the
+    # CustomCommand.source field only knows "user"/"project"; no new layer):
+    # a plugin command overrides a project command, which overrides the user
+    # layer — the same "last scan wins" chain the scopes above already follow.
+    for plugin in load_plugins(cwd):
+        if plugin.commands_dir is None:
+            continue
+        for path in sorted(plugin.commands_dir.glob("*.md")):
+            command = _parse_command_file(path, "project")
             if command is not None:
                 commands[command.name] = command
     return commands
@@ -340,3 +357,92 @@ def build_init_prompt(notes: str, cwd: str) -> str:
     if stripped:
         prompt += _INIT_NOTES_SECTION.format(notes=stripped)
     return prompt
+
+
+# ---------------------------------------------------------------------------
+# Built-in /expert command + shared workflow step dispatch (spec 2.4 merge:
+# /expert and /workflow run share one step-graph engine and prompt layer)
+# ---------------------------------------------------------------------------
+
+# Fixed three-step expert loop behind ``/expert <topic>``: research → execute
+# → report, a linear chain. Chinese on purpose: consumed by the model, not by
+# the user (repo convention, see subagent.py and build_init_prompt). ZCode's
+# built-in expert workflow has eight phases (workflow/definition.ts:39-48);
+# the minimal expert loop keeps three.
+_EXPERT_STEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "research",
+        "围绕主题「{topic}」做只读调研：梳理现状、相关文件与约束，"
+        "不做任何修改，输出要点清单（每条给出依据：绝对路径或核实到的事实）。",
+        (),
+    ),
+    (
+        "execute",
+        "基于上一步的调研要点，完成主题「{topic}」的核心工作："
+        "按最小改动原则实施，过程中做必要的只读验证。",
+        ("research",),
+    ),
+    (
+        "report",
+        "对照主题「{topic}」的目标复核上一步的成果：指出缺口与风险，"
+        "输出最终综合报告（结论、关键路径、验证结果）。",
+        ("execute",),
+    ),
+)
+
+
+def build_expert_graph(topic: str) -> WorkflowGraph:
+    """Build the fixed three-step expert loop graph for *topic*.
+
+    Constructs the graph directly (no JSON round-trip); the topic is
+    substituted into each step's prompt template.
+    """
+    steps = {
+        step_id: WorkflowStep(
+            id=step_id,
+            prompt=prompt_template.format(topic=topic),
+            depends_on=list(depends_on),
+        )
+        for step_id, prompt_template, depends_on in _EXPERT_STEPS
+    }
+    return WorkflowGraph(steps=steps)
+
+
+def build_step_dispatch_prompt(
+    graph: WorkflowGraph,
+    step_id: str,
+    upstream_reports: dict[str, str],
+) -> str:
+    """Build the controlled orchestration prompt for dispatching one step.
+
+    Shared by ``/workflow run`` and ``/expert`` (spec 2.4 merge decision): the
+    prompt fixes the subagent to exactly one step, lists the whole graph in
+    topological order for orientation, injects upstream reports verbatim, and
+    ends with the self-contained report requirement. Mirrors ZCode's
+    ``buildPhasePrompt`` shape (workflow/expert/prompts.ts:13-52): frame, task,
+    objective, upstream artifacts, scope constraint.
+    """
+    order = graph.topological_order()
+    step = graph.steps[step_id]
+    lines = [
+        "你是受控工作流编排中的子代理，只执行分配给你的步骤，不要执行其他步骤，也不要反问用户。",
+        "",
+        "工作流步骤清单（拓扑序）：",
+    ]
+    for other_id in order:
+        deps = graph.steps[other_id].depends_on
+        dep_text = f"依赖：{', '.join(deps)}" if deps else "无依赖"
+        lines.append(f"- {other_id}（{dep_text}）")
+    position = order.index(step_id) + 1
+    lines.append("")
+    lines.append(f"本次执行的步骤：{step_id}（第 {position}/{len(order)} 步）")
+    lines.append(step.prompt)
+    if upstream_reports:
+        lines.append("")
+        lines.append("上游步骤报告：")
+        for dep_id in step.depends_on:
+            lines.append(f"### {dep_id}")
+            lines.append(upstream_reports[dep_id])
+    lines.append("")
+    lines.append("完成后输出自包含的步骤报告：明确结论、关键路径与验证结果。")
+    return "\n".join(lines)

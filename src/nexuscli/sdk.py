@@ -11,7 +11,7 @@ from nexuscli.tools import ToolRegistry, get_builtin_tools
 def create_default_engine(cwd: str | None = None) -> QueryEngine:
     root = str(Path(cwd or ".").resolve())
     config = load_config(project_root=root)
-    client = create_llm_client(config.llm)
+    client = create_llm_client(config.llm, telemetry_enabled=config.telemetry.enabled)
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
     return QueryEngine(llm_client=client, tool_registry=registry, config=config, cwd=root)

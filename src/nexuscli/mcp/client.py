@@ -13,6 +13,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from pydantic import AnyUrl
 
+from nexuscli.mcp import auth as mcp_auth
 from nexuscli.mcp.config import McpServerSpec, load_mcp_server_specs
 from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 
@@ -212,18 +213,60 @@ class McpClientManager:
         if spec.type in {"http", "streamable_http", "streamable-http"}:
             if not spec.url:
                 raise ValueError(f"MCP server {spec.name} is missing url")
-            async with (
-                streamablehttp_client(
-                    spec.url,
-                    headers=spec.headers or None,
-                    timeout=spec.timeout,
-                ) as (read, write, _session_id),
-                ClientSession(read, write) as session,
-            ):
-                await session.initialize()
-                yield session
-            return
+            headers = dict(spec.headers or {})
+            token = await mcp_auth.ensure_access_token(spec)
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            # One attempt, then at most one 401-triggered refresh+retry. Failures
+            # after the session was handed to the consumer cannot be retried here.
+            entered = False
+            try:
+                async with self._http_session_once(spec, headers) as session:
+                    entered = True
+                    yield session
+                return
+            except Exception as exc:
+                if entered or spec.auth is None or not mcp_auth.is_unauthorized(exc):
+                    raise
+                retry_headers = await self._refreshed_headers(spec, dict(spec.headers or {}))
+                if retry_headers is None:
+                    raise  # no refresh token or refresh failed: original 401 wins
+                async with self._http_session_once(spec, retry_headers) as session:
+                    yield session
+                return
         raise ValueError(f"Unsupported MCP transport: {spec.type}")
+
+    @asynccontextmanager
+    async def _http_session_once(self, spec: McpServerSpec, headers: dict[str, str] | None):
+        """A single connect + initialize attempt over the streamable-http transport."""
+        async with (
+            streamablehttp_client(
+                spec.url,
+                headers=headers or None,
+                timeout=spec.timeout,
+            ) as (read, write, _session_id),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            yield session
+
+    async def _refreshed_headers(
+        self, spec: McpServerSpec, base: dict[str, str]
+    ) -> dict[str, str] | None:
+        """Refresh tokens and build full retry headers; None when impossible."""
+        cfg = spec.auth
+        if cfg is None:
+            return None
+        store = mcp_auth.TokenStore()
+        existing = store.tokens_for(spec.name)
+        if existing is None or not existing.refresh_token:
+            return None
+        try:
+            tokens = await mcp_auth.refresh_tokens(cfg, existing.refresh_token)
+        except Exception:  # a failed refresh must not mask the original 401
+            return None
+        store.save(spec.name, tokens)
+        return {**base, "Authorization": f"Bearer {tokens.access_token}"}
 
     @contextmanager
     def _stderr_log(self, spec: McpServerSpec):
