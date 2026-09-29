@@ -33,6 +33,8 @@ class SessionMeta:
     provider: str = ""
     title: str = ""
     message_count: int = 0
+    # Session id this transcript was forked from; "" = a native session.
+    forked_from: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +46,7 @@ class SessionMeta:
             "provider": self.provider,
             "title": self.title,
             "message_count": self.message_count,
+            "forked_from": self.forked_from,
         }
 
     @classmethod
@@ -57,6 +60,7 @@ class SessionMeta:
             provider=str(data.get("provider") or ""),
             title=str(data.get("title") or ""),
             message_count=int(data.get("message_count") or 0),
+            forked_from=str(data.get("forked_from") or ""),
         )
 
 
@@ -99,6 +103,11 @@ def _title_from(messages: list[Message]) -> str:
     return ""
 
 
+def _new_session_id(now: float) -> str:
+    """Timestamped-unique session id (shared by new sessions and forks)."""
+    return f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}-{uuid.uuid4().hex[:6]}"
+
+
 class SessionStore:
     """Read and write session transcripts under a single root directory."""
 
@@ -115,7 +124,7 @@ class SessionStore:
         """Create an in-memory session that only touches disk on first append."""
         now = time.time()
         meta = SessionMeta(
-            id=f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}-{uuid.uuid4().hex[:6]}",
+            id=_new_session_id(now),
             cwd=str(Path(cwd).resolve()),
             created_at=now,
             updated_at=now,
@@ -129,6 +138,36 @@ class SessionStore:
         writer = SessionWriter(self, meta)
         writer.persisted = len(messages)
         return writer
+
+    def fork(self, session_id: str, *, title: str | None = None) -> SessionRecord | None:
+        """Copy an existing transcript to a new session id; source untouched.
+
+        The new transcript holds the full message history and records the
+        source id in ``forked_from`` (a snapshot-style link: fork-point facts
+        live on the fork itself, never re-read from the live parent — same
+        rule as ZCode's stable-fork metadata). ``title=None`` inherits the
+        source title; an empty source title lets SessionWriter.append derive
+        one from the first user message as usual. Nothing else is inherited:
+        the session goal (keyed by session id) is deliberately not copied at
+        fork time — ZCode's fork-time goal snapshot is not ported.
+        """
+        record = self.load(session_id)
+        if record is None:
+            return None
+        now = time.time()
+        meta = SessionMeta(
+            id=_new_session_id(now),
+            cwd=record.meta.cwd,
+            created_at=now,
+            updated_at=now,
+            model=record.meta.model,
+            provider=record.meta.provider,
+            title=title if title is not None else record.meta.title,
+            forked_from=record.meta.id,
+        )
+        writer = SessionWriter(self, meta)
+        writer.append(list(record.messages))
+        return SessionRecord(meta=meta, messages=list(record.messages))
 
     def list(self, limit: int = 20, cwd: str | None = None) -> list[SessionMeta]:
         """Most recent sessions first, optionally filtered by working directory."""

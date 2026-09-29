@@ -20,6 +20,7 @@ class AuditLog:
         outcome: str,
         approver: str,
         cwd: str,
+        trace_id: str = "",
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         event = {
@@ -29,6 +30,9 @@ class AuditLog:
             "outcome": outcome,
             "approver": approver,
             "cwd": cwd,
+            # Optional correlation id (see nexuscli.observability): empty for
+            # callers that don't pass one, so existing records stay valid.
+            "trace_id": trace_id,
         }
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")

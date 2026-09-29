@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from nexuscli.context import ContextBudget, ContextWindowManager, estimate_text_tokens
+from nexuscli.context.manager import _CLEARED_TOOL_RESULT
 from nexuscli.types import Message
 
 
@@ -91,6 +92,94 @@ def test_context_truncates_oversized_tool_payload():
 
     tool_message = next(message for message in result.messages if message.role == "tool")
     assert "tool result truncated" in str(tool_message.content)
+
+
+def _tool_call_message(call_id: str) -> Message:
+    return Message(
+        role="assistant",
+        content="",
+        tool_calls=[
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": "read_file", "arguments": "{}"},
+            }
+        ],
+    )
+
+
+def test_microcompact_clears_old_tool_results_without_summary():
+    messages: list[Message] = [Message(role="user", content="kick off")]
+    for index in range(10):
+        messages.append(_tool_call_message(f"call_{index}"))
+        messages.append(Message(role="tool", content="x" * 3000, tool_call_id=f"call_{index}"))
+    for index in (10, 11):
+        messages.append(_tool_call_message(f"call_{index}"))
+        messages.append(
+            Message(role="tool", content=f"fresh result {index}", tool_call_id=f"call_{index}")
+        )
+    messages.append(Message(role="user", content="wrap up"))
+    manager = ContextWindowManager(ContextBudget(6000, 500, 0.8, 0.55, 100))
+
+    result = manager.prepare(messages)
+
+    tool_messages = [message for message in result.messages if message.role == "tool"]
+    assert len(tool_messages) == 12
+    assert [message.tool_call_id for message in tool_messages] == [
+        f"call_{index}" for index in range(12)
+    ]
+    for message in tool_messages[:7]:
+        assert message.content == _CLEARED_TOOL_RESULT
+    for message in tool_messages[7:10]:
+        assert message.content == "x" * 3000
+    assert tool_messages[10].content == "fresh result 10"
+    assert tool_messages[11].content == "fresh result 11"
+    assert len(result.messages) == len(messages)
+    assert all("conversation-summary" not in str(message.content) for message in result.messages)
+    assert not result.compressed
+    assert result.estimated_tokens_after < result.estimated_tokens_before
+
+    # Idempotent: preparing the already-cleared history again leaves it stable.
+    second = manager.prepare(result.messages)
+    assert not second.compressed
+    assert [message.content for message in second.messages] == [
+        message.content for message in result.messages
+    ]
+
+
+def test_microcompact_falls_through_to_lossy_when_insufficient():
+    # Both oversized tool results sit inside the keep-recent window, so the
+    # lossless pass cannot free enough and the lossy summary takes over.
+    messages = [
+        Message(role="user", content="inspect"),
+        _tool_call_message("call_1"),
+        Message(role="tool", content="x" * 30_000, tool_call_id="call_1"),
+        _tool_call_message("call_2"),
+        Message(role="tool", content="y" * 30_000, tool_call_id="call_2"),
+    ]
+    manager = ContextWindowManager(ContextBudget(5000, 500, 0.8, 0.55, 100))
+
+    result = manager.prepare(messages)
+
+    assert result.compressed
+    assert "conversation-summary" in str(result.messages[0].content)
+
+
+def test_microcompact_skipped_when_over_message_limit():
+    messages: list[Message] = []
+    for index in range(6):
+        messages.append(Message(role="user", content=f"request {index}"))
+        messages.append(_tool_call_message(f"call_{index}"))
+        messages.append(
+            Message(role="tool", content=f"result {index}", tool_call_id=f"call_{index}")
+        )
+    manager = ContextWindowManager(ContextBudget(100_000, 1_000), max_history_messages=8)
+
+    result = manager.prepare(messages)
+
+    assert not any(_CLEARED_TOOL_RESULT in str(message.content) for message in result.messages)
+    assert result.compressed
+    assert "conversation-summary" in str(result.messages[0].content)
 
 
 def _long_history(count: int) -> list[Message]:

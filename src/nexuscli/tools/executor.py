@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from nexuscli import observability
 from nexuscli.hooks import fire_event, has_hooks
 from nexuscli.policy import (
     AuditLog,
@@ -10,6 +11,7 @@ from nexuscli.policy import (
     evaluate_permissions,
     is_readonly_bash_command,
 )
+from nexuscli.telemetry import tool_call_span
 from nexuscli.tools.base import Tool, ToolContext, ToolDecision, ToolResult
 from nexuscli.tools.commands import classify_command
 from nexuscli.tools.registry import ToolRegistry
@@ -65,10 +67,13 @@ class ToolExecutor:
         """Run one tool call through the gate order.
 
         Gates run in sequence: unknown tool → plan-mode read-only stop →
-        permission rules → PreToolUse hooks → HITL approval → execute. The
-        plan-mode stop short-circuits before rules, hooks, audit and
-        approval: no approval decision ever happened, so nothing is audited
-        and no hook (pre or post) fires for a rejected call.
+        permission rules → PreToolUse hooks → PermissionRequest hooks →
+        HITL approval → execute. The plan-mode stop short-circuits before
+        rules, hooks, audit and approval: no approval decision ever
+        happened, so nothing is audited and no hook (pre, permission or
+        post) fires for a rejected call. A failed execution fires
+        PostToolUseFailure instead of PostToolUse; the exception path fires
+        neither event.
 
         For shell tools a statically read-only command string (see
         ``nexuscli.policy.bash_readonly``) counts as read-only for the plan
@@ -79,6 +84,9 @@ class ToolExecutor:
         actually decided.
         """
         tool_call_id = str(call.get("id") or "")
+        # One trace id per call: every audit record below (deny/hitl/
+        # allow/error) carries it so a session's trail stays correlatable.
+        trace_id = observability.get_trace_id()
         name = _tool_call_name(call)
         payload = _tool_call_arguments(call)
 
@@ -128,6 +136,7 @@ class ToolExecutor:
                         outcome="deny",
                         approver="permission-rule",
                         cwd=context.cwd,
+                        trace_id=trace_id,
                     )
                 return ToolResult(
                     tool_use_id=tool_call_id,
@@ -154,6 +163,7 @@ class ToolExecutor:
                             outcome="deny",
                             approver="hook",
                             cwd=context.cwd,
+                            trace_id=trace_id,
                         )
                     return ToolResult(
                         tool_use_id=tool_call_id,
@@ -163,6 +173,38 @@ class ToolExecutor:
                         is_error=True,
                     )
                 force_prompt = pre.permission_hint == "ask"
+            # PermissionRequest hooks: the observation/interception point
+            # right before the approval decision, reusing the PreToolUse
+            # protocol semantics exactly (deny blocks and is audited, "ask"
+            # forces the prompt, "allow" is recorded only). It fires before
+            # the read-only bypass below is computed so an "ask" hint also
+            # suppresses that fast path.
+            if has_hooks(context.config, "PermissionRequest"):
+                req = await fire_event(
+                    context.config,
+                    "PermissionRequest",
+                    {"tool_name": tool.name, "tool_input": data},
+                    context.cwd,
+                )
+                if req.blocked:
+                    if context.config.features.audit_log:
+                        audit.record(
+                            tool_name=tool.name,
+                            input_data=data,
+                            outcome="deny",
+                            approver="hook",
+                            cwd=context.cwd,
+                            trace_id=trace_id,
+                        )
+                    return ToolResult(
+                        tool_use_id=tool_call_id,
+                        content=(
+                            f'Tool "{tool.name}" was denied by '
+                            f"permission-request hook: {req.reason}"
+                        ),
+                        is_error=True,
+                    )
+                force_prompt = force_prompt or req.permission_hint == "ask"
             readonly_passthrough = _readonly_passthrough(
                 command_readonly, force_prompt, permission, context.config.policy.hitl_mode
             )
@@ -182,6 +224,7 @@ class ToolExecutor:
                     outcome=decision,
                     approver=approver,
                     cwd=context.cwd,
+                    trace_id=trace_id,
                 )
                 return ToolResult(
                     tool_use_id=tool_call_id,
@@ -201,7 +244,19 @@ class ToolExecutor:
             elif tool.requires_approval or context.config.policy.hitl_mode == "always":
                 approver = "hitl"
 
-            result = await tool.execute(data, context)
+            # The span covers only the tool execution and its outcome record.
+            # The gate chain above (deny rules / hooks / approval / audit)
+            # stays outside the span on purpose: gate order and audit
+            # semantics must not move.
+            with tool_call_span(context.config.telemetry.enabled, tool_name=tool.name) as span:
+                result = await tool.execute(
+                    data,
+                    context,
+                )
+                # Must stay inside the with-block: start_as_current_span ends the span on
+                # __exit__, and the SDK drops set_attribute on an ended span (warning
+                # "Setting attribute on ended span."; verified on opentelemetry-sdk 1.45/1.20).
+                span.record_outcome("error" if result.is_error else "ok")
             result.tool_use_id = tool_call_id
             if not tool.is_read_only and context.config.features.audit_log:
                 audit.record(
@@ -210,17 +265,32 @@ class ToolExecutor:
                     outcome="allow" if not result.is_error else "error",
                     approver=approver,
                     cwd=context.cwd,
+                    trace_id=trace_id,
                 )
-            # PostToolUse hooks are informational only: they never change the
-            # result that has already been produced. A blocked post-hook is
-            # audited; errors would only be surfaced to the user.
-            if has_hooks(context.config, "PostToolUse"):
+            # Post-tool hooks are informational only: they never change the
+            # result that has already been produced. A failed call fires
+            # PostToolUseFailure instead of PostToolUse — the failure event
+            # replaces the success event — and a blocked post-hook is
+            # audited; errors would only be surfaced to the user. The bare
+            # ``except`` below fires neither event: exception paths keep the
+            # minimal slice (ZCode's isInterrupt semantics are intentionally
+            # not ported).
+            if result.is_error:
+                post_event = "PostToolUseFailure"
+                post_payload = {
+                    "tool_name": tool.name,
+                    "tool_input": data,
+                    "error_message": result.content,
+                }
+            else:
+                post_event = "PostToolUse"
                 post_payload = {
                     "tool_name": tool.name,
                     "tool_input": data,
                     "tool_response": result.content,
                 }
-                post = await fire_event(context.config, "PostToolUse", post_payload, context.cwd)
+            if has_hooks(context.config, post_event):
+                post = await fire_event(context.config, post_event, post_payload, context.cwd)
                 if post.blocked and context.config.features.audit_log:
                     audit.record(
                         tool_name=tool.name,
@@ -228,6 +298,7 @@ class ToolExecutor:
                         outcome="deny",
                         approver="hook",
                         cwd=context.cwd,
+                        trace_id=trace_id,
                     )
             return result
         except Exception as exc:  # noqa: BLE001 - tool errors must flow back to the model
@@ -238,6 +309,7 @@ class ToolExecutor:
                     outcome="error",
                     approver=approver,
                     cwd=context.cwd,
+                    trace_id=trace_id,
                 )
             return ToolResult(
                 tool_use_id=tool_call_id,

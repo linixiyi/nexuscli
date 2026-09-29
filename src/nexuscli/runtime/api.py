@@ -152,7 +152,10 @@ class RuntimeApiServer:
         self._append_event(thread_id, "turn.started", {"message": message, "mode": mode})
         registry, _manager = await build_tool_registry(config=self.config, cwd=self.cwd)
         engine = QueryEngine(
-            llm_client=create_llm_client(self.config.llm),
+            llm_client=create_llm_client(
+                self.config.llm,
+                telemetry_enabled=self.config.telemetry.enabled,
+            ),
             tool_registry=registry,
             config=self.config,
             cwd=self.cwd,
@@ -246,7 +249,10 @@ class RuntimeApiServer:
             raise TaskCanceledError(task.id)
         registry, _manager = await build_tool_registry(config=self.config, cwd=self.cwd)
         engine = QueryEngine(
-            llm_client=create_llm_client(self.config.llm),
+            llm_client=create_llm_client(
+                self.config.llm,
+                telemetry_enabled=self.config.telemetry.enabled,
+            ),
             tool_registry=registry,
             config=self.config,
             cwd=self.cwd,

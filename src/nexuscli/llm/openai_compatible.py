@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from nexuscli.llm.pricing import CostBreakdown, ModelPriceProfile, calculate_cost
+from nexuscli.observability import get_trace_id
+from nexuscli.telemetry import chat_span
 from nexuscli.types import Message, Usage
 
 
@@ -23,6 +27,18 @@ class OpenAICompatibleClient:
     max_context_window: int = 128_000
     prompt_cache: bool = False
     price_profile: ModelPriceProfile | None = None
+    # Spans are only produced when telemetry.enabled AND the optional
+    # opentelemetry SDK are both present; chat_span no-ops otherwise.
+    telemetry_enabled: bool = False
+    # Opt-in debug dump: when True, every turn appends one request and one
+    # response JSON line to ~/.nexuscli/debug/llm/<date>.jsonl. Dump failures
+    # are swallowed and never interrupt the chat.
+    debug_dump: bool = False
+    # Session-level reasoning effort ("minimal"|"low"|"medium"|"high"). Set
+    # live by the REPL /effort command; None (default) means the field is
+    # never sent. Applied only for whitelisted providers — see
+    # _REASONING_EFFORT_PROVIDERS below.
+    reasoning_effort: str | None = None
 
     @property
     def model_name(self) -> str:
@@ -73,58 +89,124 @@ class OpenAICompatibleClient:
             "content-type": "application/json",
             "user-agent": "NexusCLI-Python/0.1.0",
         }
+        # Correlate the request with the session's audit trail. list_models
+        # stays untraced on purpose: only the chat path is in the slice.
+        trace_id = get_trace_id()
+        if trace_id:
+            headers["x-request-id"] = trace_id
         url = self.base_url.rstrip("/") + "/chat/completions"
+
+        # Debug-dump sidecar (opt-in): the request line goes out before the
+        # first event, so a turn always leaves at least the request on disk.
+        # Headers are redacted; the payload only holds model/messages/tools
+        # (no credentials), so it is written as-is.
+        if self.debug_dump:
+            _append_dump(
+                {
+                    "ts": datetime.now().isoformat(),
+                    "direction": "request",
+                    "provider": self.provider_name,
+                    "model": self.model,
+                    "url": url,
+                    "headers": _redact_headers(headers),
+                    "payload": payload,
+                }
+            )
 
         yield {"type": "message_start", "model": self.model}
         pending_usage: dict[str, Any] | None = None
-        try:
-            async with (
-                httpx.AsyncClient(timeout=self.timeout, http2=False) as client,
-                client.stream("POST", url, headers=headers, json=payload) as response,
-            ):
-                response.raise_for_status()
-                async for event in _iter_sse(response):
-                    if event == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(event)
-                    except json.JSONDecodeError:
-                        continue
-                    async for parsed in self._parse_chunk(chunk):
-                        # Streamed usage is a running total, not a delta, and some
-                        # gateways attach it to every chunk — keep only the last
-                        # one and emit it once so consumers don't multiply tokens.
-                        if parsed.get("type") == "usage":
-                            pending_usage = parsed
-                        else:
-                            yield parsed
-        except httpx.TimeoutException:
-            yield {
-                "type": "error",
-                "error": RuntimeError(
-                    f"{self.provider_name} request timed out after {self.timeout:g}s. "
-                    "Check the network and retry."
-                ),
-            }
-        except httpx.HTTPStatusError as exc:
-            yield {
-                "type": "error",
-                "error": RuntimeError(
-                    f"{self.provider_name} API returned HTTP {exc.response.status_code}. "
-                    "Check the API key, model access, account balance, and provider status."
-                ),
-            }
-        except httpx.RequestError:
-            yield {
-                "type": "error",
-                "error": RuntimeError(
-                    f"Could not connect to {self.provider_name} at {self.base_url}. "
-                    "Check the network, VPN/proxy, and provider status, then retry."
-                ),
-            }
-            return
-        if pending_usage is not None:
-            yield pending_usage
+        # Debug-dump sidecar buffers: mirror the emitted deltas so the
+        # response line can aggregate them once the stream ends.
+        text_parts: list[str] = []
+        tool_calls: list[Any] = []
+        dump_error: str | None = None
+        # The span covers the whole request/stream-processing section below
+        # (including the error branches and the trailing usage event). It is
+        # an opt-in sidecar: the yield sequence and the exception handling are
+        # unchanged, and chat_span no-ops unless telemetry is enabled.
+        with chat_span(self.telemetry_enabled, provider=self.provider_name, model=self.model):
+            try:
+                async with (
+                    httpx.AsyncClient(timeout=self.timeout, http2=False) as client,
+                    client.stream("POST", url, headers=headers, json=payload) as response,
+                ):
+                    response.raise_for_status()
+                    async for event in _iter_sse(response):
+                        if event == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(event)
+                        except json.JSONDecodeError:
+                            continue
+                        async for parsed in self._parse_chunk(chunk):
+                            # Streamed usage is a running total, not a delta, and some
+                            # gateways attach it to every chunk — keep only the last
+                            # one and emit it once so consumers don't multiply tokens.
+                            if parsed.get("type") == "usage":
+                                pending_usage = parsed
+                            else:
+                                # Debug-dump sidecar: mirror the delta into the
+                                # response buffers; the yielded event is untouched.
+                                if parsed.get("type") == "text_delta":
+                                    text_parts.append(str(parsed.get("text") or ""))
+                                elif parsed.get("type") == "tool_call_delta":
+                                    tool_calls.append(parsed.get("tool_call"))
+                                yield parsed
+            except httpx.TimeoutException:
+                # Debug-dump sidecar: keep a summary for the response line
+                # written after the span block; the yielded error is unchanged.
+                dump_error = f"{self.provider_name} request timed out after {self.timeout:g}s"
+                yield {
+                    "type": "error",
+                    "error": RuntimeError(
+                        f"{self.provider_name} request timed out after {self.timeout:g}s. "
+                        "Check the network and retry."
+                    ),
+                }
+            except httpx.HTTPStatusError as exc:
+                dump_error = f"{self.provider_name} API returned HTTP {exc.response.status_code}"
+                yield {
+                    "type": "error",
+                    "error": RuntimeError(
+                        f"{self.provider_name} API returned HTTP {exc.response.status_code}. "
+                        "Check the API key, model access, account balance, and provider status."
+                    ),
+                }
+            except httpx.RequestError:
+                yield {
+                    "type": "error",
+                    "error": RuntimeError(
+                        f"Could not connect to {self.provider_name} at {self.base_url}. "
+                        "Check the network, VPN/proxy, and provider status, then retry."
+                    ),
+                }
+                return
+            if pending_usage is not None:
+                yield pending_usage
+
+        # Debug-dump sidecar (opt-in): the response line lands after the span
+        # block. Turns that failed with a timeout / HTTP status error dump an
+        # error record instead of the aggregated response. The early-returning
+        # connection-error branch above never reaches this point, which is
+        # accepted: every turn already left at least the request line.
+        if self.debug_dump:
+            if dump_error is not None:
+                record: dict[str, Any] = {
+                    "ts": datetime.now().isoformat(),
+                    "direction": "response",
+                    "model": self.model,
+                    "error": dump_error,
+                }
+            else:
+                record = {
+                    "ts": datetime.now().isoformat(),
+                    "direction": "response",
+                    "model": self.model,
+                    "text": "".join(text_parts),
+                    "tool_calls": tool_calls,
+                    "usage": pending_usage.get("usage") if pending_usage is not None else None,
+                }
+            _append_dump(record)
 
     def _build_payload(
         self,
@@ -141,6 +223,10 @@ class OpenAICompatibleClient:
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         }
+        # Reasoning effort is opt-in per provider: only whitelisted
+        # chat-completions backends ever see the field (never a blank value).
+        if self.reasoning_effort and self.provider_name.lower() in _REASONING_EFFORT_PROVIDERS:
+            payload["reasoning_effort"] = self.reasoning_effort
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -238,6 +324,53 @@ class OpenAICompatibleClient:
         usage = chunk.get("usage")
         if isinstance(usage, dict):
             yield {"type": "usage", "usage": Usage.from_mapping(usage).to_dict()}
+
+
+_REDACTED = "<redacted>"
+# Header keys whose values must never reach the debug dump. Keys are matched
+# lower-cased and their values replaced by the _REDACTED placeholder.
+_SENSITIVE_HEADER_KEYS = frozenset(
+    {"authorization", "proxy-authorization", "x-api-key", "cookie", "set-cookie"}
+)
+# Providers whose chat-completions endpoint accepts the OpenAI-style
+# "reasoning_effort" field. ZCode gates this per model via the provider
+# registry's optionSpecs.reasoningLevel whitelist
+# (provider-registry-selection.ts:173-182); nexusCLI has no model
+# capability registry, so the gate is provider-level and deliberately
+# narrow: anything not listed here never sees the field.
+_REASONING_EFFORT_PROVIDERS = frozenset({"openai", "openai-compatible", "compatible"})
+
+
+def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Copy ``headers`` with every sensitive value replaced by ``_REDACTED``."""
+    return {
+        key: _REDACTED if key.lower() in _SENSITIVE_HEADER_KEYS else value
+        for key, value in headers.items()
+    }
+
+
+def _append_dump(record: dict[str, Any]) -> None:
+    """Append one JSON line to ~/.nexuscli/debug/llm/<date>.jsonl.
+
+    Both the home directory and the date are resolved per call (same seam as
+    ``bg_tasks.BgSubagentRegistry._bg_dir``) so tests can redirect Path.home()
+    via HOME/USERPROFILE. Best-effort by design: a dump failure must never
+    interrupt a chat turn, so every OSError is swallowed (mirrors
+    ``config._read_json``'s tolerance).
+    """
+    try:
+        path = (
+            Path.home()
+            / ".nexuscli"
+            / "debug"
+            / "llm"
+            / f"{datetime.now().strftime('%Y-%m-%d')}.jsonl"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        return
 
 
 async def _iter_sse(response: httpx.Response) -> AsyncIterator[str]:

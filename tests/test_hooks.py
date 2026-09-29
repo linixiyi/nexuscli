@@ -112,6 +112,14 @@ def test_matcher_ignored_for_non_tool_events() -> None:
     assert len(hooks_for(config, "SessionStart", None)) == 1
 
 
+def test_new_tool_events_honor_matcher() -> None:
+    for event in ("PermissionRequest", "PostToolUseFailure"):
+        config = _config_with_matcher(event, "mutate")
+        assert len(hooks_for(config, event, "mutate")) == 1
+        assert hooks_for(config, event, "read_file") == []
+        assert hooks_for(config, event, None) == []
+
+
 def test_invalid_matcher_regex_never_matches() -> None:
     config = _config_with_matcher("PreToolUse", "([unclosed")
     assert hooks_for(config, "PreToolUse", "bash") == []
@@ -255,6 +263,9 @@ def _registry_with_mutate_tool(executed: list[str]) -> ToolRegistry:
         executed.append(str(payload["value"]))
         return ToolResult(f"mutated {payload['value']}")
 
+    async def boom(_payload, _context):
+        return ToolResult("boom failed", is_error=True)
+
     registry.register(
         Tool(
             name="mutate",
@@ -262,6 +273,17 @@ def _registry_with_mutate_tool(executed: list[str]) -> ToolRegistry:
             parameters=object_schema({"value": {"type": "string"}}, ["value"]),
             required_keys=["value"],
             handler=mutate,
+            is_read_only=False,
+            requires_approval=True,
+        )
+    )
+    registry.register(
+        Tool(
+            name="boom",
+            description="Always fail",
+            parameters=object_schema({"value": {"type": "string"}}, ["value"]),
+            required_keys=["value"],
+            handler=boom,
             is_read_only=False,
             requires_approval=True,
         )
@@ -401,6 +423,116 @@ def test_post_hook_runs_after_tool_and_blocking_is_audited(tmp_path: Path) -> No
     record = _last_audit_record(tmp_path)
     assert record["outcome"] == "deny"
     assert record["approver"] == "hook"
+
+
+# ---------------------------------------------------------------------------
+# PermissionRequest / PostToolUseFailure hooks
+# ---------------------------------------------------------------------------
+
+
+def test_permission_request_hook_fires_before_approval(tmp_path: Path) -> None:
+    capture = tmp_path / "pr.json"
+    config = _hooked_config(tmp_path, "PermissionRequest", _capture_hook(tmp_path / "pr.py"))
+    result = _run_mutate(
+        config,
+        ToolContext(cwd=str(tmp_path), config=config, approval_callback=lambda _request: "approve"),
+    )
+    # The hook runs on the way to the approval decision: the call completes
+    # normally and the captured payload names the tool under consideration.
+    assert not result.is_error
+    assert "executed=['ok']" in result.content
+    payload = json.loads(capture.read_text(encoding="utf-8"))
+    assert payload["hook_event_name"] == "PermissionRequest"
+    assert payload["tool_name"] == "mutate"
+    assert payload["tool_input"] == {"value": "ok"}
+    assert payload["cwd"] == str(tmp_path)
+
+
+def test_permission_request_exit_two_denies_and_audits(tmp_path: Path) -> None:
+    command = _hook_command(tmp_path / "deny_pr.py", _EXIT_TWO_BODY)
+    config = _hooked_config(tmp_path, "PermissionRequest", command)
+    result = _run_mutate(config, ToolContext(cwd=str(tmp_path), config=config))
+    assert result.is_error
+    assert "permission-request hook" in result.content
+    assert "no pushing allowed" in result.content
+    assert "executed=[]" in result.content
+    record = _last_audit_record(tmp_path)
+    assert record["outcome"] == "deny"
+    assert record["approver"] == "hook"
+
+
+def test_permission_request_ask_keeps_hitl_callback(tmp_path: Path) -> None:
+    command = _hook_command(tmp_path / "ask_pr.py", "import json\n" + _PERMISSION_ASK)
+    config = _hooked_config(tmp_path, "PermissionRequest", command)
+    prompts: list[str] = []
+
+    def approve(_request):
+        prompts.append("asked")
+        return "approve"
+
+    result = _run_mutate(
+        config, ToolContext(cwd=str(tmp_path), config=config, approval_callback=approve)
+    )
+    # The "ask" hint feeds force_prompt exactly like PreToolUse: mutate would
+    # prompt in auto mode anyway, and the hook ask must preserve that — it may
+    # only ever add prompting, never remove it.
+    assert not result.is_error
+    assert prompts == ["asked"]
+    assert "executed=['ok']" in result.content
+
+
+def test_post_tool_use_failure_event_replaces_post_tool_use(tmp_path: Path) -> None:
+    failure_capture = tmp_path / "failure.json"
+    post_capture = tmp_path / "post.json"
+    config = NexusCliConfig()
+    config.policy.audit_log_path = str(tmp_path / "audit.jsonl")
+    # The failure hook captures its stdin payload and then exits 2, proving
+    # both the payload shape and the blocked-audit path in one run.
+    config.hooks.post_tool_use_failure = [
+        HookMatcherConfig(
+            hooks=[
+                HookCommandConfig(
+                    command=_capture_hook(
+                        tmp_path / "failure.py",
+                        "import sys\nsys.stderr.write('failure rejected')\n"
+                        "sys.stderr.flush()\nsys.exit(2)\n",
+                    )
+                )
+            ]
+        )
+    ]
+    config.hooks.post_tool_use = [
+        HookMatcherConfig(hooks=[HookCommandConfig(command=_capture_hook(tmp_path / "post.py"))])
+    ]
+    executed: list[str] = []
+    registry = _registry_with_mutate_tool(executed)
+    executor = ToolExecutor(registry)
+    context = ToolContext(
+        cwd=str(tmp_path), config=config, approval_callback=lambda _request: "approve"
+    )
+
+    boom_call = {"id": "call-boom", "name": "boom", "arguments": {"value": "ok"}}
+    result = asyncio.run(executor.execute_all([boom_call], context))[0]
+    assert result.is_error
+    assert "boom failed" in result.content
+    payload = json.loads(failure_capture.read_text(encoding="utf-8"))
+    assert payload["hook_event_name"] == "PostToolUseFailure"
+    assert payload["tool_name"] == "boom"
+    assert payload["tool_input"] == {"value": "ok"}
+    assert payload["error_message"] == "boom failed"
+    # The failure event replaced the success event for this call.
+    assert not post_capture.exists()
+    record = _last_audit_record(tmp_path)
+    assert record["outcome"] == "deny"
+    assert record["approver"] == "hook"
+
+    # Same-round contrast: a successful call still fires PostToolUse only.
+    mutate_call = {"id": "call-1", "name": "mutate", "arguments": {"value": "ok"}}
+    ok_result = asyncio.run(executor.execute_all([mutate_call], context))[0]
+    assert not ok_result.is_error
+    post = json.loads(post_capture.read_text(encoding="utf-8"))
+    assert post["hook_event_name"] == "PostToolUse"
+    assert post["tool_response"] == "mutated ok"
 
 
 # ---------------------------------------------------------------------------

@@ -2,13 +2,17 @@
 
 Provides pure, reusable functions for reading, writing, editing, listing,
 globing, and searching files. Keeps business logic separate from tool
-definitions so that builtins.py remains a thin wiring layer.
+definitions so that builtins.py remains a thin wiring layer. PDF files
+(.pdf suffix) are extracted as text via the optional pypdf dependency;
+when pypdf is missing the read returns an error with install guidance.
 """
 
 from __future__ import annotations
 
 import glob as glob_module
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -76,6 +80,11 @@ def read_file(
     if not resolved.is_file():
         return FileOpResult(f"Not a file: {resolved}", is_error=True)
 
+    # Case-insensitive .pdf suffix routes to optional pypdf text extraction
+    # (mirrors ZCode's isPdfPath: suffix check only, no content sniffing).
+    if resolved.suffix.lower() == ".pdf":
+        return _read_pdf_text(resolved, cwd, offset=offset, limit=limit)
+
     try:
         raw = resolved.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
@@ -87,6 +96,34 @@ def read_file(
     numbered = "\n".join(f"{idx + offset}: {line}" for idx, line in enumerate(selected))
     rel = _relative_to(resolved, cwd)
     return FileOpResult(numbered, display_summary=f"Read {rel}")
+
+
+def _read_pdf_text(resolved: Path, cwd: str, *, offset: int, limit: int) -> FileOpResult:
+    """Extract text from a PDF via pypdf and apply the text path's line window."""
+    # Lazy import: non-PDF paths must not pay for (or require) pypdf.
+    try:
+        import pypdf
+    except ImportError:
+        return FileOpResult(
+            f"Cannot read {resolved.name}: .pdf text extraction requires the optional "
+            "pypdf dependency, which is not installed. Install the pdf extra to read PDFs: "
+            '`uv sync --extra pdf` (or `pip install "nexuscli[pdf]"`).',
+            is_error=True,
+        )
+
+    try:
+        reader = pypdf.PdfReader(str(resolved))
+        # Whole-document extraction (minimal slice: no page ranges); empty pages
+        # contribute "" so the join never sees None.
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception as exc:  # corrupt / encrypted / malformed PDFs raise assorted errors
+        return FileOpResult(f"Failed to extract PDF text from {resolved}: {exc}", is_error=True)
+
+    offset = max(offset, 1)
+    lines = text.splitlines()
+    selected = lines[offset - 1 : offset - 1 + limit]
+    numbered = "\n".join(f"{idx + offset}: {line}" for idx, line in enumerate(selected))
+    return FileOpResult(numbered, display_summary=f"Read {_relative_to(resolved, cwd)}")
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +387,112 @@ def _walk_tree(
 # Grep / search
 # ---------------------------------------------------------------------------
 
+_RG_SKIP_GLOBS = tuple(f"!{name}/**" for name in sorted(SKIP_DIRS))
+
+
+def _find_rg() -> str | None:
+    """Return the ripgrep executable resolved from PATH, or None.
+
+    Test seam: probed on every grep() invocation and never cached, so tests
+    can monkeypatch this symbol to simulate a machine without ripgrep
+    (patching it to None) or to an arbitrary executable (failure injection).
+    """
+    return shutil.which("rg")
+
+
+def _grep_with_rg(
+    rg_path: str,
+    start: Path,
+    root: Path,
+    pattern: str,
+    *,
+    use_regex: bool,
+    limit: int,
+) -> list[str] | None:
+    """Search *start* with ripgrep and map the output onto the grep() format.
+
+    Returns the collected ``rel:line: text`` lines, or None when ripgrep
+    failed and the caller must fall back to the pure-Python scan. The two
+    paths are mutually exclusive for a single call, mirroring ZCode's
+    createRipgrepFallback which only installs a fallback when no executable
+    rg exists in the shell.
+
+    Flag rationale:
+    - ``--vimgrep`` emits ``path:line:col:text``, which splits cleanly into
+      the existing ``rel:line: text`` result format;
+    - ``--no-ignore --hidden`` matches the pure-Python path's ``rglob("*")``
+      semantics, which do not honour .gitignore rules and include hidden
+      files;
+    - ``--max-filesize=1M`` approximates ``MAX_FILE_SIZE = 1_000_000``
+      (ripgrep size suffixes are 1024-based, so the exact boundary differs;
+      tests use small files and never hit it);
+    - ``--fixed-strings`` implements the ``use_regex=False`` literal
+      substring match;
+    - ``cwd=str(start)`` makes rg print root-relative paths, keeping Windows
+      drive letters (``E:\\``) out of the ``path:line`` splitting.
+
+    Skip globs mirror skip_file()'s SKIP_DIRS rule. Each glob must be passed
+    via ``--glob``: a bare ``!dir/**`` positional is treated by rg as a
+    search path (stderr error, exit code 2; verified against ripgrep 15.2.0).
+    """
+    command = [
+        rg_path,
+        "--vimgrep",
+        "--no-heading",
+        "--with-filename",
+        "--no-ignore",
+        "--hidden",
+        "--max-filesize=1M",
+    ]
+    for skip_glob in _RG_SKIP_GLOBS:
+        command += ["--glob", skip_glob]
+    if not use_regex:
+        command.append("--fixed-strings")
+    command += ["-e", pattern, "."]
+
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(start),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            # rg emits UTF-8 regardless of platform; decoding with the locale
+            # codec (e.g. cp936 on zh-CN Windows) can raise on CJK match text.
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError:
+        return None
+
+    matches: list[str] = []
+    for raw_line in process.stdout:
+        parts = raw_line.rstrip("\n").split(":", 3)
+        if len(parts) != 4:
+            continue
+        path_part, line_no_text, _column, text = parts
+        try:
+            line_no = int(line_no_text)
+        except ValueError:
+            return None
+        try:
+            rel = (start / path_part).resolve().relative_to(root)
+        except ValueError:
+            # Path outside the workspace root: be conservative and fall back.
+            return None
+        matches.append(f"{rel}:{line_no}: {text.strip()}")
+        if len(matches) >= limit:
+            process.terminate()
+            process.wait()
+            return matches
+
+    process.wait()
+    # Exit code 1 means "no matches" and is legitimate; any other code is a
+    # ripgrep failure and triggers the pure-Python fallback.
+    if process.returncode not in (0, 1):
+        return None
+    return matches
+
 
 def grep(
     cwd: str,
@@ -364,6 +507,16 @@ def grep(
 
     When *use_regex* is True (default) *pattern* is treated as a regular
     expression; otherwise a plain substring match is performed.
+
+    When ripgrep is available on PATH and *path* is a directory, the search
+    is delegated to an ``rg`` subprocess and its output is mapped back onto
+    the same ``rel:line: text`` result format; when ripgrep is missing or
+    the subprocess fails, the pure-Python scan below runs unchanged.
+    Known semantic difference: ripgrep skips binary files while the
+    pure-Python path reads everything with ``errors="ignore"``, so the
+    ripgrep path may return fewer matches inside binary files; results on
+    text files are identical (pinned by tests). Deliberately not done: env
+    overrides, alternate backends (ugrep/bfs), result caching.
     """
     root = Path(cwd).resolve()
     start = resolve_path(cwd, path, path_guard_enabled)
@@ -372,6 +525,15 @@ def grep(
         compiled = re.compile(pattern) if use_regex else None
     except re.error as exc:
         return FileOpResult(f"invalid regex: {exc}", is_error=True)
+
+    # Fast path: delegate to ripgrep when it is on PATH. A single-file search
+    # has no performance problem, so it always uses the pure-Python scan.
+    rg_path = _find_rg()
+    if rg_path is not None and start.is_dir():
+        matches = _grep_with_rg(rg_path, start, root, pattern, use_regex=use_regex, limit=limit)
+        if matches is not None:
+            return FileOpResult("\n".join(matches) or "(no matches)")
+        # rg unavailable or failed: fall through to the pure-Python scan below.
 
     matches: list[str] = []
     files = [start] if start.is_file() else [p for p in start.rglob("*") if p.is_file()]

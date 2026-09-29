@@ -7,6 +7,14 @@ from dataclasses import dataclass
 
 from nexuscli.types import Message
 
+# Microcompact: in-place clear of old tool results (structure-preserving,
+# no summary). Mirrors ZCode's microcompact defaults: keep the most recent
+# 5 tool results verbatim, require a minimum saving, and mark cleared
+# payloads with a fixed placeholder.
+_CLEARED_TOOL_RESULT = "[Old tool result content cleared]"
+_MICROCOMPACT_KEEP_RECENT = 5
+_MICROCOMPACT_MIN_SAVINGS = 256
+
 
 @dataclass(slots=True, frozen=True)
 class ContextBudget:
@@ -42,7 +50,9 @@ class CompressionResult:
 class ContextWindowManager:
     """Keep a conversation inside the model budget without breaking recent tool turns.
 
-    The compressor is deliberately deterministic. It creates an extractive rolling summary of
+    The compressor is deliberately deterministic. Before any summary is produced, a lossless
+    microcompact pre-pass clears older tool-result payloads in place; when that alone fits the
+    budget, no summary is generated. Otherwise it creates an extractive rolling summary of
     older turns, keeps recent turns verbatim, and only truncates oversized tool payloads as a
     final safety valve. The summary remains short-term session state and is never written to
     long-term memory automatically.
@@ -74,6 +84,22 @@ class ContextWindowManager:
         over_message_limit = len(messages) > self.max_history_messages
         if before <= self.budget.compression_limit and not over_message_limit:
             return CompressionResult(list(messages), before, before, False)
+
+        # Microcompact pre-pass: try to get back under budget losslessly by clearing
+        # old tool-result payloads in place. Clearing content never removes messages,
+        # so it cannot rescue a history that is over max_history_messages — skip it
+        # in that case. When the cleared history still exceeds the limit, or the
+        # saving is below the minimum threshold, fall through to the lossy summary
+        # below (its payload truncation stays the safety valve for oversized recent
+        # tool results).
+        if before > self.budget.compression_limit and not over_message_limit:
+            micro = self._microcompact(messages)
+            after_micro = self._estimate_request(micro, system_prompt, tool_definitions or [])
+            if (
+                after_micro <= self.budget.compression_limit
+                and before - after_micro >= _MICROCOMPACT_MIN_SAVINGS
+            ):
+                return CompressionResult(micro, before, after_micro, False)
 
         split_at = self._recent_boundary(messages)
         if over_message_limit:
@@ -118,6 +144,8 @@ class ContextWindowManager:
         if len(messages) <= 1:
             return CompressionResult(list(messages), 0, 0, False)
 
+        # Manual compaction means "summarize immediately": the lossless microcompact
+        # pre-pass used by prepare() is intentionally not applied here.
         before = self._estimate_request(messages, "", [])
         split_at = self._recent_boundary(messages)
         older = messages[:split_at]
@@ -218,6 +246,34 @@ class ContextWindowManager:
         else:
             text = text + "\n" + closing
         return text
+
+    def _microcompact(self, messages: list[Message]) -> list[Message]:
+        """Clear old tool-result payloads in place, preserving message structure.
+
+        Mirrors ZCode's microcompact: the most recent tool results stay verbatim and
+        older ones are replaced by a fixed placeholder. Message count, order, roles,
+        and tool_call_id bindings never change, so an assistant tool-call never loses
+        its result message. ZCode's compactable-tool whitelist, clearErrorResults
+        switch, idle trigger, and separate trigger ratio are intentionally not ported:
+        every tool result is treated the same and ContextBudget.compression_limit
+        stays the only trigger.
+        """
+        tool_indices = [index for index, message in enumerate(messages) if message.role == "tool"]
+        keep_from = max(0, len(tool_indices) - _MICROCOMPACT_KEEP_RECENT)
+        clear_positions = set(tool_indices[:keep_from])
+        result: list[Message] = []
+        for index, message in enumerate(messages):
+            clone = _copy_message(message)
+            # Leave non-string payloads and already-cleared placeholders untouched
+            # so repeated runs are idempotent.
+            if (
+                index in clear_positions
+                and isinstance(clone.content, str)
+                and clone.content != _CLEARED_TOOL_RESULT
+            ):
+                clone.content = _CLEARED_TOOL_RESULT
+            result.append(clone)
+        return result
 
     def _truncate_tool_payloads(self, messages: list[Message]) -> list[Message]:
         result: list[Message] = []

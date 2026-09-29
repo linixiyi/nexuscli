@@ -11,8 +11,11 @@ import pytest
 from nexuscli.agent.agent import Agent
 from nexuscli.agent.subagent import (
     BUILTIN_AGENTS,
+    SUBAGENT_MAX_TURNS,
     AgentDefinition,
+    agent_memory_dir,
     build_subagent_registry,
+    build_subagent_system_prompt,
     load_subagents,
     run_subagent,
 )
@@ -41,7 +44,8 @@ def _task_tool() -> Any:
 
 
 def _use_fake_llm(monkeypatch: pytest.MonkeyPatch, client: FakeClient) -> None:
-    monkeypatch.setattr("nexuscli.llm.factory.create_llm_client", lambda _config: client)
+    # **_kwargs: production call sites pass telemetry_enabled= (factory seam).
+    monkeypatch.setattr("nexuscli.llm.factory.create_llm_client", lambda _config, **_kwargs: client)
 
 
 def _tool_call_event(name: str, arguments: str, call_id: str = "call_1") -> dict[str, Any]:
@@ -224,6 +228,40 @@ def test_run_subagent_returns_placeholder_without_text(tmp_path, monkeypatch):
     assert report == "(subagent returned no text)"
 
 
+def test_run_subagent_agent_gets_explicit_small_max_turns(tmp_path, monkeypatch):
+    """子代理回合上限固定为 SUBAGENT_MAX_TURNS，不随 agent.max_turns 配置放大。"""
+    client = FakeClient(
+        [
+            {"type": "text_delta", "text": "子代理报告"},
+            {"type": "message_end", "stop_reason": "end_turn"},
+        ]
+    )
+    _use_fake_llm(monkeypatch, client)
+    config = _test_config(tmp_path)
+    config.agent.max_turns = 999  # 配置值不得泄漏进子代理构造
+
+    captured: list[dict[str, Any]] = []
+
+    class _SpyAgent(Agent):
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr("nexuscli.agent.subagent.Agent", _SpyAgent)
+
+    report = asyncio.run(
+        run_subagent(
+            BUILTIN_AGENTS["general-purpose"],
+            "小任务",
+            ToolContext(cwd=str(tmp_path), config=config),
+        )
+    )
+
+    assert captured[0]["max_turns"] == SUBAGENT_MAX_TURNS
+    assert captured[0]["max_turns"] != 999
+    assert report == "子代理报告"
+
+
 def test_subagent_history_is_isolated_from_main_agent(tmp_path, monkeypatch):
     client = FakeClient(
         [
@@ -296,3 +334,124 @@ def test_approval_callback_is_forwarded_to_subagent(tmp_path, monkeypatch):
 
     assert [request["tool_name"] for request in requests] == ["bash"]
     assert report == "命令被拒绝后的子代理报告"
+
+
+# ---------------------------------------------------------------------------
+# Per-agent persistent memory directory (~/.nexuscli/agent-memory/<name>/)
+
+
+def _redirect_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+    monkeypatch.setenv("HOME", str(home))
+    # win32 Path.home() prefers USERPROFILE over HOME; set both so the user
+    # scope is isolated from the real profile on every platform.
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+def test_subagent_system_prompt_contains_memory_directory_section(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    _redirect_home(monkeypatch, home)
+    client = FakeClient(
+        [
+            {"type": "text_delta", "text": "子代理报告"},
+            {"type": "message_end", "stop_reason": "end_turn"},
+        ]
+    )
+    _use_fake_llm(monkeypatch, client)
+    config = _test_config(tmp_path)
+    captured: list[dict[str, Any]] = []
+
+    class _SpyAgent(Agent):
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr("nexuscli.agent.subagent.Agent", _SpyAgent)
+
+    report = asyncio.run(
+        run_subagent(
+            BUILTIN_AGENTS["general-purpose"],
+            "任务",
+            ToolContext(cwd=str(tmp_path), config=config),
+        )
+    )
+
+    system_prompt = captured[0]["system_prompt"]
+    assert report == "子代理报告"
+    assert "持久记忆目录" in system_prompt
+    assert str(home / ".nexuscli" / "agent-memory" / "general-purpose") in system_prompt
+    # 追加而非替换：原内置代理提示词正文原样开头。
+    assert system_prompt.startswith(BUILTIN_AGENTS["general-purpose"].prompt)
+
+
+def test_agent_memory_dir_isolated_per_agent(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    _redirect_home(monkeypatch, home)
+
+    general = agent_memory_dir("general-purpose", home=home)
+    explore = agent_memory_dir("explore", home=home)
+
+    assert general != explore
+    assert general.parent == home / ".nexuscli" / "agent-memory"
+    assert explore.parent == home / ".nexuscli" / "agent-memory"
+    # home=None 时跟随 env 重定向后的 Path.home()。
+    assert agent_memory_dir("general-purpose") == (
+        Path.home() / ".nexuscli" / "agent-memory" / "general-purpose"
+    )
+
+
+def test_subagent_memory_section_varies_by_agent_name(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    _redirect_home(monkeypatch, home)
+    client = FakeClient(
+        [
+            {"type": "text_delta", "text": "通用报告"},
+            {"type": "message_end", "stop_reason": "end_turn"},
+        ],
+        [
+            {"type": "text_delta", "text": "探索报告"},
+            {"type": "message_end", "stop_reason": "end_turn"},
+        ],
+    )
+    _use_fake_llm(monkeypatch, client)
+    config = _test_config(tmp_path)
+    captured: list[dict[str, Any]] = []
+
+    class _SpyAgent(Agent):
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr("nexuscli.agent.subagent.Agent", _SpyAgent)
+    context = ToolContext(cwd=str(tmp_path), config=config)
+
+    asyncio.run(run_subagent(BUILTIN_AGENTS["general-purpose"], "任务一", context))
+    asyncio.run(run_subagent(BUILTIN_AGENTS["explore"], "任务二", context))
+
+    general_prompt = captured[0]["system_prompt"]
+    explore_prompt = captured[1]["system_prompt"]
+    general_dir = str(home / ".nexuscli" / "agent-memory" / "general-purpose")
+    explore_dir = str(home / ".nexuscli" / "agent-memory" / "explore")
+    assert general_dir in general_prompt
+    assert explore_dir in explore_prompt
+    # 按代理名隔离：互相不引用对方的记忆目录。
+    assert general_dir not in explore_prompt
+    assert explore_dir not in general_prompt
+
+
+def test_memory_section_skipped_for_unsafe_agent_names(tmp_path):
+    for name in ("../evil", ".", ".."):
+        definition = AgentDefinition(name=name, description="x", prompt="正文")
+
+        assert build_subagent_system_prompt(definition, home=tmp_path) == "正文"
+
+
+def test_memory_section_absent_customization_via_home(tmp_path):
+    """同一定义传不同 home → 目录路径随 home 变化（重定向缝钉住）。"""
+    definition = AgentDefinition(name="researcher", description="x", prompt="正文")
+
+    first = build_subagent_system_prompt(definition, home=tmp_path / "home-a")
+    second = build_subagent_system_prompt(definition, home=tmp_path / "home-b")
+
+    assert str(tmp_path / "home-a" / ".nexuscli" / "agent-memory" / "researcher") in first
+    assert str(tmp_path / "home-b" / ".nexuscli" / "agent-memory" / "researcher") in second
+    assert first != second

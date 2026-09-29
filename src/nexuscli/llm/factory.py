@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
+
 from nexuscli.config import LlmConfig
+from nexuscli.llm.anthropic import AnthropicClient
 from nexuscli.llm.openai_compatible import OpenAICompatibleClient
 from nexuscli.llm.pricing import resolve_price_profile
 
+ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 PROVIDER_BASE_URLS = {
@@ -26,7 +30,15 @@ MODEL_CONTEXT_WINDOWS = {
 }
 
 
-def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
+def create_llm_client(
+    config: LlmConfig,
+    *,
+    # The root-level telemetry switch rides on this keyword because the
+    # factory only receives the llm section (LlmConfig), which does not carry
+    # it. Default False keeps every existing caller unchanged; production
+    # call sites pass config.telemetry.enabled (repl/cli/runtime/subagent/sdk).
+    telemetry_enabled: bool = False,
+) -> OpenAICompatibleClient | AnthropicClient:
     provider = config.provider.lower()
     if provider == "deepseek":
         base_url = config.base_url or DEEPSEEK_BASE_URL
@@ -46,6 +58,8 @@ def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
                 context_window=context,
                 overrides=config.prices,
             ),
+            telemetry_enabled=telemetry_enabled,
+            debug_dump=config.debug_dump,
         )
     if provider in {"openai", "openai-compatible", "compatible"}:
         context = config.context_window or 128_000
@@ -65,6 +79,8 @@ def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
                 overrides=config.prices,
                 include_builtin=False,
             ),
+            telemetry_enabled=telemetry_enabled,
+            debug_dump=config.debug_dump,
         )
     if provider in PROVIDER_BASE_URLS:
         context = config.context_window or MODEL_CONTEXT_WINDOWS.get(config.model.lower(), 128_000)
@@ -78,6 +94,28 @@ def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
             timeout=config.timeout,
             max_context_window=context,
             prompt_cache=False,
+            price_profile=resolve_price_profile(
+                config.model,
+                context_window=context,
+                overrides=config.prices,
+                include_builtin=False,
+            ),
+            telemetry_enabled=telemetry_enabled,
+            debug_dump=config.debug_dump,
+        )
+    if provider == "anthropic":
+        # Env fallback lives here on purpose; config._apply_env's provider
+        # key map is outside this change's boundary.
+        api_key = config.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        context = config.context_window or 200_000
+        return AnthropicClient(
+            model=config.model,
+            api_key=api_key,
+            base_url=config.base_url or ANTHROPIC_BASE_URL,
+            max_tokens=config.max_tokens,
+            temperature=config.temperature,
+            timeout=config.timeout,
+            max_context_window=context,
             price_profile=resolve_price_profile(
                 config.model,
                 context_window=context,
@@ -106,8 +144,10 @@ def create_llm_client(config: LlmConfig) -> OpenAICompatibleClient:
                 overrides=config.prices,
                 include_builtin=False,
             ),
+            telemetry_enabled=telemetry_enabled,
+            debug_dump=config.debug_dump,
         )
-    valid = ", ".join(["deepseek", "openai", "openai-compatible", *PROVIDER_BASE_URLS])
+    valid = ", ".join(["anthropic", "deepseek", "openai", "openai-compatible", *PROVIDER_BASE_URLS])
     raise ValueError(
         f"unknown LLM provider {config.provider!r} without a base_url. "
         f"Set llm.base_url or use one of: {valid}"

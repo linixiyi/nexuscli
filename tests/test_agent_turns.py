@@ -318,7 +318,10 @@ def test_repl_passes_config_max_turns_to_agent(tmp_path, monkeypatch):
         return ToolRegistry(), None
 
     monkeypatch.setattr("nexuscli.entrypoints.repl.build_tool_registry", fake_build_tool_registry)
-    monkeypatch.setattr("nexuscli.entrypoints.repl.create_llm_client", lambda config: StubClient())
+    # **_kwargs: repl passes telemetry_enabled= config.telemetry.enabled (factory seam).
+    monkeypatch.setattr(
+        "nexuscli.entrypoints.repl.create_llm_client", lambda config, **_kwargs: StubClient()
+    )
     monkeypatch.setattr("nexuscli.entrypoints.repl.Agent", SpyAgent)
     monkeypatch.setattr("nexuscli.entrypoints.repl.PromptSession", StubPromptSession)
     # Redirect Path.home() (session store, prompt history) into tmp_path.

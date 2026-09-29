@@ -9,6 +9,24 @@ from typing import Any
 
 
 @dataclass(slots=True)
+class McpAuthConfig:
+    """OAuth 2.0 (authorization code + PKCE, public client) settings.
+
+    Public client by design: there is no ``client_secret`` field on purpose —
+    machine secrets must never be written into mcp.json; real credentials only
+    arrive via the environment or the OAuth flow itself. The ``redirect_uri``
+    default is a placeholder: this slice never starts a callback listener.
+    """
+
+    type: str = "oauth"
+    client_id: str = ""
+    authorize_url: str = ""
+    token_url: str = ""
+    redirect_uri: str = "http://localhost:8765/callback"
+    scopes: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class McpServerSpec:
     name: str
     type: str = "stdio"
@@ -20,6 +38,7 @@ class McpServerSpec:
     headers: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
     timeout: float = 30.0
+    auth: McpAuthConfig | None = None
 
 
 def load_mcp_server_specs(project_root: str | Path) -> dict[str, McpServerSpec]:
@@ -103,6 +122,23 @@ def _spec_from_raw(name: str, raw: dict[str, Any], project_root: Path) -> McpSer
         },
         enabled=bool(raw.get("enabled", True)),
         timeout=float(raw.get("timeout", raw.get("startup_timeout", 30.0)) or 30.0),
+        auth=_auth_from_raw(raw.get("auth"), project_root),
+    )
+
+
+def _auth_from_raw(raw: Any, project_root: Path) -> McpAuthConfig | None:
+    """Parse the optional ``auth`` section; unknown or invalid shapes are ignored."""
+    if not isinstance(raw, dict):
+        return None
+    if str(raw.get("type") or "oauth") != "oauth":
+        return None  # unknown auth types are safely ignored
+    default_redirect = "http://localhost:8765/callback"
+    return McpAuthConfig(
+        client_id=_expand(str(raw.get("client_id", "")), project_root),
+        authorize_url=_expand(str(raw.get("authorize_url", "")), project_root),
+        token_url=_expand(str(raw.get("token_url", "")), project_root),
+        redirect_uri=_expand(str(raw.get("redirect_uri") or default_redirect), project_root),
+        scopes=[str(scope) for scope in raw.get("scopes") or []],
     )
 
 

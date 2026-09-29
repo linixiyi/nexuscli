@@ -26,6 +26,9 @@ class LlmConfig:
     max_tokens: int = 8192
     temperature: float = 0.7
     timeout: float = 120.0
+    # When enabled, every turn appends the request and the response as JSON
+    # lines to ~/.nexuscli/debug/llm/<date>.jsonl (sensitive headers redacted).
+    debug_dump: bool = False
 
 
 @dataclass(slots=True)
@@ -106,6 +109,8 @@ HOOK_EVENT_FIELDS: dict[str, str] = {
     "UserPromptSubmit": "user_prompt_submit",
     "PreToolUse": "pre_tool_use",
     "PostToolUse": "post_tool_use",
+    "PermissionRequest": "permission_request",
+    "PostToolUseFailure": "post_tool_use_failure",
     "Stop": "stop",
 }
 
@@ -135,6 +140,8 @@ class HooksConfig:
     user_prompt_submit: list[HookMatcherConfig] = field(default_factory=list)
     pre_tool_use: list[HookMatcherConfig] = field(default_factory=list)
     post_tool_use: list[HookMatcherConfig] = field(default_factory=list)
+    permission_request: list[HookMatcherConfig] = field(default_factory=list)
+    post_tool_use_failure: list[HookMatcherConfig] = field(default_factory=list)
     stop: list[HookMatcherConfig] = field(default_factory=list)
 
 
@@ -169,6 +176,19 @@ class AgentConfig:
 
 
 @dataclass(slots=True)
+class TelemetryConfig:
+    """OpenTelemetry spans for the llm.chat / tool.call paths.
+
+    Disabled by default: with ``enabled=False`` no span is ever created and
+    behaviour is byte-for-byte identical to a build without the telemetry
+    package. Spans themselves stay no-ops unless the optional
+    ``opentelemetry`` SDK is installed (see :mod:`nexuscli.telemetry`).
+    """
+
+    enabled: bool = False
+
+
+@dataclass(slots=True)
 class NexusCliConfig:
     llm: LlmConfig = field(default_factory=LlmConfig)
     render_mode: str = "inline"
@@ -181,6 +201,7 @@ class NexusCliConfig:
     prompt: PromptConfig = field(default_factory=PromptConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
 def load_config(
@@ -428,6 +449,7 @@ def _dict_to_config(data: dict[str, Any]) -> NexusCliConfig:
         prompt=PromptConfig(**_filter_known(data.get("prompt", {}), PromptConfig)),
         features=FeatureConfig(**_filter_known(data.get("features", {}), FeatureConfig)),
         agent=_dict_to_agent(data.get("agent")),
+        telemetry=TelemetryConfig(**_filter_known(data.get("telemetry", {}), TelemetryConfig)),
     )
 
 
@@ -448,6 +470,12 @@ def _dict_to_agent(raw: Any) -> AgentConfig:
     except (TypeError, ValueError):
         fields["max_turns"] = default.max_turns
     return AgentConfig(**fields)
+
+
+def user_level_hooks() -> HooksConfig:
+    """Parse only the user-level hooks section (project layer excluded)."""
+    user_config = _read_json(_home() / ".nexuscli" / "config.json") or {}
+    return _dict_to_hooks(user_config.get("hooks"))
 
 
 def _dict_to_hooks(raw: Any) -> HooksConfig:

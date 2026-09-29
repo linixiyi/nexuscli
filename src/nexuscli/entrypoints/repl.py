@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,18 +23,21 @@ from rich.table import Table
 from nexuscli import __version__
 from nexuscli.agent import Agent, AgentOrchestrator, PlanExecuteAgent
 from nexuscli.bootstrap import build_tool_registry
-from nexuscli.config import NexusCliConfig, config_to_public_dict
+from nexuscli.config import NexusCliConfig, config_to_public_dict, user_level_hooks
 from nexuscli.context import ContextBudget, ContextWindowManager
+from nexuscli.context.goal import GoalStore
 from nexuscli.entrypoints.model_selector import ModelSelectorState, run_model_selector
 from nexuscli.entrypoints.slash_commands import (
     CommandExpansion,
     CustomCommand,
+    build_expert_graph,
     build_init_prompt,
+    build_step_dispatch_prompt,
     expand_command,
     load_slash_commands,
     split_command_message,
 )
-from nexuscli.hooks import fire_event, has_hooks
+from nexuscli.hooks import fire_event, has_hooks, trust
 from nexuscli.llm import create_llm_client
 from nexuscli.llm.model_profiles import (
     DEFAULT_MODEL_PROFILES,
@@ -41,6 +45,7 @@ from nexuscli.llm.model_profiles import (
     CustomModelStore,
     ModelProfile,
 )
+from nexuscli.llm.usage_store import UsageStore
 from nexuscli.memory import MemoryManager
 from nexuscli.policy import AuditLog
 from nexuscli.prompt import PromptAssembler
@@ -51,6 +56,8 @@ from nexuscli.session import SessionStore, SessionWriter
 from nexuscli.skill import SkillRegistry
 from nexuscli.snapshot import SnapshotService
 from nexuscli.tools import ToolRegistry
+from nexuscli.tools.base import ToolContext
+from nexuscli.workflow import WorkflowError, WorkflowGraph, load_workflow_file
 
 SLASH_COMMANDS = [
     "/help",
@@ -76,6 +83,11 @@ SLASH_COMMANDS = [
     "/skill",
     "/mcp",
     "/task",
+    "/workflow",
+    "/expert",
+    "/fork",
+    "/goal",
+    "/effort",
     "/snapshot",
     "/restore",
 ]
@@ -136,7 +148,7 @@ async def start_repl(
     console = Console()
     permission_mode = PermissionModeController(config)
     registry, mcp_manager = await build_tool_registry(config=config, cwd=cwd)
-    client = create_llm_client(config.llm)
+    client = create_llm_client(config.llm, telemetry_enabled=config.telemetry.enabled)
     system_prompt = PromptAssembler(
         config=config,
         cwd=cwd,
@@ -188,6 +200,11 @@ async def start_repl(
         continue_last=continue_last,
     )
     custom_commands = load_slash_commands(cwd)
+
+    # Project-layer hooks must be trusted before any of them can fire — this
+    # includes SessionStart below, which would otherwise run an untrusted
+    # workspace hook before the user ever sees a prompt.
+    await _gate_workspace_hooks(config, cwd, console)
 
     # SessionStart hooks run once before the prompt loop; they cannot block
     # the session, so only their errors and additional context are shown.
@@ -247,6 +264,7 @@ async def start_repl(
             if message.startswith("/"):
                 custom_match = await _match_custom_command(message, custom_commands, config)
                 if custom_match is not None:
+                    _queue_goal_reminder(agent, session_state.writer.meta.id)
                     await _run_custom_command(
                         agent,
                         renderer,
@@ -255,6 +273,11 @@ async def start_repl(
                         custom_match[1],
                     )
                     _persist_history(session_state, agent, console)
+                    _record_turn_usage(agent, session_state.writer.meta.id)
+                    # Known boundary of this slice: only custom-command and
+                    # regular turns announce; slash-command exits and
+                    # plan-mode internal turns do not.
+                    _announce_bg_subagents(console)
                     continue
                 should_exit = await _handle_slash(
                     message,
@@ -271,8 +294,14 @@ async def start_repl(
                 if should_exit:
                     return
                 continue
+            _queue_goal_reminder(agent, session_state.writer.meta.id)
             await _run_agent(agent, renderer, message)
             _persist_history(session_state, agent, console)
+            _record_turn_usage(agent, session_state.writer.meta.id)
+            # Known boundary of this slice: only custom-command and regular
+            # turns announce; slash-command exits and plan-mode internal
+            # turns do not.
+            _announce_bg_subagents(console)
         except KeyboardInterrupt:
             # Ctrl+C mid-turn aborts the turn, not the whole session.
             console.print("\n[yellow]Interrupted — turn aborted.[/yellow]")
@@ -282,6 +311,135 @@ async def start_repl(
 
 async def _run_agent(agent: Agent, renderer: RichRenderer, message: str) -> None:
     await _run_events(agent.run(message), renderer, agent.llm_client.max_context_window)
+
+
+def _announce_bg_subagents(console: Console) -> None:
+    """Drain finished background subagent tasks and print a one-shot summary.
+
+    Purely synchronous and non-blocking: only tasks that already reached a
+    terminal state are announced, all of the current batch in one call;
+    still-running subagents stay silent and are picked up by a later turn.
+    Notices are for the user only — they are never injected into the model
+    context.
+    """
+    # Imported lazily: nexuscli.agent.bg_tasks transitively imports the
+    # subagent runner, which imports tools.builtins — same anti-cycle reason
+    # as the task handler there.
+    from nexuscli.agent.bg_tasks import bg_subagent_registry
+
+    # The bracket prefix is rich-markup-escaped (\[) so it renders literally.
+    prefix = "\\[bg-subagent]"
+    for note in bg_subagent_registry.drain_notifications():
+        agent_type = note["agent_type"]
+        description = note["description"]
+        task_id = note["task_id"]
+        if note["status"] == "completed":
+            console.print(
+                f'{prefix} completed {agent_type} "{description}" '
+                f"(task {task_id}) — report: {note['report_path']}"
+            )
+        else:
+            console.print(
+                f'{prefix} failed {agent_type} "{description}" (task {task_id}): {note["error"]}'
+            )
+
+
+async def _run_workflow_graph(
+    graph: WorkflowGraph,
+    console: Console,
+    cwd: str,
+    config: NexusCliConfig,
+    agent: Agent,
+) -> None:
+    """Dispatch subagents over the graph serially in topological order.
+
+    Minimal slice (spec C8): no parallel executor — steps run one at a time
+    and each step's report is collected into its dependents' prompts. A step
+    failure aborts the remaining steps (their upstream reports would be
+    missing), the minimal analogue of ZCode's pause-on-failure in
+    workflow/expert/run-loop.ts:172-186. Steps never declare an agent type;
+    they always run as the built-in ``general-purpose`` subagent.
+    """
+    # Imported lazily: nexuscli.agent.subagent transitively imports
+    # tools.builtins — same anti-cycle reason as _announce_bg_subagents above.
+    from nexuscli.agent.subagent import BUILTIN_AGENTS, run_subagent
+
+    context = ToolContext(cwd=cwd, config=config, approval_callback=agent.approval_callback)
+    order = graph.topological_order()
+    reports: dict[str, str] = {}
+    # The bracket prefix is rich-markup-escaped (\[) so it renders literally.
+    prefix = "\\[workflow]"
+    for index, step_id in enumerate(order):
+        step = graph.steps[step_id]
+        prompt = build_step_dispatch_prompt(
+            graph,
+            step_id,
+            {dep: reports[dep] for dep in step.depends_on},
+        )
+        console.print(f"{prefix} ({index + 1}/{len(order)}) dispatching step {step_id}")
+        try:
+            report = await run_subagent(BUILTIN_AGENTS["general-purpose"], prompt, context)
+        except Exception as exc:  # noqa: BLE001 - one failing step must not kill the REPL
+            message = str(exc).strip() or exc.__class__.__name__
+            console.print(f"{prefix} Step {step_id} failed: {message.splitlines()[0]}")
+            console.print(f"{prefix} 中止剩余步骤：{', '.join(order[index + 1 :])}")
+            return
+        reports[step_id] = report
+    console.print(f"{prefix} Workflow complete — {len(reports)} step reports:")
+    for step_id in order:
+        console.print(f"=== {step_id} ===")
+        console.print(reports[step_id])
+
+
+async def _gate_workspace_hooks(
+    config: NexusCliConfig,
+    cwd: str,
+    console: Console,
+    confirm: Callable[[str], bool] | None = None,
+) -> None:
+    """Require one-time sha256 trust before project-layer hooks take effect.
+
+    Project (workspace) hooks are merged into ``config.hooks`` at load time
+    with no confirmation, so cloning a repository could otherwise run
+    arbitrary shell commands on every tool event. This gate fingerprints the
+    project layer's ``hooks`` section, asks once per workspace+fingerprint
+    (an already-trusted fingerprint skips the prompt), and on refusal replaces
+    ``config.hooks`` with the user-level hooks only — user-level hooks are
+    never affected. The ``confirm`` parameter is the injection seam for tests
+    (``confirm=lambda description: True/False``); the default implementation
+    refuses in non-interactive environments and prompts on a TTY.
+
+    Known boundary: only the interactive REPL path is gated here; the one-shot
+    execution entrypoint (cli.py) and serve are out of scope for this task.
+    """
+    section = trust.workspace_hooks_section(cwd)
+    if not section:
+        return
+    fingerprint = trust.hooks_fingerprint(section)
+    store = trust.HookTrustStore()
+    workspace = str(Path(cwd).resolve())
+    if store.is_trusted(workspace, fingerprint):
+        return
+    description = f"{workspace} (fingerprint {fingerprint[:16]})"
+    if confirm is not None:
+        trusted = confirm(description)
+    elif not sys.stdin.isatty():
+        # Non-interactive: refuse conservatively, same posture as _approval_prompt.
+        trusted = False
+    else:
+        console.print(f"[yellow]Workspace hooks detected[/yellow] {description}")
+        trusted = Prompt.ask("Trust workspace hooks?", choices=["y", "n"], default="n") == "y"
+    if trusted:
+        store.trust(workspace, fingerprint)
+        console.print("[green]Workspace hooks trusted (remembered for this workspace).[/green]")
+    else:
+        # The merged config is user matchers first, project matchers appended;
+        # swapping in the user-level parse strips exactly the project layer.
+        config.hooks = user_level_hooks()
+        console.print(
+            "[yellow]Workspace hooks disabled for this session "
+            "(user-level hooks unaffected).[/yellow]"
+        )
 
 
 async def _fire_session_start_hooks(
@@ -382,6 +540,30 @@ def _persist_history(
         session_state.writer.append(agent.history)
     except OSError as exc:
         console.print(f"[yellow]Failed to persist session transcript:[/yellow] {exc}")
+
+
+def _record_turn_usage(agent: Agent, session_id: str) -> None:
+    """Persist one completed turn's usage to ~/.nexuscli/usage.db.
+
+    Best-effort: any failure (missing attr on a stub client, disk error,
+    locked db) is swallowed — recording must never interrupt a turn.
+    UsageStore() is opened per turn and closed immediately (same per-call
+    construction convention as _task_command's manager).
+
+    Coverage boundary (minimal slice): only regular turns and custom-command
+    turns reach this call site — turns dispatched inside /init, /plan,
+    /workflow and /expert are not recorded.
+    """
+    try:
+        UsageStore().record_turn(
+            model=agent.llm_client.model_name,
+            provider=agent.llm_client.provider_name,
+            session_id=session_id,
+            usage=agent.last_usage,
+            cost=agent.last_cost,
+        )
+    except Exception:
+        return
 
 
 def _apply_resume(
@@ -620,20 +802,45 @@ async def _handle_slash(
     elif command == "/model":
         await _model_command(arg, console, cwd, config, agent, registry, renderer)
     elif command == "/usage":
-        payload = {
-            "usage": agent.last_usage.to_dict(),
-            "cost": agent.last_cost,
-            "pricing_note": "Built-in provider prices are dated defaults and may change.",
-        }
-        console.print_json(json.dumps(payload, ensure_ascii=False))
+        sub, _, rest = arg.partition(" ")
+        if sub == "stats":
+            _usage_stats_command(rest, console)
+        else:
+            payload = {
+                "usage": agent.last_usage.to_dict(),
+                "cost": agent.last_cost,
+                "pricing_note": "Built-in provider prices are dated defaults and may change.",
+            }
+            console.print_json(json.dumps(payload, ensure_ascii=False))
     elif command == "/skill":
-        _skill_command(arg, console, cwd)
+        _skill_command(arg, console, cwd, agent)
     elif command == "/mcp":
         console.print(
             "Use `nexuscli mcp serve --transport stdio|http --port 3000` to expose tools."
         )
     elif command == "/task":
         _task_command(arg, console, cwd)
+    elif command == "/workflow":
+        # Known priority boundary (no code change): custom commands match
+        # before built-in branches in start_repl, so a user-defined command
+        # named "workflow" shadows this built-in — same convention as /init
+        # ("A custom command named ``init`` keeps priority").
+        sub, _, rest = arg.partition(" ")
+        if sub != "run" or not rest:
+            console.print("[red]Usage:[/red] /workflow run <file>.json")
+            return False
+        try:
+            graph = load_workflow_file(Path(cwd) / rest)
+        except (OSError, WorkflowError) as exc:
+            message = str(exc).strip() or exc.__class__.__name__
+            console.print(f"[red]Workflow error:[/red] {message.splitlines()[0]}")
+            return False
+        await _run_workflow_graph(graph, console, cwd, config, agent)
+    elif command == "/expert":
+        if not arg:
+            console.print("[red]Usage:[/red] /expert <topic>")
+        else:
+            await _run_workflow_graph(build_expert_graph(arg), console, cwd, config, agent)
     elif command == "/snapshot":
         _snapshot_command(arg, console, cwd)
     elif command == "/restore":
@@ -642,6 +849,39 @@ async def _handle_slash(
         else:
             record = SnapshotService(cwd).restore(arg)
             console.print(f"Restored {record.id}")
+    elif command == "/fork":
+        # Fork reads the transcript file, so the current turn must be flushed
+        # first or the last exchange would be missing from the copy (a no-op
+        # on an empty history).
+        _persist_history(session_state, agent, console)
+        record = session_state.store.fork(session_state.writer.meta.id, title=arg or None)
+        if record is None:
+            console.print("[yellow]Nothing to fork yet — send a message first.[/yellow]")
+        else:
+            # The queued one-shot context (skill body / goal reminder) belongs
+            # to the old session's next turn; a new session starts clean.
+            agent.skill_context_buffer.clear()
+            session_state.writer = session_state.store.writer_for(record.meta, record.messages)
+            title = f" — {record.meta.title}" if record.meta.title else ""
+            console.print(
+                f"[green]Forked session[/green] {record.meta.forked_from} → "
+                f"{record.meta.id} ({record.meta.message_count} messages){title}"
+            )
+    elif command == "/goal":
+        sub, _, rest = arg.partition(" ")
+        store = GoalStore(session_state.writer.meta.id)
+        if sub == "set" and rest.strip():
+            goal = store.set(rest)
+            console.print(f"[green]Session goal set:[/green] {goal}")
+            console.print("[dim]It will be prepended to every turn of this session.[/dim]")
+        elif sub == "show":
+            console.print(store.show() or "(no session goal set)")
+        elif sub == "clear":
+            console.print("Cleared session goal." if store.clear() else "(no session goal set)")
+        else:
+            console.print("[red]Usage:[/red] /goal set <text> | /goal show | /goal clear")
+    elif command == "/effort":
+        _effort_command(arg, console, agent)
     else:
         console.print(f"[red]Unknown command:[/red] {command}")
     return False
@@ -824,7 +1064,7 @@ def _activate_model(
         current_provider=old_provider,
         current_api_key=old_api_key,
     )
-    client = create_llm_client(config.llm)
+    client = create_llm_client(config.llm, telemetry_enabled=config.telemetry.enabled)
     agent.llm_client = client
     agent.system_prompt = PromptAssembler(
         config=config,
@@ -862,9 +1102,84 @@ def _provider_api_key_env(provider: str) -> str:
     }.get(provider.lower(), "NEXUSCLI_API_KEY")
 
 
-def _skill_command(arg: str, console: Console, cwd: str) -> None:
+def _push_turn_context(agent: Agent, name: str, body: str) -> None:
+    """Shared per-turn prompt-injection seam (W1 /skill load, W6 /goal).
+
+    Both producers queue onto agent.skill_context_buffer; the buffer is
+    drained once per turn by agent._prepend_skill_context (agent.py:221)
+    into the user message. /skill load queues once (one-shot); the session
+    goal reminder re-queues at every turn start while a goal is set.
+    """
+    agent.skill_context_buffer.push(name, body)
+
+
+_GOAL_REMINDER_NAME = "session-goal"
+
+
+def _queue_goal_reminder(agent: Agent, session_id: str) -> None:
+    """Re-queue the session goal reminder for this turn (no goal → no-op).
+
+    Called from both main-loop turn branches right before the agent runs, so
+    the reminder survives the buffer's one-shot drain and reaches every turn
+    until /goal clear. Coverage boundary: turns dispatched inside /init,
+    /plan and other slash-dispatched agent runs bypass these call sites and
+    get no reminder — the same applicability /skill load has in plan mode.
+    """
+    goal = GoalStore(session_id).show()
+    if goal:
+        _push_turn_context(agent, _GOAL_REMINDER_NAME, f"[session goal] {goal}")
+
+
+_EFFORT_LEVELS = ("minimal", "low", "medium", "high")
+
+
+def _effort_command(arg: str, console: Console, agent: Agent) -> None:
+    """Session-level reasoning effort switch (live on the current client)."""
+    client = agent.llm_client
+    if not arg:
+        current = getattr(client, "reasoning_effort", None)
+        console.print(f"Reasoning effort: {current or 'not set (provider default)'}")
+        return
+    level = arg.strip().lower()
+    if level not in _EFFORT_LEVELS:
+        console.print("[red]Usage:[/red] /effort minimal|low|medium|high")
+        return
+    if not hasattr(client, "reasoning_effort"):
+        # AnthropicClient is a slots dataclass without the field
+        # (llm/anthropic.py:47-59): hasattr is the capability probe.
+        console.print(
+            f"[yellow]Provider {client.provider_name} does not support "
+            "reasoning effort; field not set.[/yellow]"
+        )
+        return
+    client.reasoning_effort = level
+    console.print(
+        f"[green]Reasoning effort set to {level}[/green] "
+        "(live for this client; a /model switch creates a fresh client and resets it)"
+    )
+
+
+def _skill_command(arg: str, console: Console, cwd: str, agent: Agent) -> None:
+    """Handle /skill subcommands; `load` one-shot injects a skill into the next prompt."""
     registry = SkillRegistry(cwd)
     sub, _, rest = arg.partition(" ")
+    # `/skill load <name>` rewrites the next prompt: the skill is pushed onto
+    # the agent's one-shot skill_context_buffer, which the next turn drains and
+    # prepends to the user message as `## Loaded Skill: <name>` (see
+    # agent._prepend_skill_context). Words after the skill name (ZCode's
+    # optional `[task]` suffix) are deliberately ignored — minimal slice.
+    if sub == "load" and rest:
+        name = rest.split()[0]
+        skill = SkillRegistry(cwd).load(name)
+        if not skill:
+            console.print(f'Skill "{name}" not found.')
+            return
+        _push_turn_context(agent, skill.name, skill.content)
+        console.print(
+            f'[green]Skill "{skill.name}" loaded; '
+            "it will be prepended to your next message.[/green]"
+        )
+        return
     if sub == "show" and rest:
         skill = registry.load(rest.strip())
         if not skill:
@@ -888,6 +1203,44 @@ def _skill_command(arg: str, console: Console, cwd: str) -> None:
         for item in rows
     ]
     console.print("\n".join(lines) or "(no skills)")
+
+
+def _usage_stats_command(rest: str, console: Console) -> None:
+    """Render `/usage stats [N days]`: trailing-N-day totals plus per-model split.
+
+    Any store failure (missing db, locked file, corrupt schema) is reported
+    and swallowed — the stats view must never kill the REPL. An empty table
+    renders as an all-zero summary, which is the desired first-run answer.
+    """
+    days = int(rest.strip()) if rest.strip().isdigit() and int(rest.strip()) >= 1 else 7
+    try:
+        stats = UsageStore().stats(days=days)
+    except Exception as exc:  # noqa: BLE001 - report and keep the REPL alive
+        console.print(f"[red]Usage stats unavailable:[/red] {exc}")
+        return
+    summary = Table(title=f"NexusCLI Usage — last {days} day(s)")
+    summary.add_column("Field")
+    summary.add_column("Value", justify="right")
+    summary.add_row("turns", str(stats["turns"]))
+    summary.add_row("total tokens", str(stats["total_tokens"]))
+    summary.add_row("total cost (USD)", f"{stats['total_cost']['usd']:.6f}")
+    summary.add_row("total cost (CNY)", f"{stats['total_cost']['cny']:.6f}")
+    console.print(summary)
+    per_model = Table(title="By model")
+    per_model.add_column("Model")
+    per_model.add_column("Turns", justify="right")
+    per_model.add_column("Tokens", justify="right")
+    per_model.add_column("USD", justify="right")
+    per_model.add_column("CNY", justify="right")
+    for row in stats["by_model"]:
+        per_model.add_row(
+            row["model"],
+            str(row["turns"]),
+            str(row["total_tokens"]),
+            f"{row['total_cost']['usd']:.6f}",
+            f"{row['total_cost']['cny']:.6f}",
+        )
+    console.print(per_model)
 
 
 def _task_command(arg: str, console: Console, cwd: str) -> None:
