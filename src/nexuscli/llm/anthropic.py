@@ -33,9 +33,16 @@ from typing import Any
 
 import httpx
 
-# Single source of truth for SSE frame parsing: the Anthropic stream is
-# standard "data:" framing, identical to the OpenAI-compatible one.
-from nexuscli.llm.openai_compatible import _iter_sse
+# Single sources shared with the OpenAI-compatible client: the SSE frame
+# parsing (the Anthropic stream is standard "data:" framing), and the
+# HTTP error text plus the status-raise-with-body read, so both chat
+# backends surface gateway error bodies identically and downstream code
+# (is_transient_api_error) classifies identical phrasing.
+from nexuscli.llm.openai_compatible import (
+    _http_error_message,
+    _iter_sse,
+    _raise_for_status_with_body,
+)
 from nexuscli.llm.pricing import CostBreakdown, ModelPriceProfile, calculate_cost
 from nexuscli.types import Message, Usage
 
@@ -115,7 +122,7 @@ class AnthropicClient:
                 httpx.AsyncClient(timeout=self.timeout, http2=False) as client,
                 client.stream("POST", url, headers=headers, json=payload) as response,
             ):
-                response.raise_for_status()
+                await _raise_for_status_with_body(response)
                 async for event in _iter_sse(response):
                     try:
                         chunk = json.loads(event)
@@ -132,12 +139,11 @@ class AnthropicClient:
                 ),
             }
         except httpx.HTTPStatusError as exc:
+            # Same text (with the gateway body detail) as the OpenAI-compatible
+            # client — the planner / orchestrator retry logic classifies both.
             yield {
                 "type": "error",
-                "error": RuntimeError(
-                    f"{self.provider_name} API returned HTTP {exc.response.status_code}. "
-                    "Check the API key, model access, account balance, and provider status."
-                ),
+                "error": RuntimeError(_http_error_message(self.provider_name, exc)),
             }
         except httpx.RequestError:
             yield {

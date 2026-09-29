@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from nexuscli.llm.base import is_transient_api_error
 from nexuscli.llm.pricing import CostBreakdown, ModelPriceProfile, calculate_cost
 from nexuscli.observability import get_trace_id
 from nexuscli.telemetry import chat_span
@@ -72,6 +74,21 @@ class OpenAICompatibleClient:
         *,
         system_prompt: str,
     ) -> AsyncIterator[dict[str, Any]]:
+        """Stream one chat completion as the fixed event sequence consumers
+        (agent.py / query.py) parse: ``message_start`` → ``thinking_delta`` /
+        ``text_delta`` / ``tool_call_delta`` → ``message_end`` → ``usage``.
+
+        Stream fallback (built-in behaviour, no config switch): when the
+        streaming request fails with a transient HTTP error (429 / gateway
+        5xx, matched by ``is_transient_api_error``) before any event has been
+        produced — the connect / first-byte phase, where local gateways
+        intermittently reject the streaming path — the turn is replayed once
+        as a non-streaming request (``stream: false``) parsed into exactly the
+        same event sequence (see ``_stream_with_fallback``). A failure after
+        deltas were already emitted is deliberately never replayed: the event
+        stream is polluted and a retry would duplicate what consumers already
+        saw, so the error surfaces as usual.
+        """
         if not self.api_key:
             yield {
                 "type": "error",
@@ -113,6 +130,8 @@ class OpenAICompatibleClient:
                 }
             )
 
+        # Emitted before the request so consumers always open with exactly one
+        # message_start — including connect-phase failures and fallback replays.
         yield {"type": "message_start", "model": self.model}
         pending_usage: dict[str, Any] | None = None
         # Debug-dump sidecar buffers: mirror the emitted deltas so the
@@ -126,32 +145,20 @@ class OpenAICompatibleClient:
         # unchanged, and chat_span no-ops unless telemetry is enabled.
         with chat_span(self.telemetry_enabled, provider=self.provider_name, model=self.model):
             try:
-                async with (
-                    httpx.AsyncClient(timeout=self.timeout, http2=False) as client,
-                    client.stream("POST", url, headers=headers, json=payload) as response,
-                ):
-                    response.raise_for_status()
-                    async for event in _iter_sse(response):
-                        if event == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(event)
-                        except json.JSONDecodeError:
-                            continue
-                        async for parsed in self._parse_chunk(chunk):
-                            # Streamed usage is a running total, not a delta, and some
-                            # gateways attach it to every chunk — keep only the last
-                            # one and emit it once so consumers don't multiply tokens.
-                            if parsed.get("type") == "usage":
-                                pending_usage = parsed
-                            else:
-                                # Debug-dump sidecar: mirror the delta into the
-                                # response buffers; the yielded event is untouched.
-                                if parsed.get("type") == "text_delta":
-                                    text_parts.append(str(parsed.get("text") or ""))
-                                elif parsed.get("type") == "tool_call_delta":
-                                    tool_calls.append(parsed.get("tool_call"))
-                                yield parsed
+                async for parsed in self._stream_with_fallback(url, headers, payload):
+                    # Streamed usage is a running total, not a delta, and some
+                    # gateways attach it to every chunk — keep only the last
+                    # one and emit it once so consumers don't multiply tokens.
+                    if parsed.get("type") == "usage":
+                        pending_usage = parsed
+                    else:
+                        # Debug-dump sidecar: mirror the delta into the
+                        # response buffers; the yielded event is untouched.
+                        if parsed.get("type") == "text_delta":
+                            text_parts.append(str(parsed.get("text") or ""))
+                        elif parsed.get("type") == "tool_call_delta":
+                            tool_calls.append(parsed.get("tool_call"))
+                        yield parsed
             except httpx.TimeoutException:
                 # Debug-dump sidecar: keep a summary for the response line
                 # written after the span block; the yielded error is unchanged.
@@ -167,10 +174,7 @@ class OpenAICompatibleClient:
                 dump_error = f"{self.provider_name} API returned HTTP {exc.response.status_code}"
                 yield {
                     "type": "error",
-                    "error": RuntimeError(
-                        f"{self.provider_name} API returned HTTP {exc.response.status_code}. "
-                        "Check the API key, model access, account balance, and provider status."
-                    ),
+                    "error": RuntimeError(_http_error_message(self.provider_name, exc)),
                 }
             except httpx.RequestError:
                 yield {
@@ -207,6 +211,85 @@ class OpenAICompatibleClient:
                     "usage": pending_usage.get("usage") if pending_usage is not None else None,
                 }
             _append_dump(record)
+
+    async def _stream_with_fallback(
+        self,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """One streaming attempt, plus at most one built-in non-stream replay.
+
+        A transient HTTP error (429 / gateway 5xx per ``is_transient_api_error``)
+        raised before any event was produced — the connect / first-byte phase —
+        is answered by ``_non_stream_events`` so gateways that intermittently
+        reject the streaming path don't take the whole turn down. A failure
+        after deltas were already yielded re-raises as-is: the event stream is
+        polluted and replaying it would duplicate what consumers saw. httpx
+        exceptions propagate to ``chat``'s error-event mapping unchanged.
+        """
+        produced_delta = False
+        try:
+            async with (
+                httpx.AsyncClient(timeout=self.timeout, http2=False) as client,
+                client.stream("POST", url, headers=headers, json=payload) as response,
+            ):
+                await _raise_for_status_with_body(response)
+                async for event in _iter_sse(response):
+                    if event == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(event)
+                    except json.JSONDecodeError:
+                        continue
+                    async for parsed in self._parse_chunk(chunk):
+                        # Usage-only events are buffered totals, not replayable
+                        # content — they don't count as stream progress.
+                        if parsed.get("type") != "usage":
+                            produced_delta = True
+                        yield parsed
+        except httpx.HTTPStatusError as exc:
+            if produced_delta or not is_transient_api_error(
+                _http_error_message(self.provider_name, exc)
+            ):
+                raise
+            async for parsed in self._non_stream_events(url, headers, payload):
+                yield parsed
+
+    async def _non_stream_events(
+        self,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Replay one failed streaming turn as a single non-streaming request.
+
+        The completion JSON is re-shaped into ``_parse_chunk`` input form (the
+        ``message`` fields masquerade as one ``delta``), so the existing
+        thinking / text / tool_calls / usage parsing is reused verbatim and
+        the yielded event sequence is identical to the streaming path's.
+        httpx exceptions propagate to ``chat``'s error-event mapping unchanged.
+        """
+        replay_payload = dict(payload)
+        replay_payload["stream"] = False
+        replay_payload.pop("stream_options", None)
+        async with httpx.AsyncClient(timeout=self.timeout, http2=False) as client:
+            response = await client.post(url, headers=headers, json=replay_payload)
+            await _raise_for_status_with_body(response)
+            completion = response.json()
+        choices = completion.get("choices") or []
+        first = choices[0] if choices else {}
+        chunk = {
+            "choices": [
+                {
+                    "delta": first.get("message") or {},
+                    "finish_reason": first.get("finish_reason"),
+                }
+            ],
+            "usage": completion.get("usage"),
+        }
+        async for parsed in self._parse_chunk(chunk):
+            yield parsed
 
     def _build_payload(
         self,
@@ -405,3 +488,87 @@ def _map_finish_reason(reason: str) -> str:
     if reason == "content_filter":
         return "stop_sequence"
     return "end_turn"
+
+
+def _http_error_message(provider_name: str, exc: httpx.HTTPStatusError) -> str:
+    """Error text for a non-2xx chat response.
+
+    Single source for both the transient-fallback classification in
+    ``_stream_with_fallback`` and the yielded error event in ``chat``:
+    downstream retry logic (planner / orchestrator) classifies the yielded
+    text via ``is_transient_api_error``, so the two must stay identical.
+
+    On top of the fixed prefix, appends a one-line summary of the response
+    body (see ``_response_body_summary``): the status code alone hides the
+    actual cause (2026-09-30 real-gateway smoke test: a wrong model name
+    surfaced as a bare 404 while the body carried "model_not_found: No
+    active credentials for provider: openai"). The summary is appended
+    AFTER the "API returned HTTP <code>" token, so ``is_transient_api_error``'s
+    substring match is untouched, and the 300-char cap sits far above the
+    prefix length, so truncation can never cut the token away either.
+    """
+    base = (
+        f"{provider_name} API returned HTTP {exc.response.status_code}. "
+        "Check the API key, model access, account balance, and provider status."
+    )
+    summary = _response_body_summary(exc.response)
+    if not summary:
+        return base
+    return _one_line(f"{base} Response body: {summary}")[:_HTTP_ERROR_MESSAGE_LIMIT]
+
+
+async def _raise_for_status_with_body(response: httpx.Response) -> None:
+    """``response.raise_for_status()``, but with the error body attached.
+
+    On a rejected status the SSE body has not been consumed yet, and the
+    enclosing ``async with`` closes the stream on the way out — so this reads
+    the body here, while the stream is still open, before re-raising. The
+    handlers outside can then feed ``response.text`` into
+    ``_http_error_message``. A failed body read is suppressed: the
+    status-code error must surface either way, just without the detail.
+    """
+    try:
+        response.raise_for_status()
+        return
+    except httpx.HTTPStatusError:
+        with contextlib.suppress(Exception):
+            await response.aread()
+        raise
+
+
+_HTTP_ERROR_MESSAGE_LIMIT = 300
+_RESPONSE_BODY_SUMMARY_LIMIT = 200
+
+
+def _response_body_summary(response: httpx.Response) -> str:
+    """Best-effort one-line summary of an error response body.
+
+    Prefers the gateway's structured ``error.code`` + ``error.message``
+    fields ("model_not_found: No active credentials ..."); anything else —
+    non-JSON bodies, JSON without that shape — degrades to the first 200
+    characters of the raw text. Every failure (unread or undecodable body)
+    yields "" so the summary can never mask the status error itself.
+    """
+    try:
+        raw = response.text
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    detail = ""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
+        error = parsed["error"]
+        parts = [str(part) for part in (error.get("code"), error.get("message")) if part]
+        detail = ": ".join(parts)
+    if not detail:
+        detail = raw.strip()
+    return _one_line(detail)[:_RESPONSE_BODY_SUMMARY_LIMIT]
+
+
+def _one_line(text: str) -> str:
+    """Replace line breaks (CRLF / CR / LF) with spaces, mirroring _iter_sse."""
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ")
