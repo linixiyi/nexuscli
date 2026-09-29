@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+
 from nexuscli.agent import PlanExecuteAgent
 from nexuscli.config import load_config
 from nexuscli.plan import ExecutionPlan, Planner, Task, TaskType
 from nexuscli.tools import ToolRegistry, get_builtin_tools
+from nexuscli.types import Message
 
 
 def test_execution_plan_exposes_dag_batches():
@@ -59,6 +62,58 @@ def test_planner_parses_tasks_and_dependencies():
     assert plan.summary == "demo plan"
     assert plan.get_task("task_2").dependencies == ["task_1"]
     assert plan.get_task("task_2").type == TaskType.VERIFICATION
+
+
+def test_planner_extracts_json_from_prose_with_tool_markers():
+    planner = Planner(FakeClient())
+
+    plan = planner.parse_plan(
+        "demo",
+        "我先查看当前目录，然后读取 README.md 的第一行。\n\n"
+        '<｜DSML｜｜ invoke name="bash">ls -la\n\n'
+        '{"summary":"s","tasks":[{"id":"a","description":"A","type":"COMMAND","dependencies":[]}]}',
+    )
+
+    assert plan.summary == "s"
+    assert plan.get_task("task_1").description == "A"
+
+
+def test_planner_repairs_prose_output_with_a_retry_round():
+    client = ProseThenJsonClient()
+    planner = Planner(client)
+
+    plan = asyncio.run(planner.create_plan(_MULTI_STEP_GOAL))
+
+    assert plan.summary == "repaired"
+    assert len(client.calls) == 2
+    repair_messages = client.calls[1]
+    assert repair_messages[1].role == "assistant"
+    assert "我先查看当前目录" in str(repair_messages[1].content)
+    assert repair_messages[2].role == "user"
+    assert "不是合法的执行计划 JSON" in str(repair_messages[2].content)
+
+
+def test_planner_retries_transient_api_errors():
+    client = TransientErrorThenJsonClient()
+    planner = Planner(client)
+
+    plan = asyncio.run(planner.create_plan("demo goal"))
+
+    assert plan.summary == "retried"
+    assert client.calls == 2
+
+
+def test_planner_reports_raw_output_after_persistent_prose():
+    client = AlwaysProseClient()
+    planner = Planner(client)
+
+    with pytest.raises(ValueError) as excinfo:
+        asyncio.run(planner.create_plan(_MULTI_STEP_GOAL))
+
+    message = str(excinfo.value)
+    assert "could not be parsed" in message
+    assert "我先查看当前目录" in message
+    assert client.calls == 2
 
 
 def test_plan_execute_runs_independent_tasks_in_parallel(tmp_path, monkeypatch):
@@ -122,6 +177,70 @@ class FakeClient:
 
     async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
         yield {"type": "text_delta", "text": "{}"}
+        yield {"type": "message_end", "stop_reason": "end_turn"}
+
+
+# Long enough and multi-step ("先…然后…") so _is_simple_goal never shortcuts
+# the planner LLM round-trip in the retry tests below.
+_MULTI_STEP_GOAL = "先读取 README.md 的第一行，然后用一句话总结这个项目是做什么的"
+
+_PROSE_REPLY = '我先查看当前目录，然后读取 README.md。\n\n<｜DSML｜｜ invoke name="bash">ls -la'
+
+
+class ProseThenJsonClient(FakeClient):
+    """First planner reply is prose; the repair round returns valid JSON."""
+
+    def __init__(self):
+        self.calls: list[list[Message]] = []
+
+    async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+        self.calls.append(list(messages))
+        if len(self.calls) == 1:
+            yield {"type": "text_delta", "text": _PROSE_REPLY}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+        yield {
+            "type": "text_delta",
+            "text": (
+                '{"summary":"repaired","tasks":'
+                '[{"id":"a","description":"读取 README","type":"FILE_READ","dependencies":[]}]}'
+            ),
+        }
+        yield {"type": "message_end", "stop_reason": "end_turn"}
+
+
+class TransientErrorThenJsonClient(FakeClient):
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+        self.calls += 1
+        if self.calls == 1:
+            yield {
+                "type": "error",
+                "error": RuntimeError(
+                    "openai-compatible API returned HTTP 503. "
+                    "Check the API key, model access, account balance, and provider status."
+                ),
+            }
+            return
+        yield {
+            "type": "text_delta",
+            "text": (
+                '{"summary":"retried","tasks":'
+                '[{"id":"a","description":"A","type":"ANALYSIS","dependencies":[]}]}'
+            ),
+        }
+        yield {"type": "message_end", "stop_reason": "end_turn"}
+
+
+class AlwaysProseClient(FakeClient):
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+        self.calls += 1
+        yield {"type": "text_delta", "text": "我先查看当前目录，然后读取 README.md 的第一行。"}
         yield {"type": "message_end", "stop_reason": "end_turn"}
 
 

@@ -38,6 +38,57 @@ def test_orchestrator_parses_steps_and_review_output(tmp_path, monkeypatch):
     )
 
 
+def test_orchestrator_retries_empty_planner_reply(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    client = EmptyPlannerThenRepairClient()
+    orchestrator = _orchestrator(tmp_path, client)
+
+    async def run():
+        text = ""
+        done = None
+        async for event in orchestrator.run("Do A and B"):
+            if event.get("type") == "error":
+                raise event["error"]
+            if event.get("type") == "text_delta":
+                text += str(event.get("text") or "")
+            elif event.get("type") == "done":
+                done = event
+        return text, done
+
+    text, done = asyncio.run(run())
+
+    assert client.planner_calls == 2
+    assert done is not None
+    assert "Task A result" in text
+    assert "Task B result" in text
+
+
+def test_orchestrator_repairs_prose_reviewer_reply(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    client = ProseReviewerClient()
+    orchestrator = _orchestrator(tmp_path, client)
+
+    async def run():
+        text = ""
+        done = None
+        async for event in orchestrator.run("Do A and B"):
+            if event.get("type") == "error":
+                raise event["error"]
+            if event.get("type") == "text_delta":
+                text += str(event.get("text") or "")
+            elif event.get("type") == "done":
+                done = event
+        return text, done
+
+    text, done = asyncio.run(run())
+
+    # Both steps get one prose reply plus one repaired JSON verdict.
+    assert client.reviewer_chats == 4
+    assert done is not None
+    assert "Task A result" in text
+    assert "Task B result" in text
+
+
 def test_orchestrator_runs_independent_workers_in_parallel(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     client = ParallelTeamClient()
@@ -167,6 +218,93 @@ class FakeTeamClient:
 
     async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
         yield {"type": "text_delta", "text": "{}"}
+        yield {"type": "message_end", "stop_reason": "end_turn"}
+
+
+class EmptyPlannerThenRepairClient:
+    """Planner reply is empty on the first call (thinking-only stream), valid JSON after repair."""
+
+    model_name = "fake-model"
+    provider_name = "fake-provider"
+    max_context_window = 1000
+
+    def __init__(self):
+        self.planner_calls = 0
+
+    async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+        body = _message_text(messages[-1].content)
+        if "Create an execution plan" in body:
+            self.planner_calls += 1
+            if self.planner_calls == 1:
+                yield {"type": "message_end", "stop_reason": "end_turn"}
+                return
+            yield {
+                "type": "text_delta",
+                "text": (
+                    '{"summary":"repaired","steps":['
+                    '{"id":"a","description":"Task A","type":"ANALYSIS","dependencies":[]},'
+                    '{"id":"b","description":"Task B","type":"COMMAND","dependencies":[]}'
+                    "]}"
+                ),
+            }
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+        if "Original task" in body:
+            yield {"type": "text_delta", "text": '{"approved": true, "issues": []}'}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+        if "Task A" in body:
+            yield {"type": "text_delta", "text": "Task A result"}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+        if "Task B" in body:
+            yield {"type": "text_delta", "text": "Task B result"}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+        yield {"type": "text_delta", "text": "fallback"}
+        yield {"type": "message_end", "stop_reason": "end_turn"}
+
+
+class ProseReviewerClient:
+    """Reviewer replies with prose first; the repair round returns the JSON verdict."""
+
+    model_name = "fake-model"
+    provider_name = "fake-provider"
+    max_context_window = 1000
+
+    def __init__(self):
+        self.reviewer_chats = 0
+
+    async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+        body = _message_text(messages[-1].content)
+        if "Create an execution plan" in body:
+            yield {
+                "type": "text_delta",
+                "text": (
+                    '{"summary":"plan","steps":['
+                    '{"id":"a","description":"Task A","type":"ANALYSIS","dependencies":[]},'
+                    '{"id":"b","description":"Task B","type":"COMMAND","dependencies":[]}'
+                    "]}"
+                ),
+            }
+        elif "not valid review JSON" in body:
+            self.reviewer_chats += 1
+            yield {
+                "type": "text_delta",
+                "text": '{"approved": true, "summary": "ok", "issues": []}',
+            }
+        elif "Original task" in body:
+            self.reviewer_chats += 1
+            yield {
+                "type": "text_delta",
+                "text": "I will verify this myself by listing the directories.",
+            }
+        elif "Task A" in body:
+            yield {"type": "text_delta", "text": "Task A result"}
+        elif "Task B" in body:
+            yield {"type": "text_delta", "text": "Task B result"}
+        else:
+            yield {"type": "text_delta", "text": "fallback"}
         yield {"type": "message_end", "stop_reason": "end_turn"}
 
 

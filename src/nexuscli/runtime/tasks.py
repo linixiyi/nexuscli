@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 TASK_MODES = {"react", "plan", "team"}
 TERMINAL_STATUSES = {"completed", "failed", "canceled"}
@@ -318,4 +319,6 @@ def _future(seconds: float) -> str:
 
 
 def _new_id(prefix: str) -> str:
-    return f"{prefix}_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+    # Windows clock granularity makes the timestamp alone non-unique for
+    # back-to-back adds, so append a random suffix (same as session ids).
+    return f"{prefix}_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}_{uuid4().hex[:6]}"

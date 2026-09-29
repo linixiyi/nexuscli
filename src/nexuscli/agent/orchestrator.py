@@ -11,7 +11,8 @@ from typing import Any
 
 from nexuscli.agent.query import query
 from nexuscli.config import NexusCliConfig
-from nexuscli.llm.base import LlmClient
+from nexuscli.llm.base import LlmClient, is_transient_api_error
+from nexuscli.plan.planner import extract_json_object
 from nexuscli.prompt import PromptAssembler
 from nexuscli.skill import SkillContextBuffer
 from nexuscli.snapshot import SnapshotService
@@ -103,6 +104,11 @@ class ExecutionStep:
 
 
 class SubAgent:
+    # Clean retries for transient provider failures (rate limit / gateway 5xx)
+    # in the worker and no-tools chat loops; a failed provider call must not
+    # fail the whole step or count as a review rejection.
+    transient_retries = 2
+
     def __init__(
         self,
         *,
@@ -158,37 +164,45 @@ class SubAgent:
         self.skill_context_buffer.clear()
 
     async def _execute_worker(self, content: str) -> AgentMessage:
-        text = ""
-        tool_results: list[str] = []
         usage = Usage()
         turns = 0
-        try:
-            async for event in query(
-                llm_client=self.llm_client,
-                tool_registry=self.tool_registry,
-                system_prompt=self._system_prompt(),
-                user_message=content,
-                history=self.history,
-                cwd=self.cwd,
-                config=self.config,
-                approval_callback=self.approval_callback,
-                skill_context_buffer=self.skill_context_buffer,
-                max_turns=8,
-            ):
-                if event.get("type") == "text_delta":
-                    text += str(event.get("text") or "")
-                elif event.get("type") == "tool_result":
-                    tool_results.append(str(event.get("result") or ""))
-                elif event.get("type") == "done":
-                    self.history = list(event.get("messages") or [])
-                    usage = usage + Usage.from_mapping(event.get("usage") or {})
-                    turns += int(event.get("total_turns") or 0)
-                elif event.get("type") == "error":
-                    raise event["error"]
-        except Exception as exc:  # noqa: BLE001
-            return AgentMessage.error(self.name, self.role, str(exc), usage, turns)
-        result = text.strip() or "\n".join(item for item in tool_results if item).strip()
-        return AgentMessage.result(self.name, self.role, result, usage, turns)
+        last_error: Exception | None = None
+        for attempt in range(self.transient_retries):
+            text = ""
+            tool_results: list[str] = []
+            try:
+                async for event in query(
+                    llm_client=self.llm_client,
+                    tool_registry=self.tool_registry,
+                    system_prompt=self._system_prompt(),
+                    user_message=content,
+                    history=self.history,
+                    cwd=self.cwd,
+                    config=self.config,
+                    approval_callback=self.approval_callback,
+                    skill_context_buffer=self.skill_context_buffer,
+                    max_turns=8,
+                ):
+                    if event.get("type") == "text_delta":
+                        text += str(event.get("text") or "")
+                    elif event.get("type") == "tool_result":
+                        tool_results.append(str(event.get("result") or ""))
+                    elif event.get("type") == "done":
+                        self.history = list(event.get("messages") or [])
+                        usage = usage + Usage.from_mapping(event.get("usage") or {})
+                        turns += int(event.get("total_turns") or 0)
+                    elif event.get("type") == "error":
+                        raise event["error"]
+            except RuntimeError as exc:
+                if attempt < self.transient_retries - 1 and is_transient_api_error(exc):
+                    last_error = exc
+                    continue
+                return AgentMessage.error(self.name, self.role, str(exc), usage, turns)
+            except Exception as exc:  # noqa: BLE001
+                return AgentMessage.error(self.name, self.role, str(exc), usage, turns)
+            result = text.strip() or "\n".join(item for item in tool_results if item).strip()
+            return AgentMessage.result(self.name, self.role, result, usage, turns)
+        return AgentMessage.error(self.name, self.role, str(last_error), usage, turns)
 
     async def _execute_plan(self, content: str, *, plan_depth: int) -> AgentMessage:
         if plan_depth >= self.max_plan_depth:
@@ -226,26 +240,41 @@ class SubAgent:
         ]
         return AgentMessage.result(self.name, self.role, text.strip(), usage, turns)
 
+    async def complete(self, content: str) -> AgentMessage:
+        """One no-tools completion with ``content`` as the user turn.
+
+        Equivalent to :meth:`execute` for orchestrator roles; kept as a
+        separate entry point so retry loops can re-chat the same agent
+        without going through the task-envelope path.
+        """
+        return await self._execute_without_tools(content)
+
     async def _execute_without_tools(self, content: str) -> AgentMessage:
-        text = ""
         usage = Usage()
         messages = [*self.history, Message(role="user", content=content)]
-        try:
-            async for event in self.llm_client.chat(
-                messages,
-                [],
-                system_prompt=self._system_prompt(),
-            ):
-                if event.get("type") == "text_delta":
-                    text += str(event.get("text") or "")
-                elif event.get("type") == "usage":
-                    usage = usage + Usage.from_mapping(event.get("usage") or {})
-                elif event.get("type") == "error":
-                    raise event["error"]
-        except Exception as exc:  # noqa: BLE001
-            return AgentMessage.error(self.name, self.role, str(exc), usage, 1)
-        self.history = [*messages, Message(role="assistant", content=text)]
-        return AgentMessage.result(self.name, self.role, text, usage, 1)
+        for attempt in range(self.transient_retries):
+            text = ""
+            try:
+                async for event in self.llm_client.chat(
+                    messages,
+                    [],
+                    system_prompt=self._system_prompt(),
+                ):
+                    if event.get("type") == "text_delta":
+                        text += str(event.get("text") or "")
+                    elif event.get("type") == "usage":
+                        usage = usage + Usage.from_mapping(event.get("usage") or {})
+                    elif event.get("type") == "error":
+                        raise event["error"]
+            except RuntimeError as exc:
+                if attempt < self.transient_retries - 1 and is_transient_api_error(exc):
+                    continue
+                return AgentMessage.error(self.name, self.role, str(exc), usage, 1)
+            except Exception as exc:  # noqa: BLE001
+                return AgentMessage.error(self.name, self.role, str(exc), usage, 1)
+            self.history = [*messages, Message(role="assistant", content=text)]
+            return AgentMessage.result(self.name, self.role, text, usage, 1)
+        return AgentMessage.error(self.name, self.role, "", usage, 1)
 
     def _system_prompt(self) -> str:
         base = PromptAssembler(
@@ -275,6 +304,9 @@ class SubAgent:
 
 class AgentOrchestrator:
     max_retries_per_step = 2
+    # One repair round after the first planner attempt (plus a clean retry on
+    # transient provider errors) before the whole run is failed.
+    planner_attempts = 2
 
     def __init__(
         self,
@@ -312,17 +344,7 @@ class AgentOrchestrator:
         self.total_turns = 0
         try:
             yield {"type": "text_delta", "text": "Phase 1: planner\n\n"}
-            plan_result = await self.planner.execute(
-                AgentMessage.task("orchestrator", f"Create an execution plan for:\n{message}")
-            )
-            self.total_usage = self.total_usage + plan_result.usage
-            self.total_turns += plan_result.turns
-            self.planner.clear_history()
-            if plan_result.type == AgentMessageType.ERROR:
-                raise RuntimeError(f"planner failed: {plan_result.content}")
-            steps = self.parse_plan(plan_result.content)
-            if not steps:
-                raise ValueError(f"planner output could not be parsed:\n{plan_result.content}")
+            steps = await self._plan_steps(message)
             yield {"type": "text_delta", "text": self.summarize_steps(steps) + "\n"}
             yield {"type": "text_delta", "text": "Phase 2: workers and reviewer\n\n"}
             async for event in self._execute_steps(
@@ -353,6 +375,41 @@ class AgentOrchestrator:
         if costs:
             done["cost"] = costs
         yield done
+
+    async def _plan_steps(self, message: str) -> list[ExecutionStep]:
+        """Run the planner subagent, retrying transient failures and bad output.
+
+        The planner subagent runs without tools, so its reply may come back
+        empty (thinking-only streams) or as prose instead of the JSON plan the
+        role prompt asks for. Each attempt gets a fresh conversation; a
+        non-JSON reply triggers one repair round that quotes the invalid
+        output. Failures surface with the planner's raw reply for debugging.
+        """
+        task = _planner_task(message)
+        last_content = ""
+        last_error: Exception | None = None
+        for attempt in range(self.planner_attempts):
+            plan_result = await self.planner.complete(task)
+            self.total_usage = self.total_usage + plan_result.usage
+            self.total_turns += plan_result.turns
+            self.planner.clear_history()
+            if plan_result.type == AgentMessageType.ERROR:
+                if attempt < self.planner_attempts - 1 and is_transient_api_error(
+                    plan_result.content
+                ):
+                    last_error = RuntimeError(plan_result.content)
+                    continue
+                raise RuntimeError(f"planner failed: {plan_result.content}")
+            last_content = plan_result.content
+            steps = self.parse_plan(last_content)
+            if steps:
+                return steps
+            last_error = ValueError("planner output is not a valid JSON plan")
+            task = _planner_repair_task(message, last_content)
+        raise ValueError(
+            f"planner output could not be parsed after {self.planner_attempts} attempts:\n"
+            f"{_preview(last_content) or '<empty>'}"
+        ) from last_error
 
     async def _execute_steps(
         self,
@@ -418,7 +475,7 @@ class AgentOrchestrator:
             return
 
         accepted_result = result.content
-        review = await reviewer.review(step.description, accepted_result)
+        review = await self._review_with_repair(reviewer, step.description, accepted_result)
         self.total_usage = self.total_usage + review.usage
         self.total_turns += review.turns
         reviewer.clear_history()
@@ -436,7 +493,9 @@ class AgentOrchestrator:
                 issues = retry_result.content or "empty retry result"
                 continue
             accepted_result = retry_result.content
-            retry_review = await reviewer.review(step.description, accepted_result)
+            retry_review = await self._review_with_repair(
+                reviewer, step.description, accepted_result
+            )
             self.total_usage = self.total_usage + retry_review.usage
             self.total_turns += retry_review.turns
             reviewer.clear_history()
@@ -451,6 +510,38 @@ class AgentOrchestrator:
             )
             return
         self._update_step(steps, step.id, step.with_result(accepted_result))
+
+    async def _review_with_repair(
+        self,
+        reviewer: SubAgent,
+        description: str,
+        result: str,
+    ) -> AgentMessage:
+        """Review a step result, with one repair round when the reply is not
+        valid review JSON.
+
+        Reviewer subagents run without tools, so some models answer with
+        prose (or pseudo tool-call markers) instead of the JSON verdict the
+        role prompt asks for; those replies would otherwise count as
+        rejections through the keyword fallback.
+        """
+        review = await reviewer.review(description, result)
+        if self._is_review_json(review.content):
+            return review
+        repair = await reviewer.complete(_review_repair_prompt(description, result, review.content))
+        self.total_usage = self.total_usage + repair.usage
+        self.total_turns += repair.turns
+        if self._is_review_json(repair.content):
+            return repair
+        return review
+
+    @staticmethod
+    def _is_review_json(content: str) -> bool:
+        try:
+            data = _parse_json_object(content)
+        except (json.JSONDecodeError, ValueError):
+            return False
+        return isinstance(data, dict) and "approved" in data
 
     def parse_plan(self, plan_json: str) -> list[ExecutionStep]:
         try:
@@ -616,7 +707,12 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     cleaned = re.sub(r"```(?:json)?\s*", "", text or "").replace("```", "").strip()
     if not cleaned:
         raise ValueError("empty JSON")
-    data = json.loads(cleaned)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        # Models sometimes wrap the JSON object in prose or pseudo tool-call
+        # markers; recover the first balanced object instead of failing.
+        data = extract_json_object(cleaned)
     if not isinstance(data, dict):
         raise ValueError("JSON root must be an object")
     return data
@@ -627,6 +723,34 @@ def _preview(text: str, max_len: int = 160) -> str:
     if len(value) <= max_len:
         return value
     return value[: max_len - 3] + "..."
+
+
+def _planner_task(message: str) -> str:
+    return f"Create an execution plan for:\n{message}"
+
+
+def _planner_repair_task(message: str, invalid_output: str) -> str:
+    return "\n\n".join(
+        (
+            _planner_task(message),
+            "Your previous reply could not be parsed as plan JSON:\n"
+            + (_preview(invalid_output) or "<empty>"),
+            "Reply with ONLY the JSON object: a steps array where each step "
+            "has id, description, type and dependencies.",
+        )
+    )
+
+
+def _review_repair_prompt(description: str, result: str, invalid_output: str) -> str:
+    return "\n\n".join(
+        (
+            f"Original task:\n{description}\n\nExecution result:\n{result}",
+            "Your previous reply was not valid review JSON:\n"
+            + (_preview(invalid_output) or "<empty>"),
+            'Reply with ONLY the JSON object: {"approved": true|false, "summary": "...", '
+            '"issues": []}. Judge the execution result as given; do not attempt tool calls.',
+        )
+    )
 
 
 def _normalize_worker_mode(mode: str) -> str:
