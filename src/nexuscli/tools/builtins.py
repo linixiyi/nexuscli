@@ -5,9 +5,9 @@ import os
 from typing import Any
 
 from nexuscli.memory import MemoryManager
-from nexuscli.policy import CommandGuard, sanitize_environment
+from nexuscli.policy import CommandGuard, FSScopeGuard, sanitize_environment
 from nexuscli.rag import CodeIndex, format_hit_stats
-from nexuscli.skill import SkillRegistry
+from nexuscli.skill import SkillRegistry, SkillStateStore
 from nexuscli.snapshot import SnapshotService
 from nexuscli.tools import file_ops as fops
 from nexuscli.tools.background import DEFAULT_TAIL_BYTES, background_registry
@@ -619,10 +619,64 @@ def _child_environment(context: ToolContext) -> dict[str, str]:
     return sanitize_environment()
 
 
+async def _reject_outside_write_scope(command: str, context: ToolContext) -> ToolResult | None:
+    """FSScopeGuard gate: ask before writing outside the workspace.
+
+    Runs right after CommandGuard. When :class:`FSScopeGuard` classifies the
+    command's write targets as outside the workspace (and the system temp
+    directory), the call is routed through the same HITL approval channel
+    the tool executor uses — ``context.approval_callback`` — with the same
+    request shape; no separate mechanism.
+
+    Fail closed where the existing flow fails closed: with
+    ``hitl_mode == "never"`` or without an approval callback no human can be
+    asked, mirroring the executor's handling of ask rules in never mode. An
+    ``approve_run`` answer is deliberately narrowed to a one-shot approve:
+    this prompt confirms one command's write scope, not the tool for the
+    rest of the run, so ``context.run_scope_approved`` is never touched.
+
+    Returns None when the command may proceed, an error ToolResult when it
+    was rejected.
+    """
+    guard = FSScopeGuard()
+    targets = guard.extract_write_targets(command, context.cwd)
+    if guard.classify(targets, context.cwd) != "outside":
+        return None
+    preview = ", ".join(targets[:5]) + ("..." if len(targets) > 5 else "")
+    reason = f"Static analysis found a write target outside the workspace: {preview}"
+    if context.config.policy.hitl_mode == "never" or context.approval_callback is None:
+        return ToolResult(
+            f"Command rejected. {reason}; no approval channel is available, "
+            "so the call fails closed.",
+            is_error=True,
+        )
+    decision = context.approval_callback(
+        {
+            "tool_name": "bash",
+            "input": {"command": command},
+            "danger_level": "high",
+            "description": reason,
+        }
+    )
+    if asyncio.iscoroutine(decision):
+        decision = await decision
+    if decision in ("deny", "skip"):
+        return ToolResult(
+            f"Command rejected by write-scope approval. {reason}",
+            is_error=True,
+        )
+    return None
+
+
 async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     command = str(payload["command"])
     if context.config.policy.command_guard_enabled:
         CommandGuard(context.config.policy.command_blacklist).validate(command)
+    # FS write-scope guard: statically detect writes outside the workspace and
+    # route them through the same HITL approval channel the executor uses.
+    blocked = await _reject_outside_write_scope(command, context)
+    if blocked is not None:
+        return blocked
     child_env = _child_environment(context)
     if bool(payload.get("run_in_background")):
         # Background mode: spawn and hand back the task id at once — the
@@ -823,6 +877,15 @@ async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResu
         )
     if context.skill_context_buffer:
         context.skill_context_buffer.push(skill.name, content)
+        # Usage accounting at the injection seam (mirrors /skill load in
+        # entrypoints/commands/skill.py). Production buffers are constructed
+        # without a usage_store (agent.py), so the buffer-level hook stays
+        # inert and this is the single recorder for the model-side load.
+        # Accounting must never block a load.
+        try:
+            SkillStateStore().record_use(skill.name)
+        except OSError:
+            pass
         return ToolResult(
             f'Loaded skill "{skill.name}" instructions for the next model turn.',
             display_summary=f"Loaded skill {skill.name}",

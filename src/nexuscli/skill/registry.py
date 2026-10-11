@@ -7,6 +7,7 @@ import unicodedata
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from nexuscli.plugins import load_plugins
@@ -67,8 +68,9 @@ class SkillMatcher:
 
 
 class SkillContextBuffer:
-    def __init__(self, limit: int = 3):
+    def __init__(self, limit: int = 3, usage_store: SkillStateStore | None = None):
         self.limit = limit
+        self.usage_store = usage_store
         self._items: OrderedDict[str, str] = OrderedDict()
 
     def push(self, name: str | None, body: str | None) -> None:
@@ -79,6 +81,24 @@ class SkillContextBuffer:
         self._items[name] = body
         while len(self._items) > self.limit:
             self._items.popitem(last=False)
+        self._record_use(name)
+
+    def _record_use(self, name: str) -> None:
+        """Count a real context injection; inert unless a store is attached.
+
+        Opt-in by design: the same buffer also carries the non-skill
+        session-goal reminder (context/goal.py), which must not be counted as
+        skill usage, and a default-on recorder would make every unrelated
+        push write the caller's real HOME. Wiring point for the model-invoked
+        load_skill path: pass ``usage_store=SkillStateStore()`` where the
+        buffer is constructed.
+        """
+        if self.usage_store is None:
+            return
+        try:
+            self.usage_store.record_use(name)
+        except OSError:
+            pass
 
     def drain(self) -> str:
         if not self._items:
@@ -102,6 +122,11 @@ class SkillStateStore:
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path or Path.home() / ".nexuscli" / "skills.json").expanduser()
 
+    @property
+    def usage_path(self) -> Path:
+        """Usage counters live next to the state file (usage.json)."""
+        return self.path.parent / "usage.json"
+
     def disabled(self) -> set[str]:
         if not self.path.exists():
             return set()
@@ -124,6 +149,38 @@ class SkillStateStore:
         values.discard(name)
         self._write(values)
 
+    def usage(self) -> dict[str, dict[str, object]]:
+        """Read ``{name: {used, last_used}}`` counters; empty dict when absent."""
+        if not self.usage_path.exists():
+            return {}
+        try:
+            data = json.loads(self.usage_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def record_use(self, name: str) -> None:
+        """Count one real injection of ``name``'s body into model context.
+
+        Accumulates ``used`` and refreshes ``last_used`` in ``usage.json``
+        (sibling of the state file). Atomic swap mirrors ``_write`` so a crash
+        mid-write cannot corrupt the counters.
+        """
+        data = self.usage()
+        entry = data.get(name)
+        if not isinstance(entry, dict):
+            entry = {}
+        entry["used"] = int(entry.get("used", 0) or 0) + 1
+        entry["last_used"] = _utc_timestamp()
+        data[name] = entry
+        self.usage_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.usage_path.with_name(self.usage_path.name + ".tmp")
+        tmp.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, self.usage_path)
+
     def _write(self, disabled: set[str]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + ".tmp")
@@ -134,6 +191,10 @@ class SkillStateStore:
         # Atomic swap: a crash mid-write must not corrupt the state file, which
         # would silently re-enable every disabled skill.
         os.replace(tmp, self.path)
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class SkillRegistry:
