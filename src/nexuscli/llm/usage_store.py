@@ -3,7 +3,14 @@
 One row per completed turn: token counts, model/provider identity and the costs
 computed by ``agent._calculate_costs`` (``{currency: CostBreakdown.to_dict()}``).
 ``/usage stats [N days]`` aggregates the table over a trailing N-day window
-(total tokens, total cost, per-model split).
+(total tokens, total cost, per-model split) and a per-``source`` split:
+``repl`` rows are the main REPL turns that have always been recorded, while
+``subagent`` rows come from delegated runs — ``task``-tool delegations
+(foreground and background) and ``/workflow`` / ``/expert`` step dispatches.
+The recorder sits inside ``subagent.run_subagent``'s done-event handler, so
+every delegated run that produced tokens lands one row regardless of who
+dispatched it; runs without usage metadata record nothing (a zero-token row
+is pure noise).
 
 Hard rules:
 - Every SQL value is passed through bound parameters (``?`` placeholders fed
@@ -34,6 +41,12 @@ from typing import Any
 from nexuscli.types import Usage
 
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Default provenance of a row: the main REPL turn path (repl._record_turn_usage
+# and any other caller that predates the source column). Subagent delegations
+# (task tool, /workflow and /expert steps) pass "subagent" explicitly from
+# subagent.run_subagent.
+_DEFAULT_SOURCE = "repl"
 
 
 def usage_db_path(home: Path | None = None) -> Path:
@@ -76,10 +89,22 @@ class UsageStore:
                     output_tokens integer not null default 0,
                     total_tokens integer not null default 0,
                     cost_usd real not null default 0,
-                    cost_cny real not null default 0
+                    cost_cny real not null default 0,
+                    source text not null default 'repl'
                 )
                 """
             )
+            # Migration for databases created before the source column existed:
+            # every pre-existing row is a main REPL turn, so the column default
+            # retroactively labels them "repl" (same pragma-check + alter-table
+            # style as memory/manager.py _ensure_schema).
+            columns = {
+                str(row["name"]) for row in conn.execute("pragma table_info(turn_usage)").fetchall()
+            }
+            if "source" not in columns:
+                conn.execute(
+                    "alter table turn_usage add column source text not null default 'repl'"
+                )
             conn.execute("create index if not exists idx_turn_usage_ts on turn_usage(ts)")
 
     def record_turn(
@@ -91,6 +116,7 @@ class UsageStore:
         usage: Usage,
         cost: dict[str, Any] | None = None,
         ts: str | None = None,
+        source: str = _DEFAULT_SOURCE,
     ) -> None:
         """Insert one completed turn.
 
@@ -98,9 +124,14 @@ class UsageStore:
         time, in ``_TS_FORMAT``). ``cost`` follows the shape returned by
         ``agent._calculate_costs``: ``{currency: CostBreakdown.to_dict()}``
         where each breakdown carries a float ``total_cost``; missing or empty
-        entries degrade to 0.0. All values go through bound parameters.
+        entries degrade to 0.0. ``source`` labels the turn's origin — the
+        default ``"repl"`` keeps the pre-column semantics (every row was a
+        main REPL turn); subagent delegations pass ``"subagent"``. An empty
+        string degrades to the default so callers can pass the config session
+        id verbatim. All values go through bound parameters.
         """
         row_ts = ts or datetime.now().strftime(_TS_FORMAT)
+        row_source = source or _DEFAULT_SOURCE
         costs = cost or {}
         usd = costs.get("usd") or {}
         cny = costs.get("cny") or {}
@@ -111,8 +142,8 @@ class UsageStore:
                 """
                 insert into turn_usage
                     (ts, session_id, model, provider, input_tokens, output_tokens,
-                     total_tokens, cost_usd, cost_cny)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     total_tokens, cost_usd, cost_cny, source)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row_ts,
@@ -124,14 +155,17 @@ class UsageStore:
                     usage.total_tokens,
                     cost_usd,
                     cost_cny,
+                    row_source,
                 ),
             )
 
     def stats(self, days: int = 7, *, now: datetime | None = None) -> dict[str, Any]:
         """Aggregate the trailing ``days``-day window; ``now`` is a test seam.
 
-        An empty (or fully out-of-window) table yields all zeros with an empty
-        ``by_model`` list — ``coalesce`` guarantees the zero defaults.
+        An empty (or fully out-of-window) table yields all zeros with empty
+        ``by_model`` and ``by_source`` lists — ``coalesce`` guarantees the zero
+        defaults. ``by_source`` splits the same window by row provenance
+        (``repl`` vs ``subagent``).
         """
         if days < 1:
             raise ValueError("days must be >= 1")
@@ -164,6 +198,20 @@ class UsageStore:
                 """,
                 (since,),
             ).fetchall()
+            by_source_rows = conn.execute(
+                """
+                select source,
+                       count(*) as turns,
+                       coalesce(sum(total_tokens), 0) as total_tokens,
+                       coalesce(sum(cost_usd), 0) as cost_usd,
+                       coalesce(sum(cost_cny), 0) as cost_cny
+                from turn_usage
+                where ts >= ?
+                group by source
+                order by sum(total_tokens) desc
+                """,
+                (since,),
+            ).fetchall()
         return {
             "days": days,
             "turns": int(total["turns"]),
@@ -182,5 +230,17 @@ class UsageStore:
                     },
                 }
                 for row in by_model_rows
+            ],
+            "by_source": [
+                {
+                    "source": str(row["source"]),
+                    "turns": int(row["turns"]),
+                    "total_tokens": int(row["total_tokens"]),
+                    "total_cost": {
+                        "usd": float(row["cost_usd"]),
+                        "cny": float(row["cost_cny"]),
+                    },
+                }
+                for row in by_source_rows
             ],
         }

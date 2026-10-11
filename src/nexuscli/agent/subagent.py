@@ -6,8 +6,9 @@ Built-in ``general-purpose`` and ``explore`` agents always exist; users can
 define more as markdown files with a simple ``key: value`` frontmatter in
 ``~/.nexuscli/agents/`` (user scope) or ``<cwd>/.nexuscli/agents/`` (project
 scope, which wins on name conflicts). The file body becomes the subagent's
-system prompt; ``model`` is parsed but ignored (reserved for future per-agent
-model routing).
+system prompt; ``model`` selects that agent's LLM (per-agent model routing:
+research agents can ride a small cheap model while implementation agents keep
+the main config's strong model).
 
 Recursion is bounded twice: :func:`run_subagent` refuses to start when the
 calling context has already reached the depth limit, and the ``task`` tool is
@@ -15,19 +16,26 @@ removed from every subagent registry (default deny, mirroring opencode). The
 turn loop is bounded too: every subagent runs with a fixed small
 ``SUBAGENT_MAX_TURNS`` (30) and does not scale up with the main agent's
 ``agent.max_turns`` configuration.
+
+Usage coverage: a subagent run that produced tokens persists its own usage to
+``~/.nexuscli/usage.db`` as a ``source=subagent`` row (best-effort, see
+:func:`_record_subagent_usage`) so ``/usage stats`` includes delegated work.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from nexuscli.agent.agent import Agent
 from nexuscli.agent.mailbox import get_mailbox_tools
+from nexuscli.llm.usage_store import UsageStore
 from nexuscli.plugins import load_plugins
 from nexuscli.tools.base import ToolContext
 from nexuscli.tools.builtins import get_builtin_tools
 from nexuscli.tools.registry import ToolRegistry
+from nexuscli.types import Usage
 
 # Subagents may not spawn further subagents; the task handler converts the
 # raised ValueError into an error tool result for the model.
@@ -75,6 +83,9 @@ class AgentDefinition:
     description: str
     prompt: str
     tools: list[str] | None = None  # None = every builtin tool is available
+    # Per-agent model routing (frontmatter ``model:``): None keeps the main
+    # config's model; a value swaps the subagent's LLM client to that model.
+    model: str | None = None
 
 
 BUILTIN_AGENTS: dict[str, AgentDefinition] = {
@@ -110,6 +121,7 @@ def _parse_agent_file(path: Path) -> AgentDefinition | None:
     name = ""
     description = ""
     tools: list[str] | None = None
+    model: str | None = None
     body = text
     if text.startswith("---"):
         segments = text.split("---", 2)
@@ -126,10 +138,12 @@ def _parse_agent_file(path: Path) -> AgentDefinition | None:
                 elif key == "tools":
                     tools = _split_tools(value) or None
                 elif key == "model":
-                    pass  # Reserved for per-agent model routing; parsed but ignored.
+                    model = value or None
     if not name or not description or not body.strip():
         return None
-    return AgentDefinition(name=name, description=description, prompt=body.strip(), tools=tools)
+    return AgentDefinition(
+        name=name, description=description, prompt=body.strip(), tools=tools, model=model
+    )
 
 
 def load_subagents(cwd: str, home: Path | None = None) -> dict[str, AgentDefinition]:
@@ -239,7 +253,25 @@ def build_subagent_system_prompt(agent_def: AgentDefinition, home: Path | None =
     return f"{agent_def.prompt}\n\n{section}"
 
 
-def build_subagent_registry(agent_def: AgentDefinition) -> ToolRegistry:
+def subagent_llm_config(base_llm: Any, agent_def: AgentDefinition) -> Any:
+    """Return the LlmConfig the subagent's client is built from.
+
+    With no per-agent ``model`` the main config's LLM section is reused
+    unchanged. With one, the model is swapped and the context window reset to
+    ``None``: the main config's window was sized for the main model, so keeping
+    it would mis-bound a different model's context — ``create_llm_client``
+    falls back to the known-model table (or its provider default) instead.
+    Typed loosely (``Any``) to avoid an import cycle with config for a pure
+    dataclass copy.
+    """
+    if not agent_def.model:
+        return base_llm
+    return replace(base_llm, model=agent_def.model, context_window=None)
+
+
+def build_subagent_registry(
+    agent_def: AgentDefinition, mailbox_name: str | None = None
+) -> ToolRegistry:
     """Build a subagent's registry from builtin tools only (MCP tools excluded).
 
     When the agent defines a tool whitelist, only those tools are registered.
@@ -248,7 +280,9 @@ def build_subagent_registry(agent_def: AgentDefinition) -> ToolRegistry:
     is never the only barrier (mirrors opencode's default subagent permissions).
     The mailbox primitives (``mailbox_post``/``mailbox_read``) are registered
     here only — the main agent's registry comes from ``get_builtin_tools()``
-    alone, so the main agent never sees them.
+    alone, so the main agent never sees them. ``mailbox_name`` rebinds them to
+    a name other than *agent_def*'s own (used by parallel workflow dispatch to
+    isolate concurrent same-type siblings); ``None`` keeps the default.
     """
     allowed = set(agent_def.tools) if agent_def.tools is not None else None
     registry = ToolRegistry()
@@ -263,20 +297,32 @@ def build_subagent_registry(agent_def: AgentDefinition) -> ToolRegistry:
         registry.register(tool)
     # Mailbox primitives are subagent-only: the main agent's registry is built
     # from get_builtin_tools() alone, so they never appear there. They honor
-    # the same whitelist as builtin tools.
-    for tool in get_mailbox_tools(agent_def.name):
+    # the same whitelist as builtin tools; the bound name defaults to the
+    # agent's own name and can be overridden by parallel dispatchers.
+    for tool in get_mailbox_tools(mailbox_name or agent_def.name):
         if allowed is not None and tool.name not in allowed:
             continue
         registry.register(tool)
     return registry
 
 
-async def run_subagent(agent_def: AgentDefinition, prompt: str, context: ToolContext) -> str:
+async def run_subagent(
+    agent_def: AgentDefinition,
+    prompt: str,
+    context: ToolContext,
+    mailbox_name: str | None = None,
+) -> str:
     """Run *agent_def* on *prompt* in an isolated session; return its final report.
 
     Raises :class:`ValueError` when the calling context is already at the
     subagent depth limit; the ``task`` tool handler turns that into an error
     tool result for the model.
+
+    ``mailbox_name`` overrides the agent name the mailbox tools are bound to
+    (default: *agent_def*'s own name). Parallel dispatchers pass a per-step
+    name so concurrent same-type siblings get distinct inbox files instead of
+    sharing — and racing on — one drain-only inbox (see
+    ``workflow_cmds._run_workflow_graph``).
     """
     if context.subagent_depth >= SUBAGENT_DEPTH_LIMIT:
         raise ValueError(
@@ -291,10 +337,10 @@ async def run_subagent(agent_def: AgentDefinition, prompt: str, context: ToolCon
 
     sub_agent = Agent(
         llm_client=create_llm_client(
-            context.config.llm,
+            subagent_llm_config(context.config.llm, agent_def),
             telemetry_enabled=context.config.telemetry.enabled,
         ),
-        tool_registry=build_subagent_registry(agent_def),
+        tool_registry=build_subagent_registry(agent_def, mailbox_name=mailbox_name),
         config=context.config,
         cwd=context.cwd,
         approval_callback=context.approval_callback,
@@ -312,4 +358,38 @@ async def run_subagent(agent_def: AgentDefinition, prompt: str, context: ToolCon
         elif event_type == "tool_call":
             # Only the text emitted after the last tool call is the report.
             buffer = ""
+        elif event_type == "done":
+            # The subagent's own usage lands in usage.db with source=subagent
+            # so /usage stats covers delegated turns too. Best-effort: a store
+            # failure must never break the delegation or its report. Runs that
+            # produced no usage at all (e.g. scripted stub clients) are skipped
+            # — a zero-token row is pure noise.
+            _record_subagent_usage(event, sub_agent, context)
     return buffer.strip() or _EMPTY_REPORT
+
+
+def _record_subagent_usage(
+    done_event: dict[str, Any], sub_agent: Agent, context: ToolContext
+) -> None:
+    """Persist one subagent run's usage as a ``source=subagent`` turn row.
+
+    Best-effort in the same sense as ``repl._record_turn_usage``: any failure
+    (stub client without usage metadata, missing/wlocked db) is swallowed and
+    the delegation continues. Model/provider identity comes from the
+    subagent's own client; usage and cost come straight from the ``done``
+    event the agent emitted (its run-level totals).
+    """
+    usage = Usage.from_mapping(done_event.get("usage") or {})
+    if usage.total_tokens <= 0:
+        return
+    try:
+        UsageStore().record_turn(
+            model=sub_agent.llm_client.model_name,
+            provider=sub_agent.llm_client.provider_name,
+            session_id=context.config.policy.session_id or "",
+            usage=usage,
+            cost=done_event.get("cost"),
+            source="subagent",
+        )
+    except Exception:  # noqa: BLE001 - best-effort; recording never breaks a run
+        return

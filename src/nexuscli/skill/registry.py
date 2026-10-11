@@ -22,6 +22,11 @@ class Skill:
     version: str = ""
     tags: list[str] = field(default_factory=list)
     enabled: bool = True
+    # Agent Skills spec frontmatter (allowed-tools / disable-model-invocation).
+    # Both default to "absent": the spec fields are optional and a skill
+    # without them behaves exactly like a native one.
+    allowed_tools: list[str] = field(default_factory=list)
+    disable_model_invocation: bool = False
 
     @property
     def body(self) -> str:
@@ -141,12 +146,20 @@ class SkillRegistry:
         builtin_root: str | Path | None = None,
         user_root: str | Path | None = None,
         state_store: SkillStateStore | None = None,
+        user_agents_root: str | Path | None = None,
     ):
         self.project_root = Path(project_root).resolve()
         package_root = Path(__file__).resolve().parents[1]
         self.builtin_root = Path(builtin_root or package_root / "builtin_skills")
         self.user_root = Path(user_root or Path.home() / ".nexuscli" / "skills")
+        # Agent Skills spec standard locations (pi / Claude Code compat):
+        # ~/.agents/skills and <project>/.agents/skills are scanned in
+        # addition to the native directories so ecosystem skill packs load
+        # unchanged. Within each scope the native directory is scanned last,
+        # so a native skill wins a name conflict with a standard-dir skill.
+        self.user_agents_root = Path(user_agents_root or Path.home() / ".agents" / "skills")
         self.project_skill_root = self.project_root / ".nexuscli" / "skills"
+        self.project_agents_skill_root = self.project_root / ".agents" / "skills"
         self.state_store = state_store or SkillStateStore()
         self._skills: dict[str, Skill] | None = None
 
@@ -186,7 +199,12 @@ class SkillRegistry:
         return True
 
     def match(self, query: str, *, top_k: int = 5) -> list[Skill]:
-        return SkillMatcher(self.enabled_skills()).match(query, top_k=top_k)
+        # disable-model-invocation skills are still loadable via load_skill /
+        # /skill — they are just excluded from the automatic candidate list.
+        candidates = [
+            skill for skill in self.enabled_skills() if not skill.disable_model_invocation
+        ]
+        return SkillMatcher(candidates).match(query, top_k=top_k)
 
     def create(
         self,
@@ -282,7 +300,9 @@ class SkillRegistry:
         skills: dict[str, Skill] = {}
         for source, root in [
             ("builtin", self.builtin_root),
+            ("user", self.user_agents_root),
             ("user", self.user_root),
+            ("project", self.project_agents_skill_root),
             ("project", self.project_skill_root),
         ]:
             if not root.exists():
@@ -316,6 +336,15 @@ class SkillRegistry:
         name = metadata.get("name") or path.parent.name
         description = metadata.get("description") or ""
         tags = _parse_tags(metadata.get("tags", ""))
+        # Agent Skills spec fields, with underscore spellings accepted too.
+        allowed_tools = _parse_allowed_tools(
+            metadata.get("allowed-tools") or metadata.get("allowed_tools") or ""
+        )
+        disable_model_invocation = _parse_bool_flag(
+            metadata.get("disable-model-invocation")
+            or metadata.get("disable_model_invocation")
+            or ""
+        )
         return Skill(
             name=name,
             description=description,
@@ -325,6 +354,8 @@ class SkillRegistry:
             path=path,
             content=content,
             enabled=name not in disabled,
+            allowed_tools=allowed_tools,
+            disable_model_invocation=disable_model_invocation,
         )
 
 
@@ -371,6 +402,20 @@ def _parse_tags(raw: str) -> list[str]:
     if value.startswith("[") and value.endswith("]"):
         value = value[1:-1]
     return [item.strip().strip('"').strip("'") for item in value.split(",") if item.strip()]
+
+
+def _parse_allowed_tools(raw: str) -> list[str]:
+    """Parse the Agent Skills ``allowed-tools`` frontmatter field.
+
+    The spec spells it as a comma-separated string ("Bash(git:*), Read");
+    an inline list ("[a, b]") is accepted as well since _parse_tags's
+    bracket handling already covers that shape.
+    """
+    return _parse_tags(raw)
+
+
+def _parse_bool_flag(raw: str) -> bool:
+    return raw.strip().lower() in {"true", "1", "yes"}
 
 
 _SKILL_SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")

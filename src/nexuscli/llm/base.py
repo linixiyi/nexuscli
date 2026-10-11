@@ -19,6 +19,32 @@ def is_transient_api_error(error: BaseException | str) -> bool:
     return any(status in text for status in _TRANSIENT_HTTP_STATUSES)
 
 
+# Provider-side context overflow: the request itself exceeded the model's
+# context window (or the request-size cap). Matched against the error text the
+# same way is_transient_api_error matches HTTP statuses — both chat backends
+# yield "API returned HTTP <code>. ... Response body: <provider detail>" and
+# the provider detail carries the overflow phrasing (OpenAI "maximum context
+# length" / code context_length_exceeded, Anthropic "prompt is too long").
+# Markers are lowercase; the classifier lowercases the text first.
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context_length_exceeded",
+    "maximum context length",
+    "context window is full",
+    "prompt is too long",
+    "too many input tokens",
+    "input tokens exceed",
+    "reduce the length of the messages",
+    "request too large",
+)
+
+
+def is_context_overflow_error(error: BaseException | str) -> bool:
+    """True when the error reports the request exceeded the model's context window."""
+    text = error if isinstance(error, str) else str(error)
+    lowered = text.lower()
+    return any(marker in lowered for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
 class LlmClient(Protocol):
     model_name: str
     provider_name: str

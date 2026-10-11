@@ -171,7 +171,13 @@ def _build_read_tool(agent_name: str) -> Tool:
         parameters=object_schema({}, []),
         handler=_read,
         is_read_only=False,  # drain truncates the inbox file
-        is_concurrency_safe=True,
+        # Drain is a read-then-truncate, not an atomic consume: two concurrent
+        # readers bound to the SAME agent name would race (both read, both
+        # truncate, sibling messages lost). Parallel workflow dispatch avoids
+        # this by giving every step its own mailbox name
+        # (workflow_cmds._step_mailbox_name), so distinct readers never share
+        # a file; the flag stays False because the tool writes, period.
+        is_concurrency_safe=False,
         danger_level="safe",
         requires_approval=False,
     )

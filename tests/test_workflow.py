@@ -246,7 +246,7 @@ def test_handle_slash_workflow_run_dispatches_in_topological_order(tmp_path, mon
     calls: list[str] = []
     reports = ["报告一", "报告二", "报告三"]
 
-    async def fake_run_subagent(agent_def, prompt, context):
+    async def fake_run_subagent(agent_def, prompt, context, mailbox_name=None):
         calls.append(prompt)
         return reports[len(calls) - 1]
 
@@ -277,7 +277,7 @@ def test_handle_slash_workflow_run_dispatches_in_topological_order(tmp_path, mon
 def test_handle_slash_workflow_usage_and_error_paths(tmp_path, monkeypatch):
     calls: list[str] = []
 
-    async def fake_run_subagent(agent_def, prompt, context):
+    async def fake_run_subagent(agent_def, prompt, context, mailbox_name=None):
         calls.append(prompt)
         return "不应被调用"
 
@@ -307,7 +307,7 @@ def test_handle_slash_workflow_aborts_remaining_on_failure(tmp_path, monkeypatch
     )
     calls: list[str] = []
 
-    async def fake_run_subagent(agent_def, prompt, context):
+    async def fake_run_subagent(agent_def, prompt, context, mailbox_name=None):
         calls.append(prompt)
         if len(calls) == 2:
             raise RuntimeError("boom")
@@ -328,7 +328,7 @@ def test_handle_slash_expert_dispatches_and_collects(tmp_path, monkeypatch):
     calls: list[str] = []
     reports = ["调研要点清单", "核心工作完成", "最终综合报告"]
 
-    async def fake_run_subagent(agent_def, prompt, context):
+    async def fake_run_subagent(agent_def, prompt, context, mailbox_name=None):
         calls.append(prompt)
         return reports[len(calls) - 1]
 

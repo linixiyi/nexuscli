@@ -11,15 +11,15 @@ is the same "all dependencies completed" predicate as ``Task.is_executable``
 post-order as ``ExecutionPlan.compute_execution_order`` (models.py:108-132) —
 tests/test_workflow.py pins the two side by side.
 
-Minimal-slice trade-off (spec C8): serial dispatch only. There is NO parallel
-executor in this slice — ``ready_steps`` is the semantic anchor a future
-concurrent frontier would build on, while the current scheduler (repl
-``_run_workflow_graph``) walks ``topological_order`` one step at a time. Also
-not ported from ZCode (core/src/workflow/): artifact persistence and snapshot
-storage, the concurrent scheduler frontier (``maxConcurrentLoops``), critic
-iteration loops, clarify rounds, resume/pause semantics, and strategy
-configuration — this engine is an in-memory graph with console-side report
-collection.
+Minimal-slice trade-off (spec C8, revised when the parallel scheduler landed):
+this module stays a pure schema engine with no execution of its own —
+``ready_steps`` is exactly the predicate the parallel scheduler
+(``workflow_cmds._run_workflow_graph``) builds dependency batches on, and it
+now dispatches each batch concurrently up to ``workflow.max_parallel_steps``.
+Not ported from ZCode (core/src/workflow/): artifact persistence and snapshot
+storage, critic iteration loops, clarify rounds, resume/pause semantics, and
+strategy configuration — this engine is an in-memory graph with console-side
+report collection.
 """
 
 from __future__ import annotations
