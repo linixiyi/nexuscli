@@ -11,3 +11,6 @@ build/
 .nexuscli/
 .mimosa/
 /.playwright-cli
+
+# ZCode workspace state (workflow drafts, smoke logs)
+.zcode/

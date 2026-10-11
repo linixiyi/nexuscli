@@ -62,3 +62,5 @@ REPL 每完成一个回合，把一行用量写入 SQLite `~/.nexuscli/usage.db`
 - 落库值取主代理自身的 `last_usage`——子代理（前台 `task` 或后台 `task`）是独立的 Agent 实例，其消耗**不会**合并进主回合的落库行，也没有自己的行
 
 因此 `/usage stats` 的统计值反映的是 REPL 直连对话中主代理的用量，不是含子代理的全局账单。
+
+**与转录 usage 记录是两条独立通道**：除 usage.db 外，每个完成的普通回合还会把一条 `type: usage` 记录行追加进当前会话 JSONL 转录（字段：ts/model/provider/input/output/total/cache_hit/cache_miss/cost_usd/cost_cny；实现：`session/store.py` 的 `SessionWriter.append_usage`）。转录记录是会话内口径：`/resume`、`-c` / `--resume` 恢复时求和为历史基线，`/usage` 与单次 `--json` 的 `session_usage` 读的就是它（历史累计 = 基线 + 本进程累计，两者之和等于该转录的台账）；`/clear` / `/resume` / `/fork` 切换转录时基线与本进程累计同步重置。usage.db 不受转录切换影响，继续按天/按模型聚合全局历史。两条通道覆盖面一致（都只记 REPL 普通回合与自定义命令回合），单次 `-p` 模式两条都不写。

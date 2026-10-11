@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -51,13 +51,15 @@ from nexuscli.entrypoints.commands.permission import _hitl_command, _permission_
 from nexuscli.entrypoints.commands.run import _run_agent, _run_events
 from nexuscli.entrypoints.commands.session_cmds import (
     _apply_resume,
+    _history_command,
     _persist_history,
     _print_session_list,
+    _record_session_usage,
 )
 from nexuscli.entrypoints.commands.skill import _skill_command
 from nexuscli.entrypoints.commands.snapshot_cmds import _snapshot_command
 from nexuscli.entrypoints.commands.task_cmds import _parse_mode_argument, _task_command
-from nexuscli.entrypoints.commands.usage import _usage_stats_command
+from nexuscli.entrypoints.commands.usage import _session_usage_payload, _usage_stats_command
 from nexuscli.entrypoints.commands.workflow_cmds import _run_workflow_graph
 from nexuscli.entrypoints.slash_commands import (
     CustomCommand,
@@ -72,7 +74,7 @@ from nexuscli.policy import AuditLog
 from nexuscli.prompt import PromptAssembler
 from nexuscli.rag import CodeIndex
 from nexuscli.render import RichRenderer
-from nexuscli.session import SessionStore, SessionWriter
+from nexuscli.session import SessionStore, SessionUsageTotals, SessionWriter
 from nexuscli.skill import SkillRegistry
 from nexuscli.snapshot import SnapshotService
 from nexuscli.tools import ToolRegistry
@@ -83,6 +85,7 @@ SLASH_COMMANDS = [
     "/exit",
     "/clear",
     "/resume",
+    "/history",
     "/context",
     "/compact",
     "/memory",
@@ -151,10 +154,18 @@ class PermissionModeController:
 
 @dataclass
 class ReplSessionState:
-    """Live session transcript state: the store plus the current writer."""
+    """Live session transcript state: the store plus the current writer.
+
+    ``usage_baseline`` is the historical usage summed from the resumed
+    transcript's per-turn ``usage`` record lines (zeros for a fresh session);
+    ``process_usage`` accumulates the turns recorded in this process. The
+    two add up to the transcript's historical ledger shown by ``/usage``.
+    """
 
     store: SessionStore
     writer: SessionWriter
+    usage_baseline: SessionUsageTotals = field(default_factory=SessionUsageTotals)
+    process_usage: SessionUsageTotals = field(default_factory=SessionUsageTotals)
 
 
 async def start_repl(
@@ -293,6 +304,7 @@ async def start_repl(
                     )
                     _persist_history(session_state, agent, console)
                     _record_turn_usage(agent, session_state.writer.meta.id)
+                    _record_session_usage(session_state, agent)
                     # Known boundary of this slice: only custom-command and
                     # regular turns announce; slash-command exits and
                     # plan-mode internal turns do not.
@@ -317,6 +329,7 @@ async def start_repl(
             await _run_agent(agent, renderer, message)
             _persist_history(session_state, agent, console)
             _record_turn_usage(agent, session_state.writer.meta.id)
+            _record_session_usage(session_state, agent)
             # Known boundary of this slice: only custom-command and regular
             # turns announce; slash-command exits and plan-mode internal
             # turns do not.
@@ -356,6 +369,10 @@ async def _handle_slash(
             model=agent.llm_client.model_name,
             provider=agent.llm_client.provider_name,
         )
+        # A cleared session starts a new transcript: no historical baseline,
+        # and the new transcript's ledger is not the old one's turns.
+        session_state.usage_baseline = SessionUsageTotals()
+        session_state.process_usage = SessionUsageTotals()
         console.clear()
     elif command == "/resume":
         if not arg:
@@ -367,11 +384,19 @@ async def _handle_slash(
             else:
                 agent.history = list(record.messages)
                 session_state.writer = session_state.store.writer_for(record.meta, record.messages)
+                # Same baseline as the -c/--resume path: historical usage
+                # comes from the transcript's usage record lines. The process
+                # accumulator must reset too — it belongs to the previous
+                # transcript, not this one.
+                session_state.usage_baseline = session_state.store.load_usage(record.meta.id)
+                session_state.process_usage = SessionUsageTotals()
                 title = f" — {record.meta.title}" if record.meta.title else ""
                 console.print(
                     f"[green]Resumed session[/green] {record.meta.id} "
                     f"({len(record.messages)} messages){title}"
                 )
+    elif command == "/history":
+        _history_command(arg, console, session_state.store, cwd)
     elif command == "/context":
         memories = MemoryManager(config.memory.long_term_db_path, scope=cwd).list(limit=5)
         table = Table(title="NexusCLI Context")
@@ -497,6 +522,7 @@ async def _handle_slash(
             payload = {
                 "usage": agent.last_usage.to_dict(),
                 "cost": agent.last_cost,
+                "session_usage": _session_usage_payload(session_state),
                 "pricing_note": "Built-in provider prices are dated defaults and may change.",
             }
             console.print_json(json.dumps(payload, ensure_ascii=False))
@@ -550,6 +576,11 @@ async def _handle_slash(
             # to the old session's next turn; a new session starts clean.
             agent.skill_context_buffer.clear()
             session_state.writer = session_state.store.writer_for(record.meta, record.messages)
+            # A fork's transcript holds messages only (no copied usage record
+            # lines), so its historical usage baseline starts empty — and the
+            # new ledger must not inherit the old transcript's turns.
+            session_state.usage_baseline = SessionUsageTotals()
+            session_state.process_usage = SessionUsageTotals()
             title = f" — {record.meta.title}" if record.meta.title else ""
             console.print(
                 f"[green]Forked session[/green] {record.meta.forked_from} → "

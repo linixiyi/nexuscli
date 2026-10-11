@@ -82,6 +82,12 @@ class ToolExecutor:
         names ``readonly-rule`` as approver when the static judgment bypassed
         the prompt (no human was involved) and ``hitl`` only when a person
         actually decided.
+
+        A per-run approval ("approve_run" returned by the approval callback,
+        the prompt's "r" option) stores the tool name in
+        ``context.run_scope_approved``; later calls to the same tool skip the
+        prompt and are audited as ``run-scope``. Ask rules and hook ask hints
+        keep forcing the prompt even for a run-approved tool.
         """
         tool_call_id = str(call.get("id") or "")
         # One trace id per call: every audit record below (deny/hitl/
@@ -208,6 +214,10 @@ class ToolExecutor:
             readonly_passthrough = _readonly_passthrough(
                 command_readonly, force_prompt, permission, context.config.policy.hitl_mode
             )
+            # Computed before the decision: on the first "r" press the grant
+            # is not in the set yet (the human decided), while on later calls
+            # the run-scope grant is what bypassed the prompt.
+            run_scope_bypass = _run_scope_bypass(tool.name, context, permission, force_prompt)
             decision = await self._approval_decision(
                 tool,
                 data,
@@ -216,6 +226,8 @@ class ToolExecutor:
                 force_prompt=force_prompt,
                 readonly_command=command_readonly,
             )
+            if decision == "approve_run":
+                context.run_scope_approved.add(tool.name)
             if decision in {"deny", "skip"}:
                 approver = "hitl"
                 audit.record(
@@ -237,6 +249,11 @@ class ToolExecutor:
                 and context.config.policy.hitl_mode != "always"
             ):
                 approver = "permission-rule"
+            elif run_scope_bypass and decision == "approve":
+                # The run-scope grant bypassed the prompt: the earlier "r"
+                # decision authorized this tool for the whole run, so this
+                # call must not be attributed to a fresh human approval.
+                approver = "run-scope"
             elif readonly_passthrough:
                 # The static read-only judgment bypassed the prompt: no human
                 # approved, so the audit must not attribute the call to "hitl".
@@ -351,6 +368,13 @@ class ToolExecutor:
                 return "approve"
         if not context.approval_callback:
             return "deny"
+        # Run-scope approval: the user granted this tool for the rest of the
+        # run earlier, so the prompt is skipped — but only where the run scope
+        # owns the decision. An ask rule or an "ask" hook hint keeps its right
+        # of way and the prompt still shows (same guard as the readonly
+        # passthrough above).
+        if _run_scope_bypass(tool.name, context, permission, force_prompt):
+            return "approve"
         result = context.approval_callback(
             {
                 "tool_name": tool.name,
@@ -379,6 +403,27 @@ def _readonly_passthrough(
     """
     action = permission.action if permission is not None else None
     return readonly_command and not force_prompt and action != "ask" and mode != "always"
+
+
+def _run_scope_bypass(
+    tool_name: str,
+    context: ToolContext,
+    permission: PermissionDecision | None,
+    force_prompt: bool,
+) -> bool:
+    """True when a per-run grant (the prompt's "r") skips the approval prompt.
+
+    Mirror of :func:`_readonly_passthrough` for the run-scoped grant: the
+    bypass only applies where the approval prompt itself would have been the
+    deciding gate — an ask permission rule or an "ask" hook hint keeps its
+    right of way and the prompt still shows, so the run grant never overrides
+    an explicit interceptor. It is consumed by the approval decision (prompt
+    bypassed) and by the audit attribution: under this exact condition no
+    human approved *this* call, so the record names ``run-scope`` instead of
+    ``hitl``.
+    """
+    action = permission.action if permission is not None else None
+    return tool_name in context.run_scope_approved and not force_prompt and action != "ask"
 
 
 def _display_danger_level(tool: Tool, payload: dict[str, Any]) -> str:

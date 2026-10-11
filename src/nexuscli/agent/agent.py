@@ -19,6 +19,12 @@ from contextlib import suppress
 from typing import Any, Literal
 from uuid import uuid4
 
+from nexuscli.agent.loop_guard import (
+    LOOP_ABORT_MESSAGE,
+    LoopGuard,
+    loop_abort_warning,
+    tool_call_fingerprint,
+)
 from nexuscli.agent.orchestrator import AgentOrchestrator
 from nexuscli.agent.plan_execute import PlanExecuteAgent
 from nexuscli.config import NexusCliConfig
@@ -29,7 +35,7 @@ from nexuscli.llm.base import LlmClient
 from nexuscli.prompt import PromptAssembler
 from nexuscli.skill import SkillContextBuffer, SkillRegistry
 from nexuscli.snapshot import SnapshotService
-from nexuscli.tools.base import ToolContext
+from nexuscli.tools.base import ToolContext, ToolResult
 from nexuscli.tools.executor import ToolExecutor
 from nexuscli.tools.registry import ToolRegistry
 from nexuscli.types import Message, Usage
@@ -144,7 +150,9 @@ class Agent:
         ``warning``
             {"type": "warning", "message": "..."} — emitted (once, before
             ``done``) when the react loop hit ``max_turns`` while the model
-            still wanted to keep the tool loop running.
+            still wanted to keep the tool loop running, or when the
+            loop-detection guard terminated the turn because the model kept
+            repeating the same tool call after a warning.
         ``error``
             {"type": "error", "error": Exception}
         ``done``
@@ -266,6 +274,12 @@ class Agent:
         # still wanted to continue the tool loop; surfaced as an explicit
         # warning event instead of a silent truncation.
         hit_limit = False
+        # React-loop repetition detection: consecutive identical tool calls
+        # (same tool + same normalized arguments) past
+        # agent.loop_detection_threshold are intercepted — see loop_guard.py.
+        # A threshold of 0 disables detection inside the guard.
+        loop_guard = LoopGuard(threshold=self.config.agent.loop_detection_threshold)
+        loop_aborted = False
 
         while turn < self.max_turns:
             turn += 1
@@ -330,12 +344,49 @@ class Agent:
             if turn == self.max_turns and (stop_reason == "tool_use" or tool_calls):
                 hit_limit = True
 
-            # Run tools.
+            # Loop guard: record every call's fingerprint. When the same
+            # fingerprint reaches the threshold the call is NOT executed and
+            # a nudge message is injected instead; if the very next turn
+            # repeats the fingerprint again, the whole turn aborts.
+            blocked_results: dict[str, ToolResult] = {}
+            decisions = [
+                loop_guard.record(
+                    tool_call_fingerprint(
+                        call.get("function", {}).get("name", "unknown"), _tool_input(call)
+                    )
+                )
+                for call in tool_calls
+            ]
+            loop_aborted = any(decision.abort for decision in decisions)
+            if loop_aborted:
+                # Answer every tool call of the aborting turn with the abort
+                # message so the assistant tool_calls stay paired in history.
+                for call in tool_calls:
+                    call_id = str(call.get("id") or "")
+                    blocked_results[call_id] = ToolResult(
+                        tool_use_id=call_id,
+                        content=LOOP_ABORT_MESSAGE,
+                        is_error=True,
+                    )
+            else:
+                for call, decision in zip(tool_calls, decisions, strict=True):
+                    if decision.blocked:
+                        call_id = str(call.get("id") or "")
+                        blocked_results[call_id] = ToolResult(
+                            tool_use_id=call_id,
+                            content=loop_guard.format_nudge(decision),
+                        )
+
+            # Run tools (calls intercepted by the loop guard are skipped).
             for call in tool_calls:
                 name = call.get("function", {}).get("name", "unknown")
                 yield {"type": "tool_call", "name": name, "input": _tool_input(call)}
 
-            tool_results = await executor.execute_all(tool_calls, context)
+            pending_calls = [
+                call for call in tool_calls if str(call.get("id") or "") not in blocked_results
+            ]
+            tool_results = await executor.execute_all(pending_calls, context)
+            tool_results = [*tool_results, *blocked_results.values()]
             loaded_skill_context = _drain_skill_context(self.skill_context_buffer)
             load_skill_ids = [
                 str(call.get("id") or "")
@@ -375,11 +426,14 @@ class Agent:
                     )
                 )
 
+            if loop_aborted:
+                break
+
         # Persist history for next user message and report final usage.
         self.history = list(messages)
         self.last_usage = total_usage
 
-        if hit_limit:
+        if hit_limit and not loop_aborted:
             yield {
                 "type": "warning",
                 "message": (
@@ -387,6 +441,12 @@ class Agent:
                     "may be unfinished. Raise agent.max_turns in config.json to "
                     "continue longer."
                 ),
+            }
+
+        if loop_aborted:
+            yield {
+                "type": "warning",
+                "message": loop_abort_warning(turn, self.config.agent.loop_detection_threshold),
             }
 
         done_event: dict[str, Any] = {

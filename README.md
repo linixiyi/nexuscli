@@ -43,6 +43,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - [子代理 task 工具](#-子代理-task-工具)
 - [动态工作流与 /expert](#-动态工作流与-expert)
 - [定时任务（cron）](#-定时任务cron)
+- [评测回归（eval）](#-评测回归eval)
 - [可观测性与调试](#-可观测性与调试)
 - [插件系统](#-插件系统)
 - [自定义斜杠命令](#-自定义斜杠命令)
@@ -64,6 +65,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 
 - 交互式终端 Agent，基于 Rich 和 prompt-toolkit 渲染；也支持单次 prompt 模式，适合脚本、管道和自动化调用
 - ReAct 工具调用循环，支持 thinking、tool call、tool result、final output 和 usage 事件
+- 工具循环调用检测：同一工具以完全相同的参数连续重复达到阈值（`agent.loop_detection_threshold`，默认 3，0 关闭）时拦截该次调用并注入换策略提示；提示后仍重复则终止该回合并输出 warning
 - Plan-and-Execute 模式：独立 Planner 生成 DAG，按依赖批次并行执行任务
 - Multi-Agent 协作模式：Planner、Worker、Reviewer、依赖调度、并行 worker、review 重试，以及可切换到独立 Plan-and-Execute 的子 Agent
 
@@ -92,11 +94,14 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - 静态项目记忆 + SQLite 动态长期记忆：元数据、去重、TTL、容量治理和相关性召回
 - Agent run 前后自动创建快照，支持恢复现场
 - REPL 会话自动持久化为 JSONL 转录，支持 `sessions` 列表、`-c` / `--resume` 跨进程恢复，以及 `/resume` 在会话内切换历史
+- 跨会话历史搜索：`/history <query> [--all]` 在会话转录正文里做大小写不敏感关键词检索（每会话一条命中、按更新时间倒序），可直接 `/resume <id>` 跳回
+- 会话用量随转录持久化：每个完成的普通回合把一条 `type: usage` 记录写进会话 JSONL，`/resume` / `-c` / `--resume` 会把它累计为历史基线，恢复后 usage 继续计数而不是从零开始（`/usage` 与单次 `--json` 均给出「历史累计 + 当前进程」双口径）
 - 会话级增强：`/fork [title]` 分叉会话副本、`/goal set/show/clear` 设置跨回合的长程目标、`/effort` 会话内切换推理力度、`/usage stats [N天]` 查看本地落库的近 N 天用量统计
 
 ### 安全与治理
 
 - HITL 人工确认、命令/路径安全策略和 JSONL 审计日志
+- 审批弹窗四档决策：`y` 放行一次、`r` run 级授权（本次 agent run 内同工具免再弹，首按记 `hitl`、后续放行记 `run-scope`）、`a` 切 auto、`s` 跳过、`n` 拒绝
 - 权限规则：config.json 里声明 `permissions.allow / deny / ask`，按 deny > ask > allow 在 HITL 之前评估
 - Hooks 生命周期钩子：`SessionStart / UserPromptSubmit / PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop` 七个事件可挂 shell 命令，exit 2 或输出 JSON 即可阻断/追问；工作区级 hooks 经 sha256 指纹信任确认后才会生效
 - Plan 模式：`Shift+Tab` 三态循环（default → auto → plan），plan 态只放行只读工具与判定为只读的 bash 命令，适合先审阅再执行
@@ -227,6 +232,8 @@ uv run nexuscli -p "解释这个仓库"
 
 Agent 工具循环的回合上限由 `agent.max_turns` 控制（默认 200，加载时最小钳到 1）：单条消息内最多执行这么多轮工具调用；到达上限而模型仍想继续时，会输出显式 warning 提示任务可能未完成，长程任务可在 config.json 的 `"agent"` 段调大该值。子代理（`task` 工具委派）不继承该配置，而是使用独立的固定上限 `SUBAGENT_MAX_TURNS`（30），不随 `agent.max_turns` 放大。加载配置时若 `max_turns` 被判定为非数值（如字符串 `"abc"`），会回退默认 200，不会让 CLI 启动失败。
 
+同段的 `agent.loop_detection_threshold`（默认 3，`0` 关闭，负数钳到 0，非数值同样回退默认）控制工具循环调用检测：同一工具以完全相同的参数连续重复第 N 次（N=阈值）时该次调用**不执行**，模型收到一条注入的换策略提示；若下一次仍是相同调用，则终止该回合并输出 loop-abort warning。因此 warning 有两种来源（`max_turns` 用尽与循环终止），语义相同——任务可能没有完成。指纹按「工具名 + 参数排序序列化」判定，参数有任何变化即重新计数。
+
 ## 🔐 权限规则
 
 在 config.json 的 `permissions` 里声明 `allow` / `deny` / `ask` 三组规则，就能在 HITL 之前自动放行安全操作、追问可疑调用或直接拦截高危动作。评估优先级是 **deny > ask > allow**，用户级与项目级的同名列表按层拼接合并去重。
@@ -238,6 +245,8 @@ Agent 工具循环的回合上限由 `agent.max_turns` 控制（默认 200，加
 ```
 
 另外，`bash` / `execute_command` 会先对命令串做 argv 级只读静态判定：判定为只读的命令（如 `git status`、`ls`、`cat` 这类白名单内的只读命令）在默认模式下免 HITL 审批直通执行，拿不准的命令一律回落正常审批链。直通不改变既有优先级——`deny` / `ask` 权限规则命中仍照常拦截或追问，PreToolUse hook 的阻断与 ask 提示同样优先。直通也不等于无痕：直通调用仍写审计日志（approver 记为 `readonly-rule`）。
+
+HITL 审批弹窗本身有五个键位：`y` 放行一次、`r` **run 级授权**（本次 agent run 内同工具后续本会弹窗的调用直接放行）、`a` 切 auto 模式、`s` 跳过、`n` 拒绝。run 级授权只作用于「本来就会弹人工提示」的环节——`deny` 规则、`ask` 规则与 hook 的 ask 提示不受影响；run 的语义是一次 agent run 的主代理上下文，子代理仍会独立弹审批，新一次 agent run 授权即清零。各选项的优先级与审计口径（`hitl` / `run-scope`）见 [docs/permissions.md](docs/permissions.md)。
 
 规则写法、通配匹配、`ask` 与 `hitl_mode` 的交互等完整说明见 [docs/permissions.md](docs/permissions.md)。
 
@@ -267,6 +276,7 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 /clear
 /resume
 /resume <index-or-id>
+/history <query> [--all]
 /context
 /compact [focus]
 /init [notes]
@@ -320,6 +330,10 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 `/skill load <name>` 把指定 Skill 的正文强制注入你的下一条消息（一次性消费）：下一回合模型会先读到该 Skill 再继续任务，适合主动确保某个技能被加载。
 
 `/usage stats [N天]` 汇总本地 SQLite 用量库 `~/.nexuscli/usage.db`：近 N 天（缺省 7 天）的回合数、总 Token、总成本（USD/CNY）与按模型分布。落库为 best-effort：每完成一个普通回合（含自定义命令回合）记一行，值为该回合主代理自身的用量；`/init`、`/plan`、`/workflow`、`/expert` 派发的回合与单次 `-p` 模式不落库，所以统计值只反映 REPL 直连对话的用量。
+
+不带参数的 `/usage` 输出 JSON，除最近一回合的 usage/cost 外还带 `session_usage` 双口径：`historical_total`（恢复基线 + 本进程累计，两者之和等于当前转录的 usage 台账）与 `current_process`（仅本进程记录的回合），并附 `sources` 标注来源。`/clear`、`/resume`、`/fork` 都会同步重置基线与本进程累计，保证双口径始终对应当前转录。
+
+`/history <query> [--all]` 在会话转录正文里做大小写不敏感的关键词检索，按更新时间倒序、每会话最多一条命中（取最早命中的消息片段），缺省只搜当前项目，`--all` 搜全部项目；结果表附会话 id 与片段，可 `/resume <id>` 直接跳回。检索基于转录内的消息正文，usage 记录行与损坏行会被跳过；空参数只打印用法提示。
 
 `/fork [title]` 把当前会话转录复制为一个新会话并切换过去继续：新会话携带全部历史消息，元数据记录来源 `forked_from`，原会话保持不变；省略 title 时继承源会话标题。两点如实说明：会话目标（`/goal`）按 session id 存储且不随 fork 复制；fork 时会清空排队中的一次性注入（`/skill load` 的正文），新会话从干净状态开始。
 
@@ -422,7 +436,7 @@ Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态�
 
 默认 provider/model 是 `deepseek/deepseek-v4-flash`。DeepSeek V4 Flash/Pro 的内置 profile 使用 1M 上下文，并带有截至 2026-07-17 的官方每百万 Token 价格；价格会变化，因此可以用 `llm.context_window` 和 `llm.prices` 覆盖，未知 OpenAI-compatible 模型应显式配置。
 
-流式请求开启 `stream_options.include_usage`，并解析 `choices=[]` 的 usage-only 块、cache hit/miss 和 reasoning Token。REPL 用 `/usage` 查看最近一次普通 ReAct，用 `/usage stats [N天]` 查看本地落库的近 N 天汇总（默认 7 天，覆盖面边界见[交互命令](#-交互命令)），单次 CLI 用 `--json` 获取完整 usage/cost。成本以供应商返回的实际 Token 为准，不能只用“代码行数”精确推算。
+流式请求开启 `stream_options.include_usage`，并解析 `choices=[]` 的 usage-only 块、cache hit/miss 和 reasoning Token。REPL 用 `/usage` 查看最近一次普通 ReAct（含 `session_usage` 双口径，见[交互命令](#-交互命令)），用 `/usage stats [N天]` 查看本地落库的近 N 天汇总（默认 7 天，覆盖面边界见[交互命令](#-交互命令)），单次 CLI 用 `--json` 获取完整 usage/cost——带 `-c` / `--resume` 时 payload 还会附 `session_usage`（恢复基线 + 本次运行的历史累计，与仅本次运行的双口径；单次模式不把 usage 回写转录，该值为提示性数据）。成本以供应商返回的实际 Token 为准，不能只用“代码行数”精确推算。
 
 ## 🌐 联网工具
 
@@ -503,7 +517,9 @@ uv run nexuscli --resume <id>       # 按会话 id（或 id 前缀）恢复
 /fork [title]                       # 分叉当前会话为新会话并切换过去（原会话不变）
 ```
 
-单次模式也支持恢复：`uv run nexuscli -p "继续刚才的任务" -c` 会把历史会话注入 react 模式（plan/team 单次模式不支持注入历史）。恢复只回放对话消息，usage/cost 从当前进程重新累计。
+单次模式也支持恢复：`uv run nexuscli -p "继续刚才的任务" -c` 会把历史会话注入 react 模式（plan/team 单次模式不支持注入历史）。
+
+恢复的 usage 续算：每个完成的普通回合都会把一条 `type: usage` 记录追加进会话 JSONL（model/provider、input/output/total/cache hit/miss、成本估算），恢复时把这些记录求和为历史基线，`/usage` 的 `historical_total` 即「基线 + 本进程累计」，两者之和等于该转录的 usage 台账。`/clear` 与 `/fork` 切换到新转录时会同步清零基线与本进程累计（fork 的转录只拷贝消息、不拷贝 usage 行，所以基线从零开始）；历史收缩重写转录时 usage 行会保留，不丢账。单次 `-p` 模式不写转录，其 `--json` 的 `session_usage` 是「恢复基线 + 本次运行」的提示性口径，不会持久化。
 
 ## ✅ 任务清单
 
@@ -548,6 +564,21 @@ uv run nexuscli cron run <id>      # 原样打印该任务的 prompt（不执行
 ```
 
 `cron` 是标准 5 字段表达式（分 时 日 月 周，本地时区），支持 `*`、数字、逗号列表、区间 `a-b` 与步进 `*/n`、`a-b/n`；星期字段 0=周日，7 会规范化为 0；日/周两字段都被限制时按 vixie cron 的 OR 语义匹配。真正的触发由外部调度器驱动——让系统 cron 或 Windows 任务计划程序在计划时刻执行 `uv run nexuscli -p "$(uv run nexuscli cron run <id>)"`。表达式语法、存储容错与边界见 [docs/cron.md](docs/cron.md)。
+
+## 🧪 评测回归（eval）
+
+`nexuscli eval` 是离线的任务级评测回归框架：不调用真实 LLM，而是用脚本化假 LLM 客户端驱动真实 Agent 跑 JSON 场景，再对工具调用序列与最终输出做断言；连续两次运行的结果会自动对比，破坏 Agent 工作流的改动会以 `regression` 形式暴露。
+
+```bash
+nexuscli eval list              # 列出内置场景（examples/evals）
+nexuscli eval run               # 跑全部内置场景（等价于 --all）
+nexuscli eval run --all         # 缺省行为的显式形式
+nexuscli eval run --file path   # 单个场景文件或目录
+```
+
+每次运行把报告写入 `<cwd>/.nexuscli/evals/last-report.json`，下次运行读回并逐场景标记 `new / unchanged / regression / fixed / still_failing`；任一场景失败即退出码 1，`regressions` 计数区分「新出现的失败」，可直接当 CI 门禁用。损坏的旧报告会报错而不是静默重置——静默丢基线会把真实回归伪装成 `new`。
+
+场景 JSON 的必填键是 `name` / `prompt` / `scripted_turns`，支持四类断言（`expected_tool_sequence` / `final_contains` / `forbidden_tools` / `max_turns`），schema 校验失败会带上文件路径报错。如实边界：评测测的是**编排与工具链回归**（react 循环、工具顺序、权限闸门、回合预算内收敛、最终回答的形状），不是真实模型质量——"模型"是固定脚本，prompt 敏感性、推理质量与成本延迟都不在覆盖范围。运行是离线的（无网络、不写 usage、审计关闭），但场景跑的是真实 `Agent.run`，每回合的 pre/post 快照步骤照常执行（项目树拷贝到 `~/.nexuscli/snapshots/`）。场景 schema、stub 工具的设计取舍与全部边界见 [docs/eval.md](docs/eval.md)。
 
 ## 🔭 可观测性与调试
 

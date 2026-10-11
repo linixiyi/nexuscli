@@ -1,0 +1,37 @@
+{
+  "name": "read-task-details",
+  "description": "Happy path: list tasks, fetch the urgent one's details, answer",
+  "prompt": "List the tasks and fetch the details of the most urgent one.",
+  "tools": [
+    {
+      "name": "list_tasks",
+      "description": "List tracked tasks with urgency markers.",
+      "result": "1. fix login (urgent)\n2. update docs"
+    },
+    {
+      "name": "get_task_detail",
+      "description": "Show the details of one task.",
+      "result": "fix login: the session cookie expires too early"
+    }
+  ],
+  "scripted_turns": [
+    {
+      "tool_calls": [
+        {"name": "list_tasks", "arguments": {}}
+      ]
+    },
+    {
+      "tool_calls": [
+        {"name": "get_task_detail", "arguments": {"task": "fix login"}}
+      ]
+    },
+    {
+      "text": "The most urgent task is 'fix login': the session cookie expires too early."
+    }
+  ],
+  "assertions": {
+    "expected_tool_sequence": ["list_tasks", "get_task_detail"],
+    "final_contains": ["fix login"],
+    "max_turns": 3
+  }
+}

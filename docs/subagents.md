@@ -24,6 +24,7 @@ tools: read_file, grep, glob_files, search_code
 - `name` 与 `description` 必填，缺一则跳过该文件；`tools` 为逗号分隔白名单，省略则可用全部内置工具；`model` 目前解析但忽略（预留字段）
 - 深度限制为 1：子代理不能再委派子代理，且 `task` 工具默认从子代理工具集中移除，双保险防递归
 - 权限规则、HITL 审批回调原样透传给子代理；plan 态下 `task` 与其他非只读工具一样被硬拒绝
+- 审批弹窗的 run 级授权（`r`）**不**透传到子代理：子代理每次 run 都新建自己的 ToolContext，主代理按 `r` 放行的工具在子代理里仍会独立弹审批。需要覆盖子代理的放行请用 auto 模式（`a`）或 `permissions.allow` 规则
 - 插件代理：项目插件 `.nexuscli/plugins/<name>/agents/*.md` 最后并入（plugin 覆盖项目层），见 [docs/plugins.md](plugins.md)
 
 ## 后台执行：`run_in_background`
