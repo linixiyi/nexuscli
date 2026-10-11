@@ -8,7 +8,7 @@ from typing import Any, Literal
 from nexuscli.config import NexusCliConfig
 
 DangerLevel = Literal["safe", "medium", "high"]
-ToolDecision = Literal["approve", "deny", "skip"]
+ToolDecision = Literal["approve", "deny", "skip", "approve_run"]
 
 
 @dataclass(slots=True)
@@ -28,6 +28,17 @@ class ToolContext:
     )
     skill_context_buffer: Any | None = None
     subagent_depth: int = 0
+    # Per-run tool approvals granted through the approval prompt's "r" option
+    # ("approve this tool for the rest of the run"). The executor adds a tool
+    # name when the approval callback returns "approve_run"; later calls to
+    # the same tool skip the HITL prompt for the remainder of the run. A fresh
+    # ToolContext per Agent.run() (nexuscli.agent.agent._run_react) starts from
+    # the default empty set, which is how the grant expires at run end.
+    run_scope_approved: set[str] = field(default_factory=set)
+
+    def clear_run_scope(self) -> None:
+        """Drop every per-run tool approval (new agent run / new user turn)."""
+        self.run_scope_approved.clear()
 
 
 @dataclass(slots=True)

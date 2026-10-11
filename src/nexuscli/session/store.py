@@ -17,10 +17,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from nexuscli.types import Message
+from nexuscli.types import Message, Usage
 
 SESSIONS_DIRNAME = "sessions"
 _TITLE_MAX_CHARS = 80
+# Record ``type`` of a per-turn usage line appended to a session transcript.
+USAGE_RECORD_TYPE = "usage"
+_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+_SNIPPET_WINDOW_CHARS = 60
 
 
 @dataclass(slots=True)
@@ -70,6 +74,116 @@ class SessionRecord:
     messages: list[Message] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class SessionSearchHit:
+    """One cross-session search match: the session plus where the query hit."""
+
+    session_id: str
+    title: str
+    snippet: str
+    updated_at: float
+    cwd: str = ""
+
+
+@dataclass(slots=True)
+class SessionUsageTotals:
+    """Aggregate of the per-turn usage records stored in one transcript.
+
+    Serves two roles: the resume-time baseline (summed from a session's
+    ``usage`` record lines by ``SessionStore.load_usage``) and the running
+    total of turns recorded in the current process (``ReplSessionState``).
+    Costs are the per-turn estimates extracted by :func:`cost_totals`.
+    """
+
+    turns: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+    cost_usd: float = 0.0
+    cost_cny: float = 0.0
+
+    @classmethod
+    def from_turn(cls, usage: Usage, cost: dict[str, Any] | None = None) -> SessionUsageTotals:
+        """Build a one-turn total from an agent's last_usage / last_cost pair."""
+        usd, cny = cost_totals(cost)
+        return cls(
+            turns=1,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            total_tokens=usage.total_tokens,
+            cache_hit_tokens=usage.cache_hit_tokens,
+            cache_miss_tokens=usage.cache_miss_tokens,
+            cost_usd=usd,
+            cost_cny=cny,
+        )
+
+    def __add__(self, other: SessionUsageTotals) -> SessionUsageTotals:
+        if not isinstance(other, SessionUsageTotals):
+            return NotImplemented
+        return SessionUsageTotals(
+            turns=self.turns + other.turns,
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+            cache_hit_tokens=self.cache_hit_tokens + other.cache_hit_tokens,
+            cache_miss_tokens=self.cache_miss_tokens + other.cache_miss_tokens,
+            cost_usd=self.cost_usd + other.cost_usd,
+            cost_cny=self.cost_cny + other.cost_cny,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "turns": self.turns,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "cache_hit_tokens": self.cache_hit_tokens,
+            "cache_miss_tokens": self.cache_miss_tokens,
+            "cost_usd": self.cost_usd,
+            "cost_cny": self.cost_cny,
+        }
+
+
+def cost_totals(cost: dict[str, Any] | None) -> tuple[float, float]:
+    """Flatten an agent ``last_cost`` mapping to ``(usd, cny)`` totals.
+
+    Same extraction as ``UsageStore.record_turn``: the mapping follows the
+    shape returned by ``agent._calculate_costs`` — ``{currency: {total_cost}}``
+    — and missing/empty entries degrade to 0.0.
+    """
+    costs = cost or {}
+    usd = costs.get("usd") or {}
+    cny = costs.get("cny") or {}
+    return float(usd.get("total_cost") or 0.0), float(cny.get("total_cost") or 0.0)
+
+
+def _content_text(content: Any) -> str:
+    """Flatten a message content (string or multimodal part list) for matching."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+        return "\n".join(parts)
+    return ""
+
+
+def _snippet_around(text: str, index: int, needle_length: int) -> str:
+    """A whitespace-collapsed window around a match, ellipsized at the edges."""
+    flat = " ".join(text.split())
+    start = max(0, index - _SNIPPET_WINDOW_CHARS)
+    end = min(len(flat), index + needle_length + _SNIPPET_WINDOW_CHARS)
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(flat) else ""
+    return prefix + flat[start:end] + suffix
+
+
 def sessions_root(home: Path | None = None) -> Path:
     base = home if home is not None else Path.home()
     return base / ".nexuscli" / SESSIONS_DIRNAME
@@ -94,6 +208,17 @@ def _message_from_dict(data: dict[str, Any]) -> Message:
         tool_call_id=data.get("tool_call_id"),
         tool_calls=list(tool_calls) if isinstance(tool_calls, list) else [],
     )
+
+
+def _line_type(line: str) -> str:
+    """The ``type`` field of a body line ('' for messages / corrupt lines)."""
+    try:
+        data = json.loads(line)
+    except json.JSONDecodeError:
+        return ""
+    if isinstance(data, dict):
+        return str(data.get("type") or "")
+    return ""
 
 
 def _title_from(messages: list[Message]) -> str:
@@ -206,10 +331,123 @@ class SessionStore:
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(data, dict):
-                messages.append(_message_from_dict(data))
+            if not isinstance(data, dict):
+                continue
+            # Non-message records (currently per-turn ``usage`` lines) are
+            # tolerated by design: they ride in the transcript body but are
+            # not conversation messages.
+            if "type" in data:
+                continue
+            messages.append(_message_from_dict(data))
         meta.message_count = meta.message_count or len(messages)
         return SessionRecord(meta=meta, messages=messages)
+
+    def load_usage(self, session_id: str) -> SessionUsageTotals:
+        """Sum the per-turn ``usage`` record lines of one transcript.
+
+        This is the resume-time usage baseline: historical turns persist with
+        the transcript, so a resumed session continues counting instead of
+        starting from zero. Missing keys, corrupt lines and unknown sessions
+        all degrade to zeros — the baseline must never raise.
+        """
+        path = self.root / f"{session_id}.jsonl"
+        if not path.is_file():
+            return SessionUsageTotals()
+        totals = SessionUsageTotals()
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return totals
+        for line in lines[1:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict) or data.get("type") != USAGE_RECORD_TYPE:
+                continue
+            # A syntactically valid line with garbage numeric fields (e.g. a
+            # hand-edited transcript) must degrade like a corrupt line, not
+            # raise — per the contract above. Fields parse into locals first
+            # so a failure skips the whole line instead of partially applying.
+            try:
+                input_tokens = int(data.get("input_tokens") or 0)
+                output_tokens = int(data.get("output_tokens") or 0)
+                total_tokens = int(data.get("total_tokens") or 0)
+                cache_hit = int(data.get("cache_hit_tokens") or 0)
+                cache_miss = int(data.get("cache_miss_tokens") or 0)
+                cost_usd = float(data.get("cost_usd") or 0.0)
+                cost_cny = float(data.get("cost_cny") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            totals.turns += 1
+            totals.input_tokens += input_tokens
+            totals.output_tokens += output_tokens
+            totals.total_tokens += total_tokens
+            totals.cache_hit_tokens += cache_hit
+            totals.cache_miss_tokens += cache_miss
+            totals.cost_usd += cost_usd
+            totals.cost_cny += cost_cny
+        return totals
+
+    def search(
+        self,
+        query: str,
+        *,
+        cwd: str | None = None,
+        limit: int = 20,
+    ) -> list[SessionSearchHit]:
+        """Scan transcripts for a case-insensitive keyword in message content.
+
+        ``cwd=None`` searches every project; a cwd restricts to that project
+        (same filter as ``list``). Newest session first, one hit per session
+        (the earliest matching message), at most ``limit`` hits.
+        """
+        needle = query.strip().lower()
+        if not needle:
+            return []
+        cwd_filter = os.path.normcase(str(Path(cwd).resolve())) if cwd is not None else None
+        hits: list[SessionSearchHit] = []
+        # ``limit`` on the hit list is enforced below; the meta scan itself
+        # needs every session (newest first, same ordering as ``list``).
+        for meta in self.list(limit=10**6, cwd=cwd_filter):
+            hit = self._first_message_hit(meta, needle)
+            if hit is not None:
+                hits.append(hit)
+            if len(hits) >= limit:
+                break
+        return hits
+
+    def _first_message_hit(self, meta: SessionMeta, needle: str) -> SessionSearchHit | None:
+        path = self.root / f"{meta.id}.jsonl"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return None
+        for line in lines[1:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict) or "type" in data:
+                continue
+            text = _content_text(data.get("content"))
+            index = text.lower().find(needle)
+            if index < 0:
+                continue
+            return SessionSearchHit(
+                session_id=meta.id,
+                title=meta.title,
+                snippet=_snippet_around(text, index, len(needle)),
+                updated_at=meta.updated_at,
+                cwd=meta.cwd,
+            )
+        return None
 
     def resolve(self, ref: str, cwd: str | None = None) -> SessionRecord | None:
         """Resolve an exact/prefix session id or a 1-based index from ``list()``."""
@@ -291,8 +529,47 @@ class SessionWriter:
         self.meta.message_count = self.persisted
         self.meta.updated_at = time.time()
         body = [json.dumps(_message_to_dict(message), ensure_ascii=False) for message in messages]
+        # Non-message records (per-turn ``usage`` lines) are historical facts,
+        # not conversation state: a history shrink (compression, /clear-style
+        # rewrite) must not erase the usage ledger.
+        body.extend(line for line in self._read_body() if _line_type(line) == USAGE_RECORD_TYPE)
         self._atomic_write(self._compose(body))
         return self.persisted
+
+    def append_usage(
+        self,
+        *,
+        model: str = "",
+        provider: str = "",
+        usage: Usage,
+        cost: dict[str, Any] | None = None,
+        ts: str | None = None,
+    ) -> None:
+        """Append one completed turn's usage as a ``type: usage`` record line.
+
+        Called for every completed regular ReAct turn so a resumed session can
+        rebuild its usage baseline from the transcript. ``ts`` is a
+        fixed-instant seam for tests (defaults to "now", local time, in the
+        same ``_TS_FORMAT`` layout as ``~/.nexuscli/usage.db``).
+        """
+        usd, cny = cost_totals(cost)
+        record = {
+            "type": USAGE_RECORD_TYPE,
+            "ts": ts or time.strftime(_TS_FORMAT),
+            "model": model,
+            "provider": provider,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "total_tokens": usage.total_tokens,
+            "cache_hit_tokens": usage.cache_hit_tokens,
+            "cache_miss_tokens": usage.cache_miss_tokens,
+            "cost_usd": usd,
+            "cost_cny": cny,
+        }
+        self.store.root.mkdir(parents=True, exist_ok=True)
+        body = self._read_body()
+        body.append(json.dumps(record, ensure_ascii=False))
+        self._atomic_write(self._compose(body))
 
     def _write_meta(self) -> None:
         """Rewrite the meta line in place (used to bump ordering metadata)."""

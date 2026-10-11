@@ -52,6 +52,17 @@ from nexuscli.entrypoints.slash_commands import (
     load_slash_commands,
     split_command_message,
 )
+from nexuscli.eval import (
+    EvalSchemaError,
+    PreviousReportError,
+    build_report,
+    builtin_eval_dir,
+    format_report,
+    load_eval_scenarios,
+    load_previous_report,
+    run_eval_scenarios,
+    write_report,
+)
 from nexuscli.llm import create_llm_client
 from nexuscli.mcp import (
     load_mcp_server_specs,
@@ -62,7 +73,7 @@ from nexuscli.mcp import (
 from nexuscli.runtime import RuntimeApiServer
 from nexuscli.runtime.api import runtime_api_key
 from nexuscli.runtime.cron import CronError, cron_tasks_path, list_tasks, next_trigger, run_task
-from nexuscli.session import SessionStore
+from nexuscli.session import SessionStore, SessionUsageTotals
 
 app = typer.Typer(
     name="nexuscli",
@@ -74,6 +85,8 @@ mcp_app = typer.Typer(help="MCP server management")
 app.add_typer(mcp_app, name="mcp")
 cron_app = typer.Typer(help="Scheduled task management")
 app.add_typer(cron_app, name="cron")
+eval_app = typer.Typer(help="Offline scripted eval regression")
+app.add_typer(eval_app, name="eval")
 console = Console()
 
 
@@ -191,10 +204,15 @@ def main(
                 "worker-mode must be react or plan", param_hint="--worker-mode"
             )
         prompt = _expand_custom_prompt(prompt, str(root))
-        history = _load_resume_history(str(root), resume=resume, continue_last=continue_session)
+        history, usage_baseline = _load_resume_history(
+            str(root), resume=resume, continue_last=continue_session
+        )
         if history and selected_mode != "react":
             typer.echo("Note: --resume/--continue only restores react mode history.", err=True)
             history = []
+            # The run did not continue that transcript, so its usage records
+            # are not part of this run's session ledger either.
+            usage_baseline = SessionUsageTotals()
         asyncio.run(
             _run_prompt(
                 prompt,
@@ -204,6 +222,7 @@ def main(
                 worker_mode=worker_mode,
                 json_output=json_output,
                 history=history,
+                usage_baseline=usage_baseline,
             )
         )
     elif resume or continue_session:
@@ -237,10 +256,15 @@ def _load_resume_history(
     *,
     resume: str | None,
     continue_last: bool,
-) -> list:
-    """Resolve a session transcript for resume; empty list when nothing to load."""
+) -> tuple[list, SessionUsageTotals]:
+    """Resolve a session transcript for resume; empty list when nothing to load.
+
+    Also returns the transcript's historical usage baseline (its ``usage``
+    record lines) so single-prompt ``--json`` can report the same dual scope
+    as the REPL's ``/usage``: resumed baseline plus this run.
+    """
     if not resume and not continue_last:
-        return []
+        return [], SessionUsageTotals()
     store = SessionStore()
     record = None
     if resume:
@@ -262,7 +286,7 @@ def _load_resume_history(
         f"{record.meta.title or '(untitled)'}",
         err=True,
     )
-    return record.messages
+    return record.messages, store.load_usage(record.meta.id)
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +488,85 @@ def cron_run(
 
 
 # ---------------------------------------------------------------------------
+# Eval subcommands (offline scripted regression)
+# ---------------------------------------------------------------------------
+
+
+@eval_app.command("list")
+def eval_list() -> None:
+    """List the built-in eval scenarios (examples/evals)."""
+    eval_dir = builtin_eval_dir()
+    if eval_dir is None:
+        typer.echo("No eval scenarios found (examples/evals is missing).", err=True)
+        raise typer.Exit(1)
+    try:
+        scenarios = load_eval_scenarios(eval_dir)
+    except EvalSchemaError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    if not scenarios:
+        typer.echo(f"No eval scenarios in {eval_dir}")
+        return
+    typer.echo(f"Scenarios in {eval_dir}:")
+    for scenario in scenarios:
+        typer.echo(f"{scenario.name}\t{len(scenario.turns)} turns\t{scenario.description}")
+
+
+@eval_app.command("run")
+def eval_run(
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            "--file",
+            help="Run one scenario file or a directory of scenarios instead of the built-ins",
+        ),
+    ] = None,
+    all_scenarios: Annotated[
+        bool, typer.Option("--all", help="Run every built-in scenario (the default)")
+    ] = False,
+    cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
+) -> None:
+    """Run scripted eval scenarios offline and diff against the previous report.
+
+    The report is written to ``<cwd>/.nexuscli/evals/last-report.json``; the
+    next run reads it back and marks pass->fail as regressions and fail->pass
+    as fixes. Exits 1 when any scenario fails.
+    """
+    _ = all_scenarios  # --all is the default behaviour; kept as an explicit flag
+    root = (cwd or Path.cwd()).resolve()
+    target: Path
+    if file is not None:
+        target = file
+    else:
+        builtin = builtin_eval_dir()
+        if builtin is None:
+            typer.echo("No eval scenarios found (examples/evals is missing).", err=True)
+            raise typer.Exit(1)
+        target = builtin
+    try:
+        scenarios = load_eval_scenarios(target)
+    except EvalSchemaError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    if not scenarios:
+        typer.echo(f"No eval scenarios in {target}", err=True)
+        raise typer.Exit(1)
+    results = run_eval_scenarios(scenarios, cwd=str(root))
+    try:
+        previous = load_previous_report(root)
+    except PreviousReportError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    report = build_report(results, previous=previous)
+    report_path = write_report(root, report)
+    for line in format_report(report):
+        typer.echo(line)
+    typer.echo(f"Report written to {report_path}")
+    if report["summary"]["failed"]:
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -477,6 +580,7 @@ async def _run_prompt(
     worker_mode: str = "react",
     json_output: bool = False,
     history: list | None = None,
+    usage_baseline: SessionUsageTotals | None = None,
 ) -> None:
     """Execute a single prompt and print the result."""
     config.render_mode = "plain"
@@ -519,12 +623,34 @@ async def _run_prompt(
                     "total_tokens": result.total_tokens,
                     "usage": result.usage.to_dict(),
                     "cost": result.cost,
+                    "session_usage": _single_shot_session_usage(result, usage_baseline),
                 },
                 ensure_ascii=False,
             )
         )
     else:
         typer.echo(result.text)
+
+
+def _single_shot_session_usage(result, usage_baseline: SessionUsageTotals | None) -> dict:
+    """Dual-scope session usage for single-prompt ``--json``.
+
+    Mirrors the REPL ``/usage`` JSON: ``historical_total`` is the resumed
+    transcript's baseline plus this run's usage; ``current_process`` is this
+    run only. One caveat stated in ``sources``: a single-prompt run does not
+    append its usage to the transcript, so the baseline here is informational
+    and is not persisted back.
+    """
+    this_run = SessionUsageTotals.from_turn(usage=result.usage, cost=result.cost)
+    baseline = usage_baseline if usage_baseline is not None else SessionUsageTotals()
+    return {
+        "historical_total": (baseline + this_run).to_dict(),
+        "current_process": this_run.to_dict(),
+        "sources": {
+            "historical_total": "resumed session usage baseline + this run (not persisted)",
+            "current_process": "this run only",
+        },
+    }
 
 
 def _version_of(command: str) -> str:

@@ -192,7 +192,10 @@ def test_agent_max_turns_clamped_to_at_least_one(tmp_path, monkeypatch):
 
 def test_agent_section_in_public_dict(tmp_path, monkeypatch):
     config = _load_config_with_agent_section(tmp_path, monkeypatch, {"max_turns": 5})
-    assert config_to_public_dict(config)["agent"] == {"max_turns": 5}
+    assert config_to_public_dict(config)["agent"] == {
+        "max_turns": 5,
+        "loop_detection_threshold": 3,
+    }
 
 
 def test_query_engine_passes_config_max_turns_to_agent(monkeypatch):

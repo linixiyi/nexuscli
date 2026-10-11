@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 import nexuscli.entrypoints.cli as cli
 from nexuscli.config import NexusCliConfig
-from nexuscli.session import SessionStore
+from nexuscli.session import SessionStore, SessionUsageTotals
 from nexuscli.types import Message
 
 runner = CliRunner()
@@ -122,7 +122,9 @@ def test_continue_loads_latest_session_into_single_prompt(tmp_path, monkeypatch)
 
     captured = {}
 
-    async def fake_run_prompt(prompt, cwd, config_arg, *, mode, worker_mode, json_output, history):
+    async def fake_run_prompt(
+        prompt, cwd, config_arg, *, mode, worker_mode, json_output, history, usage_baseline=None
+    ):
         captured["history"] = history
         captured["cwd"] = cwd
 
@@ -145,8 +147,11 @@ def test_resume_rejected_for_non_react_single_prompt_modes(tmp_path, monkeypatch
 
     captured = {}
 
-    async def fake_run_prompt(prompt, cwd, config_arg, *, mode, worker_mode, json_output, history):
+    async def fake_run_prompt(
+        prompt, cwd, config_arg, *, mode, worker_mode, json_output, history, usage_baseline=None
+    ):
         captured["history"] = history
+        captured["usage_baseline"] = usage_baseline
 
     monkeypatch.setattr(cli, "_run_prompt", fake_run_prompt)
 
@@ -157,6 +162,9 @@ def test_resume_rejected_for_non_react_single_prompt_modes(tmp_path, monkeypatch
 
     assert result.exit_code == 0
     assert captured["history"] == []
+    # The run does not continue that transcript, so its usage ledger is
+    # dropped along with the message history.
+    assert captured["usage_baseline"] == SessionUsageTotals()
 
 
 # ---------------------------------------------------------------------------

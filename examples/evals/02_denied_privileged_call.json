@@ -1,0 +1,32 @@
+{
+  "name": "denied-privileged-call",
+  "description": "A privileged call is denied by permission rules and the agent reports the denial instead of proceeding",
+  "prompt": "Deploy the app to production right now.",
+  "tools": [
+    {
+      "name": "deploy_app",
+      "description": "Deploy the app to a production environment.",
+      "result": "deploy succeeded (never seen when the deny rule intercepts)",
+      "read_only": false,
+      "requires_approval": true,
+      "danger_level": "high"
+    }
+  ],
+  "permission_deny": ["deploy_app"],
+  "scripted_turns": [
+    {
+      "tool_calls": [
+        {"name": "deploy_app", "arguments": {"env": "production"}}
+      ]
+    },
+    {
+      "text": "The deploy_app call was denied by permission rules, so nothing was deployed."
+    }
+  ],
+  "assertions": {
+    "expected_tool_sequence": ["deploy_app"],
+    "final_contains": ["denied"],
+    "forbidden_tools": ["bash", "execute_command"],
+    "max_turns": 2
+  }
+}

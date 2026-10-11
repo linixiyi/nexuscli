@@ -170,9 +170,16 @@ class AgentConfig:
     200 favours long-running tasks over a low hard stop. At load time values
     are clamped to at least 1 (0 or a negative number would turn every run
     into a no-op; see :func:`_dict_to_agent`).
+
+    ``loop_detection_threshold`` is how many consecutive identical tool calls
+    (same tool + same normalized arguments) are tolerated before the react
+    loop blocks the call and nudges the model to change strategy; one more
+    identical repeat terminates the turn. ``0`` disables detection entirely;
+    negative values are clamped to 0 at load time (see :func:`_dict_to_agent`).
     """
 
     max_turns: int = 200
+    loop_detection_threshold: int = 3
 
 
 @dataclass(slots=True)
@@ -454,12 +461,13 @@ def _dict_to_config(data: dict[str, Any]) -> NexusCliConfig:
 
 
 def _dict_to_agent(raw: Any) -> AgentConfig:
-    """Parse the ``agent`` config section, clamping ``max_turns`` to >= 1.
+    """Parse the ``agent`` config section, clamping bad values.
 
     A zero or negative ``max_turns`` would make every agent run a no-op, so
-    it is clamped to 1 at load time; non-numeric values fall back to the
-    default instead of raising, so one bad entry cannot prevent the CLI from
-    starting.
+    it is clamped to 1 at load time; ``loop_detection_threshold`` clamps to 0
+    instead (0 means the detection is disabled). Non-numeric values fall back
+    to the defaults instead of raising, so one bad entry cannot prevent the
+    CLI from starting.
     """
     if not isinstance(raw, dict):
         return AgentConfig()
@@ -469,6 +477,15 @@ def _dict_to_agent(raw: Any) -> AgentConfig:
         fields["max_turns"] = max(1, int(fields.get("max_turns", default.max_turns)))
     except (TypeError, ValueError):
         fields["max_turns"] = default.max_turns
+    try:
+        # 0 disables loop detection, so unlike max_turns it clamps to 0,
+        # not to 1; non-numeric values fall back to the default.
+        fields["loop_detection_threshold"] = max(
+            0,
+            int(fields.get("loop_detection_threshold", default.loop_detection_threshold)),
+        )
+    except (TypeError, ValueError):
+        fields["loop_detection_threshold"] = default.loop_detection_threshold
     return AgentConfig(**fields)
 
 

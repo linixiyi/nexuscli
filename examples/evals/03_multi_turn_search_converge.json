@@ -1,0 +1,47 @@
+{
+  "name": "multi-turn-search-converge",
+  "description": "Three tool hops then a grounded customer reply, converging within a turn budget",
+  "prompt": "Find out why checkout fails and tell the customer what to do.",
+  "tools": [
+    {
+      "name": "search_docs",
+      "description": "Search the internal docs for a topic.",
+      "result": "matching doc: checkout-faq"
+    },
+    {
+      "name": "read_doc",
+      "description": "Read one doc by id.",
+      "result": "Checkout fails when the card is declined; retry or use another card."
+    },
+    {
+      "name": "draft_reply",
+      "description": "Draft a customer reply from a given text.",
+      "result": "Reply drafted: retry or use another card."
+    }
+  ],
+  "scripted_turns": [
+    {
+      "tool_calls": [
+        {"name": "search_docs", "arguments": {"query": "checkout fails"}}
+      ]
+    },
+    {
+      "tool_calls": [
+        {"name": "read_doc", "arguments": {"doc": "checkout-faq"}}
+      ]
+    },
+    {
+      "tool_calls": [
+        {"name": "draft_reply", "arguments": {"text": "retry or use another card"}}
+      ]
+    },
+    {
+      "text": "Drafted the customer reply: retry or use another card."
+    }
+  ],
+  "assertions": {
+    "expected_tool_sequence": ["search_docs", "read_doc", "draft_reply"],
+    "final_contains": ["retry"],
+    "max_turns": 4
+  }
+}
