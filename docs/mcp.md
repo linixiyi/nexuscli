@@ -65,6 +65,32 @@ curl -sS -X POST http://127.0.0.1:3000 \
 
 Chrome DevTools MCP 会把浏览器页面和 DevTools 状态暴露给 Agent。不要随意把包含个人账号、敏感数据或生产后台的 Chrome 会话授权给 Agent。
 
+## 工具级过滤（allowed_tools / blocked_tools）
+
+MCP server 常暴露几十上百个工具，全量注入会污染上下文并放大误调用面。每个 server 条目可以单独配置过滤（实现：`src/nexuscli/mcp/config.py` 的 `McpServerSpec`，过滤逻辑在 `src/nexuscli/mcp/client.py` 的 `_tool_registered`）：
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "allowed_tools": ["get_*", "list_*", "create_issue"],
+      "blocked_tools": ["delete_*", "admin_*"]
+    }
+  }
+}
+```
+
+字段与行为，全部以实现为准：
+
+- **`allowed_tools`（白名单，优先）**：非空时只有匹配列表中至少一个模式的远端工具会注册。
+- **`blocked_tools`（黑名单）**：`allowed_tools` 为空时生效，命中任一模式的远端工具被剔除。
+- **匹配规则**：精确工具名或 fnmatch 通配（`*` / `?`），大小写敏感；精确名不会被同前缀通配误吞（白名单里写 `echo` 不会匹配 `echo2`，需要显式写 `echo*`）。
+- **两个列表都必须是 JSON 数组**。写错类型（如把列表误写成字符串）按「未配置」处理——不过滤、全部注册，不会静默吞掉工具；这是刻意的容错方向，宁可少过滤也不静默禁用。
+- **virtual 工具不受过滤影响**：每个 server 附带的 `list_resources` / `read_resource` / `list_prompts` / `get_prompt` 四个包装工具始终注册；远端工具全被过滤时只是没有远端工具入表，不报错。
+- **与 `enabled` 开关叠加**：`enabled: false` 的 server 整体跳过，过滤只对启用的 server 生效；不配置两个列表时行为与从前完全一致。
+
 ## OAuth 2.0 授权（HTTP 类 server，授权码 + PKCE）
 
 `type: http` / `streamable_http` 的 server 支持 OAuth 2.0 public client 授权。在 `mcp.json` 的 server 条目里加 `auth` 段（实现：`src/nexuscli/mcp/config.py` 的 `McpAuthConfig`）：

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from nexuscli.agent.orchestrator import (
     AgentMessage,
@@ -16,8 +19,25 @@ from nexuscli.config import load_config
 from nexuscli.tools import ToolRegistry, get_builtin_tools
 
 
-def test_orchestrator_parses_steps_and_review_output(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+@pytest.fixture
+def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirect Path.home() into a temp home.
+
+    Team workers can run PlanExecuteAgent in nested plan mode, which persists
+    graph checkpoints under ``~/.nexuscli/plan_runs``; snapshots already go to
+    ``~/.nexuscli/snapshots``. A HOME-only patch leaks onto the real home on
+    Windows (Path.home() reads USERPROFILE there), so triple patch — same
+    convention as tests/test_background.py.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    return home
+
+
+def test_orchestrator_parses_steps_and_review_output(tmp_path, isolated_home):
     orchestrator = _orchestrator(tmp_path, FakeTeamClient())
 
     steps = orchestrator.parse_plan(
@@ -38,8 +58,7 @@ def test_orchestrator_parses_steps_and_review_output(tmp_path, monkeypatch):
     )
 
 
-def test_orchestrator_retries_empty_planner_reply(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+def test_orchestrator_retries_empty_planner_reply(tmp_path, isolated_home):
     client = EmptyPlannerThenRepairClient()
     orchestrator = _orchestrator(tmp_path, client)
 
@@ -63,8 +82,7 @@ def test_orchestrator_retries_empty_planner_reply(tmp_path, monkeypatch):
     assert "Task B result" in text
 
 
-def test_orchestrator_repairs_prose_reviewer_reply(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+def test_orchestrator_repairs_prose_reviewer_reply(tmp_path, isolated_home):
     client = ProseReviewerClient()
     orchestrator = _orchestrator(tmp_path, client)
 
@@ -89,8 +107,7 @@ def test_orchestrator_repairs_prose_reviewer_reply(tmp_path, monkeypatch):
     assert "Task B result" in text
 
 
-def test_orchestrator_runs_independent_workers_in_parallel(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+def test_orchestrator_runs_independent_workers_in_parallel(tmp_path, isolated_home):
     client = ParallelTeamClient()
     orchestrator = _orchestrator(tmp_path, client)
 
@@ -116,8 +133,7 @@ def test_orchestrator_runs_independent_workers_in_parallel(tmp_path, monkeypatch
     assert done["total_turns"] == 5
 
 
-def test_orchestrator_parses_nested_plan_worker_mode(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+def test_orchestrator_parses_nested_plan_worker_mode(tmp_path, isolated_home):
     orchestrator = _orchestrator(tmp_path, FakeTeamClient())
 
     steps = orchestrator.parse_plan(
@@ -132,8 +148,7 @@ def test_orchestrator_parses_nested_plan_worker_mode(tmp_path, monkeypatch):
     )
 
 
-def test_subagent_can_delegate_its_task_to_plan_execute(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+def test_subagent_can_delegate_its_task_to_plan_execute(tmp_path, monkeypatch, isolated_home):
     config = load_config(project_root=tmp_path)
     registry = ToolRegistry()
     worker = SubAgent(
@@ -164,8 +179,7 @@ def test_subagent_can_delegate_its_task_to_plan_execute(tmp_path, monkeypatch):
     assert result.turns == 3
 
 
-def test_subagent_plan_depth_is_bounded(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+def test_subagent_plan_depth_is_bounded(tmp_path, isolated_home):
     worker = SubAgent(
         name="worker-plan",
         role=AgentRole.WORKER,
@@ -184,8 +198,7 @@ def test_subagent_plan_depth_is_bounded(tmp_path, monkeypatch):
     assert "depth limit" in result.content
 
 
-def test_reviewer_rejection_after_retry_marks_step_failed(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+def test_reviewer_rejection_after_retry_marks_step_failed(tmp_path, isolated_home):
     orchestrator = _orchestrator(tmp_path, FakeTeamClient())
     orchestrator.max_retries_per_step = 1
     steps = [ExecutionStep("step_1", "implement", "ANALYSIS", [])]

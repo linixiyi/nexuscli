@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,6 +11,23 @@ from nexuscli.config import load_config
 from nexuscli.plan import ExecutionPlan, Planner, Task, TaskType
 from nexuscli.tools import ToolRegistry, get_builtin_tools
 from nexuscli.types import Message
+
+
+@pytest.fixture
+def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirect Path.home() into a temp home.
+
+    Plan runs now write graph checkpoints under ``~/.nexuscli/plan_runs`` (and
+    pre/post-turn snapshots already go to ``~/.nexuscli/snapshots``), so a
+    HOME-only patch leaks onto the real home on Windows, where Path.home()
+    reads USERPROFILE. Triple patch, mirroring tests/test_background.py.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    return home
 
 
 def test_execution_plan_exposes_dag_batches():
@@ -116,8 +134,27 @@ def test_planner_reports_raw_output_after_persistent_prose():
     assert client.calls == 2
 
 
-def test_plan_execute_runs_independent_tasks_in_parallel(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+def test_plan_ids_are_unique_within_the_same_millisecond():
+    """Checkpoints are filed by plan id, so ids must be unique keys.
+
+    Two plans created in the same millisecond tick (parallel team workers, or
+    two same-tick minimal plans) used to share a bare timestamp id and the
+    later checkpoint silently overwrote the earlier one.
+    """
+    planner = Planner(FakeClient())
+    raw = (
+        '{"summary":"s","tasks":[{"id":"a","description":"A","type":"COMMAND","dependencies":[]}]}'
+    )
+
+    plan_a = planner.parse_plan("demo", raw)
+    plan_b = planner.parse_plan("demo", raw)
+
+    assert plan_a.id != plan_b.id
+    assert plan_a.id.startswith("plan_")
+    assert "/" not in plan_a.id and "\\" not in plan_a.id
+
+
+def test_plan_execute_runs_independent_tasks_in_parallel(tmp_path, isolated_home):
     client = ParallelPlanClient()
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())

@@ -8,6 +8,7 @@ from nexuscli.policy.permission_rules import (
     evaluate_permissions,
     parse_rule,
 )
+from nexuscli.policy.sandbox import sanitize_environment
 
 __all__ = [
     "AuditLog",
@@ -18,4 +19,5 @@ __all__ = [
     "evaluate_permissions",
     "is_readonly_bash_command",
     "parse_rule",
+    "sanitize_environment",
 ]

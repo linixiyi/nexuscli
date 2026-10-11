@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -92,6 +93,8 @@ class McpClientManager:
         wrapped: list[Tool] = []
         for remote_tool in remote_tools:
             tool_name = str(remote_tool.name)
+            if not self._tool_registered(spec, tool_name):
+                continue
             local_name = f"mcp__{spec.name}__{tool_name}"
             schema = remote_tool.inputSchema or object_schema({})
             annotations = getattr(remote_tool, "annotations", None)
@@ -120,6 +123,22 @@ class McpClientManager:
                 )
             )
         return wrapped
+
+    @staticmethod
+    def _tool_registered(spec: McpServerSpec, tool_name: str) -> bool:
+        """Whether a remote tool passes this server's per-tool filters.
+
+        ``allowed_tools`` is a whitelist and takes priority: when it is
+        non-empty, a tool must match at least one pattern. Otherwise, if
+        ``blocked_tools`` is non-empty, a matching tool is excluded. Patterns
+        match exactly by name or via fnmatch wildcards. With no filters
+        configured, every tool is registered (unchanged behavior).
+        """
+        if spec.allowed_tools:
+            return any(_tool_matches(pattern, tool_name) for pattern in spec.allowed_tools)
+        if spec.blocked_tools:
+            return not any(_tool_matches(pattern, tool_name) for pattern in spec.blocked_tools)
+        return True
 
     def _virtual_resource_tools(self, spec: McpServerSpec) -> list[Tool]:
         async def list_handler(payload: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -285,6 +304,10 @@ class McpClientManager:
             path = os.devnull
         with open(path, "a", encoding="utf-8") as handle:
             yield handle
+
+
+def _tool_matches(pattern: str, tool_name: str) -> bool:
+    return pattern == tool_name or fnmatch.fnmatchcase(tool_name, pattern)
 
 
 def _content_to_text(content: Any) -> str:

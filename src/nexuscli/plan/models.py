@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 
 class TaskType(StrEnum):
@@ -71,6 +72,36 @@ class Task:
         return all(
             dep_id in all_tasks and all_tasks[dep_id].status == TaskStatus.COMPLETED
             for dep_id in self.dependencies
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Hand-written serialization (slots dataclass): StrEnum fields by ``.value``."""
+        return {
+            "id": self.id,
+            "description": self.description,
+            "type": self.type.value,
+            "dependencies": list(self.dependencies),
+            "dependents": list(self.dependents),
+            "status": self.status.value,
+            "result": self.result,
+            "error": self.error,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Task:
+        return cls(
+            id=str(data.get("id") or ""),
+            description=str(data.get("description") or ""),
+            type=_task_type_from(str(data.get("type") or TaskType.ANALYSIS.value)),
+            dependencies=[str(dep) for dep in (data.get("dependencies") or [])],
+            dependents=[str(dep) for dep in (data.get("dependents") or [])],
+            status=_task_status_from(str(data.get("status") or TaskStatus.PENDING.value)),
+            result=str(data.get("result") or ""),
+            error=str(data.get("error") or ""),
+            start_time=_float_field(data, "start_time"),
+            end_time=_float_field(data, "end_time"),
         )
 
 
@@ -184,3 +215,74 @@ class ExecutionPlan:
             f"首批任务：{first_batch}\n"
             f"最终汇总：{final_batch}"
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Hand-written serialization (slots dataclass): StrEnum fields by ``.value``.
+
+        ``_execution_order`` is derived state — recomputed by
+        :meth:`compute_execution_order` on restore, never serialized.
+        """
+        return {
+            "id": self.id,
+            "goal": self.goal,
+            "tasks": {task_id: task.to_dict() for task_id, task in self.tasks.items()},
+            "status": self.status.value,
+            "summary": self.summary,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ExecutionPlan:
+        plan = cls(
+            id=str(data.get("id") or ""),
+            goal=str(data.get("goal") or ""),
+        )
+        plan.summary = str(data.get("summary") or "")
+        plan.status = _plan_status_from(str(data.get("status") or PlanStatus.CREATED.value))
+        plan.start_time = _float_field(data, "start_time")
+        plan.end_time = _float_field(data, "end_time")
+        tasks = data.get("tasks")
+        # add_task re-wires dependents, so the graph edges survive restore.
+        for task_data in (tasks or {}).values() if isinstance(tasks, dict) else ():
+            if isinstance(task_data, dict):
+                plan.add_task(Task.from_dict(task_data))
+        plan.compute_execution_order()
+        return plan
+
+
+def _float_field(data: dict[str, Any], key: str, default: float = 0.0) -> float:
+    """Garbage numeric fields degrade to the default instead of raising."""
+    try:
+        return float(data.get(key) or 0.0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _task_type_from(value: str) -> TaskType:
+    try:
+        return TaskType(value)
+    except ValueError:
+        return TaskType.ANALYSIS
+
+
+def _task_status_from(value: str) -> TaskStatus:
+    try:
+        status = TaskStatus(value)
+    except ValueError:
+        return TaskStatus.PENDING
+    if status is TaskStatus.RUNNING:
+        # A crash inside a parallel apply window can persist RUNNING tasks.
+        # On restore nothing is actually running, and ``is_executable`` only
+        # accepts PENDING — a literal RUNNING restore would stall the plan
+        # forever (the loop would break into the "stalled" FAILED path).
+        # Normalize back to PENDING so resume re-executes the task.
+        return TaskStatus.PENDING
+    return status
+
+
+def _plan_status_from(value: str) -> PlanStatus:
+    try:
+        return PlanStatus(value)
+    except ValueError:
+        return PlanStatus.CREATED

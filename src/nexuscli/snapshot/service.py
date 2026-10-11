@@ -82,8 +82,15 @@ class SnapshotService:
             )
         return records[-limit:][::-1]
 
-    def restore(self, snapshot_ref: str) -> SnapshotRecord:
-        records = self.list(limit=200)
+    def resolve_ref(self, snapshot_ref: str, limit: int = 200) -> SnapshotRecord:
+        """Resolve a snapshot reference (1-based index, newest-first, or id).
+
+        Numeric references index into the newest-first list window (same order
+        ``/snapshot`` shows); anything else matches an exact snapshot id. Read
+        only — the read-only vfs view resolves through this method too, which
+        must never write the ``pre-restore`` snapshot that ``restore`` does.
+        """
+        records = self.list(limit=limit)
         record = None
         if snapshot_ref.isdigit():
             index = int(snapshot_ref) - 1
@@ -93,6 +100,10 @@ class SnapshotService:
             record = next((item for item in records if item.id == snapshot_ref), None)
         if not record:
             raise ValueError(f"snapshot not found: {snapshot_ref}")
+        return record
+
+    def restore(self, snapshot_ref: str) -> SnapshotRecord:
+        record = self.resolve_ref(snapshot_ref)
         if not record.path.is_dir():
             # Validate BEFORE wiping the workspace: a missing snapshot directory
             # must never leave the project emptied.

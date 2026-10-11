@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -58,8 +59,21 @@ class BackgroundTaskRegistry:
         # the kill signal, but status() must still report "stopped" for them.
         self._stopped: set[str] = set()
 
-    async def start(self, command: str, cwd: str | None = None) -> BackgroundTask:
-        """Spawn *command* and register it. Returns at once, never waits for it."""
+    async def start(
+        self,
+        command: str,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> BackgroundTask:
+        """Spawn *command* and register it. Returns at once, never waits for it.
+
+        *env* is the child's environment passed straight to the subprocess;
+        ``None`` keeps the historical behaviour of inheriting the parent's
+        full ``os.environ``. Callers that want the guard pass the dict built
+        by :func:`nexuscli.policy.sandbox.sanitize_environment` — the
+        registry itself holds no config, so the sanitization switch stays
+        with the caller.
+        """
         task_id = uuid.uuid4().hex[:12]
         output_dir = self._background_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -74,6 +88,7 @@ class BackgroundTaskRegistry:
                 cwd=cwd,
                 stdout=sink,
                 stderr=sink,
+                env=env,
             )
         task = BackgroundTask(
             task_id=task_id,

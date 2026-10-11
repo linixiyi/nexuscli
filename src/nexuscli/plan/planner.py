@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -114,7 +115,7 @@ class Planner:
         if not isinstance(task_nodes, list) or not task_nodes:
             raise ValueError("planner output did not contain a non-empty tasks/steps array")
 
-        plan = ExecutionPlan(id=f"plan_{int(time.time() * 1000)}", goal=goal)
+        plan = ExecutionPlan(id=_new_plan_id(), goal=goal)
         plan.summary = str(data.get("summary") or "")
         id_mapping: dict[str, str] = {}
 
@@ -150,6 +151,18 @@ class Planner:
         if not plan.compute_execution_order():
             raise ValueError("plan contains a cyclic dependency")
         return plan
+
+
+def _new_plan_id() -> str:
+    """Millisecond timestamp plus a random suffix so plan ids are unique keys.
+
+    Checkpoints are filed by plan id (``plan_runs/<id>.json``): a bare
+    timestamp collides when two planners finish in the same millisecond tick
+    (parallel team workers, or two same-tick minimal plans) and the later
+    checkpoint would silently overwrite the earlier one, pointing
+    ``/plan --resume`` at the wrong plan.
+    """
+    return f"plan_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
@@ -207,7 +220,7 @@ def _is_simple_goal(goal: str | None) -> bool:
 
 def _minimal_plan(goal: str) -> ExecutionPlan:
     normalized = goal.strip()
-    plan = ExecutionPlan(id=f"plan_{int(time.time() * 1000)}", goal=normalized)
+    plan = ExecutionPlan(id=_new_plan_id(), goal=normalized)
     plan.summary = f"直接执行简单任务：{normalized}"
     plan.add_task(Task(id="task_1", description=normalized, type=_infer_simple_type(normalized)))
     plan.compute_execution_order()

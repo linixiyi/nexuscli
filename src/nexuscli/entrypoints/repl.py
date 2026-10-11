@@ -470,8 +470,9 @@ async def _handle_slash(
         output = "\n".join(f"{r.path}:{r.line}: {r.snippet}" for r in results)
         console.print(output or "(no matches)")
     elif command == "/plan":
-        if not arg:
-            console.print("[red]Usage:[/red] /plan <task>")
+        plan_arg = arg.strip()
+        if not plan_arg:
+            console.print("[red]Usage:[/red] /plan <task> | /plan --resume <plan_id>")
         else:
             plan_agent = PlanExecuteAgent(
                 llm_client=agent.llm_client,
@@ -480,11 +481,22 @@ async def _handle_slash(
                 cwd=cwd,
                 approval_callback=agent.approval_callback,
             )
-            await _run_events(
-                plan_agent.run(arg),
-                RichRenderer(),
-                agent.llm_client.max_context_window,
-            )
+            if plan_arg.startswith("--resume"):
+                plan_id = plan_arg[len("--resume") :].strip()
+                if not plan_id:
+                    console.print("[red]Usage:[/red] /plan --resume <plan_id>")
+                else:
+                    await _run_events(
+                        plan_agent.run_resume(plan_id),
+                        RichRenderer(),
+                        agent.llm_client.max_context_window,
+                    )
+            else:
+                await _run_events(
+                    plan_agent.run(plan_arg),
+                    RichRenderer(),
+                    agent.llm_client.max_context_window,
+                )
     elif command == "/init":
         # Unlike /plan (which spawns a fresh PlanExecuteAgent), /init runs on
         # the current agent so the react loop and session context carry over.

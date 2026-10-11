@@ -70,6 +70,13 @@ class PolicyConfig:
     hitl_mode: str = "auto"
     path_guard_enabled: bool = True
     command_guard_enabled: bool = True
+    # When enabled (the default), bash / execute_command and background
+    # tasks hand the child a sanitized environment built by
+    # :func:`nexuscli.policy.sandbox.sanitize_environment` instead of the
+    # full os.environ, so secret-shaped variables (API keys, tokens,
+    # passwords) and NEXUSCLI_* internals are not visible to the model via
+    # a printed-environment command.
+    env_sanitization: bool = True
     command_blacklist: list[str] = field(
         default_factory=lambda: [
             "sudo",

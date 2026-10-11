@@ -4,6 +4,7 @@ from nexuscli.config import NexusCliConfig
 from nexuscli.mcp import McpClientManager
 from nexuscli.plugins import load_plugins
 from nexuscli.tools import ToolRegistry, get_builtin_tools
+from nexuscli.vfs import vfs_tools
 
 
 async def build_tool_registry(
@@ -20,6 +21,9 @@ async def build_tool_registry(
     load_plugins(cwd)
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
+    # Read-only snapshot views (vfs_ls / vfs_read): main-agent path only —
+    # subagents, sdk.py and mcp/server.py build their registries elsewhere.
+    registry.register_all(vfs_tools())
     manager: McpClientManager | None = None
     if config.features.mcp:
         manager = McpClientManager(cwd)

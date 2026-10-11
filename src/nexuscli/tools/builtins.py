@@ -5,7 +5,7 @@ import os
 from typing import Any
 
 from nexuscli.memory import MemoryManager
-from nexuscli.policy import CommandGuard
+from nexuscli.policy import CommandGuard, sanitize_environment
 from nexuscli.rag import CodeIndex, format_hit_stats
 from nexuscli.skill import SkillRegistry
 from nexuscli.snapshot import SnapshotService
@@ -606,15 +606,29 @@ async def _get_file_info(payload: dict[str, Any], context: ToolContext) -> ToolR
 # ---------------------------------------------------------------------------
 
 
+def _child_environment(context: ToolContext) -> dict[str, str]:
+    """Build the subprocess environment for a bash/background child.
+
+    With ``policy.env_sanitization`` on (the default) secret-shaped and
+    NEXUSCLI_* variables are stripped via
+    :func:`nexuscli.policy.sanitize_environment`; with it off the historical
+    full ``os.environ`` is handed over unchanged.
+    """
+    if not context.config.policy.env_sanitization:
+        return os.environ.copy()
+    return sanitize_environment()
+
+
 async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     command = str(payload["command"])
     if context.config.policy.command_guard_enabled:
         CommandGuard(context.config.policy.command_blacklist).validate(command)
+    child_env = _child_environment(context)
     if bool(payload.get("run_in_background")):
         # Background mode: spawn and hand back the task id at once — the
         # timeout budget does not apply, the turn must not block on the
         # process. Output lands in the task's log file on disk.
-        task = await background_registry.start(command, context.cwd)
+        task = await background_registry.start(command, context.cwd, env=child_env)
         return ToolResult(
             f"Started background task {task.task_id}. Output file: {task.output_path}. "
             "Use task_output/task_stop with this id.",
@@ -626,7 +640,7 @@ async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
         cwd=context.cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=os.environ.copy(),
+        env=child_env,
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)

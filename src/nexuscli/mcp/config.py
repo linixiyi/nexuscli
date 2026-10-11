@@ -39,6 +39,11 @@ class McpServerSpec:
     enabled: bool = True
     timeout: float = 30.0
     auth: McpAuthConfig | None = None
+    # Per-server tool filters. ``allowed_tools`` is a whitelist and wins over
+    # ``blocked_tools``; both support exact names and fnmatch wildcards. Empty
+    # lists mean no filtering (all remote tools registered, as before).
+    allowed_tools: list[str] = field(default_factory=list)
+    blocked_tools: list[str] = field(default_factory=list)
 
 
 def load_mcp_server_specs(project_root: str | Path) -> dict[str, McpServerSpec]:
@@ -123,7 +128,23 @@ def _spec_from_raw(name: str, raw: dict[str, Any], project_root: Path) -> McpSer
         enabled=bool(raw.get("enabled", True)),
         timeout=float(raw.get("timeout", raw.get("startup_timeout", 30.0)) or 30.0),
         auth=_auth_from_raw(raw.get("auth"), project_root),
+        allowed_tools=_tool_filter_list(raw.get("allowed_tools")),
+        blocked_tools=_tool_filter_list(raw.get("blocked_tools")),
     )
+
+
+def _tool_filter_list(value: Any) -> list[str]:
+    """Parse an ``allowed_tools``/``blocked_tools`` config value.
+
+    Only a real list (or tuple) is accepted — anything else, most notably a
+    plain string, means "not configured" and degrades to no filtering. A bare
+    string must not be iterated: ``"echo"`` would become the whitelist
+    ``["e", "c", "h", "o"]``, silently hiding every remote tool on the server
+    with no error at all.
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(item) for item in value]
 
 
 def _auth_from_raw(raw: Any, project_root: Path) -> McpAuthConfig | None:

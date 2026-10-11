@@ -9,7 +9,7 @@ from typing import Any
 from nexuscli.agent.query import query
 from nexuscli.config import NexusCliConfig
 from nexuscli.llm.base import LlmClient
-from nexuscli.plan import ExecutionPlan, Planner, Task, TaskStatus
+from nexuscli.plan import ExecutionPlan, PlanCheckpointStore, Planner, Task, TaskStatus
 from nexuscli.prompt import PromptAssembler
 from nexuscli.skill import SkillContextBuffer
 from nexuscli.snapshot import SnapshotService
@@ -41,6 +41,7 @@ class PlanExecuteAgent:
         approval_callback=None,
         planner: Planner | None = None,
         max_task_turns: int = 8,
+        checkpoint_store: PlanCheckpointStore | None = None,
     ):
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -49,12 +50,21 @@ class PlanExecuteAgent:
         self.approval_callback = approval_callback
         self.planner = planner or Planner(llm_client)
         self.max_task_turns = max_task_turns
+        # Checkpointing is on by default (store injectable for tests); team
+        # workers that assemble this agent inherit it without any changes.
+        self.checkpoint_store = checkpoint_store or PlanCheckpointStore()
         self.history: list[Message] = []
+        self._interrupt_requested = asyncio.Event()
+
+    def request_interrupt(self) -> None:
+        """Ask the execution loop to stop cooperatively between batches."""
+        self._interrupt_requested.set()
 
     async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
         snapshot = SnapshotService(self.cwd)
         with suppress(Exception):
             snapshot.create("pre-turn")
+        self._interrupt_requested.clear()
         total_usage = Usage()
         total_turns = 0
         final_text = ""
@@ -71,6 +81,12 @@ class PlanExecuteAgent:
                 yield event
             if plan is None:
                 raise ValueError("planner did not produce an execution plan")
+            self._save_checkpoint(plan)
+            yield {"type": "plan_checkpointed", "plan_id": plan.id}
+            yield {
+                "type": "text_delta",
+                "text": f"（checkpoint 已保存：{plan.id}，可用 /plan --resume {plan.id} 续跑）\n\n",
+            }
             yield {"type": "text_delta", "text": plan.summarize() + "\n\n"}
             async for event in self._execute_plan(plan):
                 if event.get("type") == "usage":
@@ -104,11 +120,73 @@ class PlanExecuteAgent:
             done["cost"] = costs
         yield done
 
+    async def run_resume(self, plan_id: str) -> AsyncIterator[dict[str, Any]]:
+        """Resume a checkpointed plan: skip planning, re-enter execution.
+
+        The plan is restored from the checkpoint store; completed tasks keep
+        their stored results, and ``executable_tasks()`` only hands out the
+        remaining PENDING tasks, so the while-loop below picks up exactly
+        where the interrupted run stopped.
+        """
+        self._interrupt_requested.clear()
+        plan = self.checkpoint_store.load(plan_id)
+        if plan is None:
+            yield {
+                "type": "error",
+                "error": ValueError(f"no plan checkpoint found for id {plan_id!r}"),
+            }
+            return
+        total_usage = Usage()
+        total_turns = 0
+        final_text = ""
+        try:
+            yield {"type": "text_delta", "text": f"恢复计划 {plan.id}：{plan.summarize()}\n\n"}
+            async for event in self._execute_plan(plan):
+                if event.get("type") == "usage":
+                    total_usage = total_usage + Usage.from_mapping(event.get("usage") or {})
+                elif event.get("type") == "plan_task_done":
+                    total_turns += int(event.get("turns") or 0)
+                    continue
+                elif event.get("type") == "text_delta":
+                    final_text += str(event.get("text") or "")
+                yield event
+        except Exception as exc:  # noqa: BLE001 - same error-event contract as run()
+            yield {"type": "error", "error": exc}
+            return
+        done: dict[str, Any] = {
+            "type": "done",
+            "total_turns": total_turns,
+            "total_tokens": total_usage.total_tokens,
+            "usage": total_usage.to_dict(),
+            "messages": self.history,
+        }
+        costs = _calculate_costs(self.llm_client, total_usage)
+        if costs:
+            done["cost"] = costs
+        yield done
+
+    def _save_checkpoint(self, plan: ExecutionPlan) -> None:
+        """Persist plan state; a checkpoint failure must never kill the run."""
+        with suppress(Exception):
+            self.checkpoint_store.save(plan)
+
     async def _execute_plan(self, plan: ExecutionPlan) -> AsyncIterator[dict[str, Any]]:
         yield {"type": "text_delta", "text": "开始执行计划……\n\n"}
         yield {"type": "plan_status", "phase": "execution"}
         plan.mark_started()
         while True:
+            if self._interrupt_requested.is_set():
+                # Cooperative stop between batches: the checkpoint already
+                # holds every finished task, so run_resume() picks up here.
+                self._save_checkpoint(plan)
+                yield {"type": "plan_interrupted", "plan_id": plan.id}
+                yield {
+                    "type": "text_delta",
+                    "text": (
+                        f"计划已中断并保存 checkpoint，可用 /plan --resume {plan.id} 续跑。\n\n"
+                    ),
+                }
+                return
             executable = _executable_tasks_in_order(plan)
             if not executable:
                 break
@@ -121,7 +199,7 @@ class PlanExecuteAgent:
                         yield event
                 if result is None:
                     raise RuntimeError(f"task {executable[0].id} did not produce a result")
-                async for event in self._apply_task_result(result):
+                async for event in self._apply_task_result(plan, result):
                     yield event
                 continue
             yield {
@@ -163,7 +241,7 @@ class PlanExecuteAgent:
                         turns=0,
                         error=RuntimeError(f"task {task.id} did not produce a result"),
                     )
-                async for event in self._apply_task_result(result):
+                async for event in self._apply_task_result(plan, result):
                     yield event
 
         if plan.has_failed():
@@ -178,8 +256,15 @@ class PlanExecuteAgent:
                 "type": "text_delta",
                 "text": "计划已停滞，因为任务依赖未满足。\n\n",
             }
+        # Terminal state is checkpointed too, so a finished plan's store entry
+        # reflects completion instead of a stale mid-run snapshot.
+        self._save_checkpoint(plan)
 
-    async def _apply_task_result(self, result: TaskRunResult) -> AsyncIterator[dict[str, Any]]:
+    async def _apply_task_result(
+        self,
+        plan: ExecutionPlan,
+        result: TaskRunResult,
+    ) -> AsyncIterator[dict[str, Any]]:
         if result.error:
             result.task.mark_failed(str(result.error))
             yield {"type": "text_delta", "text": f"失败 [{result.task.id}]：{result.error}\n\n"}
@@ -189,6 +274,9 @@ class PlanExecuteAgent:
                 "type": "text_delta",
                 "text": f"已完成 [{result.task.id}]：{_preview(result.text)}\n\n",
             }
+        # Checkpoint right after the task state is mutated, before the events
+        # reach consumers: an interrupted run never replays a finished task.
+        self._save_checkpoint(plan)
         # Failed tasks still consumed tokens and turns — always report accounting.
         yield {
             "type": "usage",

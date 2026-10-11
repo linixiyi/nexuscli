@@ -29,6 +29,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - [交互命令](#-交互命令)
 - [内置工具](#-内置工具)
 - [Plan 模式](#-plan-模式)
+- [Plan-and-Execute 检查点与续跑](#-plan-and-execute-检查点与续跑)
 - [Skill 匹配与沉淀](#-skill-匹配与沉淀)
 - [记忆、动态 Prompt 与上下文压缩](#-记忆动态-prompt-与上下文压缩)
 - [代码索引与检索](#-代码索引与检索)
@@ -66,8 +67,8 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - 交互式终端 Agent，基于 Rich 和 prompt-toolkit 渲染；也支持单次 prompt 模式，适合脚本、管道和自动化调用
 - ReAct 工具调用循环，支持 thinking、tool call、tool result、final output 和 usage 事件
 - 工具循环调用检测：同一工具以完全相同的参数连续重复达到阈值（`agent.loop_detection_threshold`，默认 3，0 关闭）时拦截该次调用并注入换策略提示；提示后仍重复则终止该回合并输出 warning
-- Plan-and-Execute 模式：独立 Planner 生成 DAG，按依赖批次并行执行任务
-- Multi-Agent 协作模式：Planner、Worker、Reviewer、依赖调度、并行 worker、review 重试，以及可切换到独立 Plan-and-Execute 的子 Agent
+- Plan-and-Execute 模式：独立 Planner 生成 DAG，按依赖批次并行执行任务；图级 checkpoint 默认开启，支持跨进程续跑（`/plan --resume`）与协作式中断（详见 [Plan-and-Execute 检查点与续跑](#-plan-and-execute-检查点与续跑)）
+- Multi-Agent 协作模式：Planner、Worker、Reviewer、依赖调度、并行 worker、review 重试，以及可切换到独立 Plan-and-Execute 的子 Agent（team worker 天然继承 plan 的 checkpoint 能力）
 
 ### 模型与上下文
 
@@ -81,7 +82,8 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - 内置文件、Shell、grep、glob、记忆、网页搜索、网页抓取、代码搜索等工具
 - 写文件/编辑 .py 文件后自动 py_compile 语法诊断，错误就地回传给模型（详见内置工具）
 - bash / execute_command 支持 `run_in_background` 后台执行：立即返回任务 id 与落盘输出文件路径，`task_output` 读取尾部输出、`task_stop` 终止任务
-- MCP client，支持 stdio 和 Streamable HTTP MCP server；附 Chrome DevTools MCP 配置助手
+- 只读快照视图工具 `vfs_ls` / `vfs_read`：把任意历史快照挂载为只读虚拟文件系统，改前改后对比无需回滚工作区（详见[内置工具](#-内置工具)）
+- MCP client，支持 stdio 和 Streamable HTTP MCP server；每个 server 可配 `allowed_tools` / `blocked_tools` 做工具级过滤（精确名或 fnmatch 通配，allowed 优先）；附 Chrome DevTools MCP 配置助手
 - NexusCLI 自身也可以作为 MCP server 暴露内置工具
 - Skill 系统：builtin / user / project 分层（并扫描 Agent Skills 规范标准目录 `~/.agents/skills` 与 `.agents/skills`）、输入 Top-K 匹配、`load_skill` 当前回合懒加载、规范 frontmatter 字段 `allowed-tools` / `disable-model-invocation`（提示性/仅挡自动候选，见下文），以及经 HITL 确认的 `save_skill` 流程沉淀
 - 自定义斜杠命令：把 markdown 提示词放进 `~/.nexuscli/commands/` 或项目 `.nexuscli/commands/` 即可扩展 REPL 与 `-p` 模式；frontmatter 支持 `mode` / `allowed-tools` / `argument-hint`，正文可用 `$1..$9` 位置参数与 `` !`cmd` `` 输出注入
@@ -101,6 +103,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 ### 安全与治理
 
 - HITL 人工确认、命令/路径安全策略和 JSONL 审计日志
+- 子进程环境清洗护栏：`bash` 与后台任务派生把清洗后的环境传给子进程（剔除 KEY/SECRET/TOKEN/PASSWORD/CREDENTIAL/PRIVATE_KEY 形态与 `NEXUSCLI_*` 变量，保留 PATH/HOME 等运行必需键），`policy.env_sanitization` 开关默认开启。**如实边界：这是护栏不是沙箱**——只清洗两个 agent 面的 spawn 点，MCP stdio server、hooks runner 与 slash 命令注入路径未清洗；OS 级沙箱（容器/受限令牌）是更大的外部依赖，挂账（见 [docs/permissions.md](docs/permissions.md)）
 - 审批弹窗四档决策：`y` 放行一次、`r` run 级授权（本次 agent run 内同工具免再弹，首按记 `hitl`、后续放行记 `run-scope`）、`a` 切 auto、`s` 跳过、`n` 拒绝
 - 权限规则：config.json 里声明 `permissions.allow / deny / ask`，按 deny > ask > allow 在 HITL 之前评估
 - Hooks 生命周期钩子：`SessionStart / UserPromptSubmit / PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop` 七个事件可挂 shell 命令，exit 2 或输出 JSON 即可阻断/追问；工作区级 hooks 经 sha256 指纹信任确认后才会生效
@@ -302,6 +305,7 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 /index [path]
 /search <query>
 /plan <task>
+/plan --resume <plan_id>
 /team <task>
 /team --plan <task>
 /model
@@ -367,6 +371,7 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 | 子代理 | `task`（支持 `run_in_background`） |
 | 子代理邮箱 | `mailbox_post` · `mailbox_read`（仅子代理注册表可见） |
 | 会话 | `revert_turn` |
+| 快照视图 | `vfs_ls` · `vfs_read`（只读快照挂载） |
 
 写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作，会经过 policy、HITL 和 audit 处理。`save_skill` 也必须经过 HITL；模型可以提议沉淀，但不会静默改变后续行为。
 
@@ -376,6 +381,7 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 - `grep` 对目录搜索先探测 PATH 上的 rg：命中则由 rg 子进程加速并映射回同一 `路径:行号: 内容` 格式，rg 缺失或失败时回退纯 Python 扫描。已知语义差异：rg 会跳过二进制文件，纯 Python 路径以 `errors="ignore"` 读取一切，文本文件结果一致。
 - `task` 的 `run_in_background: true` 立即返回后台任务 id 与落盘报告路径（`~/.nexuscli/bg-subagents/<task_id>.md`），不阻塞当前回合；回合结束时 REPL 会把**已**完成的后台子代理一次性播报给用户（`[bg-subagent] completed/failed ...`，不进入模型上下文）。后台子代理是进程内状态：未完成任务随 REPL 退出而终止，已完成的报告文件保留在磁盘上；`task_stop` 可终止仍在跑的后台子代理（状态记为 `stopped`，不再回播），对已到终态的任务是 no-op。
 - `mailbox_post` / `mailbox_read` 是子代理之间的文件邮箱（`<cwd>/.nexuscli/mailbox/<run>/<agent>.jsonl`；run id 取 REPL 会话启动时盖的 12 位 uuid 戳，会话内 `/fork`、`/resume` 只换 writer、不重盖）：发送方由工具闭包绑定、不可伪造，`mailbox_read` 读即消费（清空收件箱）。这两个工具只注册在子代理的工具集中，主代理永远看不到。
+- `vfs_ls` / `vfs_read` 把历史快照挂载为只读虚拟文件系统（逻辑路径 `/` 即快照根），snapshot 引用接受与 `/restore` 相同的 id 或 1-based 序号。**只读是结构保证**：视图类上不存在任何写/改/删方法，路径解析强制 resolve 后留在快照根内（`..` 链与盘符/UNC 真实绝对路径一律拒绝）。`vfs_read` 与工作区 `read_file` 语义一致（整文件读取 + 行窗口，无快照专属大小上限）——快照创建时已剔除 `build`/`dist`/`node_modules` 等目录。如实边界：这两个工具只注册进主 agent 的工具表；子代理（自建 registry）、SDK 与 `mcp serve` 路径不经由它们暴露——全路径接入挂账。可写视图、多快照 diff 与审计层均未做。
 
 交互模式下按 `Shift+Tab` 可在三种会话权限模式间循环切换（详见 [Plan 模式](#-plan-模式)）：
 
@@ -393,6 +399,23 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 - 被拒绝的调用不产生审批决策、不写审计、不触发 Hooks
 
 典型用法：先切到 plan 态让 Agent 只读地调研并给出方案，审阅满意后再切回 Default 让它落地执行。
+
+## 🧭 Plan-and-Execute 检查点与续跑
+
+`/plan`（Plan-and-Execute 模式）与 team 的嵌套 plan worker 默认开启**图级 checkpoint**：Planner 产出计划后、每个任务执行完成后、计划到达终态（完成/失败/停滞）后各落盘一次，文件在 `~/.nexuscli/plan_runs/<plan_id>.json`（原子写入；checkpoint 写失败不杀运行）。plan id 带毫秒时间戳 + 随机后缀，保证并行 worker 同时产出计划也不会互相覆盖。
+
+中断后续跑：
+
+```text
+/plan --resume <plan_id>     # 跳过规划，直接从 checkpoint 续跑剩余任务
+```
+
+- 续跑只执行 PENDING 任务：已完成任务的结果从 checkpoint 原样保留并注入后续任务的上下文，**不会重复烧 token**；崩溃窗口内被持久化为 RUNNING 的任务在恢复时自动归一化为 PENDING 重新执行。
+- checkpoint 存储对 plan id 做文件名安全校验（拒绝路径分隔符与 `..` 链），未知/损坏/非法 id 一律按「未找到」降级，不抛异常。
+
+**协作式中断**：`PlanExecuteAgent.request_interrupt()` 置位后，执行循环在**批次之间**停机并落盘，产出 `plan_interrupted` 事件与续跑提示。如实边界：批内已派发的任务会跑完（检查点在批次间）；该 API 目前是 agent 编程接口，REPL 的 `Ctrl+C` 仍是中止回合而非协作式中断，team worker 侧的 interrupt 接线挂账。
+
+**如实边界**：checkpoint JSON 以明文保存任务结果全文，普通 `/plan` 运行也会留下文件，目前**没有 TTL/容量清理**（体积敏感时手动清理 `~/.nexuscli/plan_runs`）；resume 语义是重入中断的运行而非新会话轮——不写入会话历史、不做 pre/post-turn 快照；`/workflow`（JSON 步骤图）与 plan 模式（Shift+Tab 只读态）是另外两套机制，均无断点续跑语义。
 
 ## 🎯 Skill 匹配与沉淀
 
@@ -486,6 +509,8 @@ NexusCLI 可以连接 MCP server，并把远端工具动态注册为 `mcp__<serv
 
 HTTP 类 MCP server 支持 OAuth 2.0 授权码 + PKCE（public client）：在 `mcp.json` 的 server 条目里加 `auth` 段声明 `client_id` / `authorize_url` / `token_url` / `redirect_uri` / `scopes`，请求时会自动附 `Authorization: Bearer` 头，遇 401 用 refresh_token 自动刷新并重试一次；令牌只落盘在权限 0600 的 `~/.nexuscli/mcp-oauth.json`。如实说明：本切片提供的是令牌原语（PKCE 生成、换码、刷新、存储）与自动续期，**不含**交互式浏览器授权流程——首个 access token 需在 NexusCLI 之外完成授权换取后写入令牌文件。
 
+每个 server 还可做**工具级过滤**：`allowed_tools`（白名单，优先）或 `blocked_tools`（黑名单），支持精确名与 fnmatch 通配（如 `"search*"`），两个列表都必须是 JSON 数组——写错类型（如误写成字符串）按未配置处理、不过滤，不会静默吞掉工具。过滤只作用于远端工具；该 server 的 virtual resource/prompt 工具始终注册，全部远端工具被过滤时不报错。不配置时行为与从前完全一致。详见 [docs/mcp.md](docs/mcp.md)。
+
 `mcp init-chrome` 配置助手、remote-debugging 连接、OAuth 字段说明、`mcp list` 与 HTTP smoke 的完整说明见 [docs/mcp.md](docs/mcp.md)。
 
 ## 📡 Runtime API
@@ -527,6 +552,8 @@ REPL 中可以使用：
 /restore 1
 /snapshot clean
 ```
+
+Agent 侧也可以经 `vfs_ls` / `vfs_read` 把快照挂载为只读视图做改前对比，无需整体 `restore`（见[内置工具](#-内置工具)）。
 
 ## 💾 会话与恢复
 
