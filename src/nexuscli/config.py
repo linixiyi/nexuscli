@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import subprocess
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
@@ -183,6 +185,20 @@ class AgentConfig:
 
 
 @dataclass(slots=True)
+class WorkflowConfig:
+    """Parallel dispatch for /workflow and /expert step graphs.
+
+    ``max_parallel_steps`` is how many ready steps the scheduler dispatches
+    concurrently per dependency batch; ``1`` degrades to today's serial
+    behaviour. At load time values are clamped to at least 1 (0 or a negative
+    number would deadlock the scheduler — a batch of zero steps never
+    completes anything; see :func:`_dict_to_workflow`).
+    """
+
+    max_parallel_steps: int = 3
+
+
+@dataclass(slots=True)
 class TelemetryConfig:
     """OpenTelemetry spans for the llm.chat / tool.call paths.
 
@@ -208,6 +224,7 @@ class NexusCliConfig:
     prompt: PromptConfig = field(default_factory=PromptConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
@@ -241,6 +258,10 @@ def load_config(
     config = _dict_to_config(data)
     config.memory.long_term_db_path = _expand_home(config.memory.long_term_db_path)
     config.policy.audit_log_path = _expand_home(config.policy.audit_log_path)
+    if config.llm.api_key.startswith("!"):
+        # pi-compatible ``!command`` form: pull the key from the system
+        # secret manager at load time instead of storing it in plaintext.
+        config.llm.api_key = _resolve_api_key_command(config.llm.api_key)
     return config
 
 
@@ -249,6 +270,53 @@ def get_config_paths(project_root: str | Path | None = None) -> list[Path]:
     if project_root:
         paths.append(Path(project_root).resolve() / ".nexuscli" / "config.json")
     return paths
+
+
+# Upper bound for one api_key resolution command; a hung secret manager must
+# not stall the CLI start for minutes.
+_API_KEY_COMMAND_TIMEOUT = 10.0
+
+
+def _resolve_api_key_command(value: str) -> str:
+    """Resolve an ``!command`` api_key into the secret the command prints.
+
+    pi-compatible ``!command`` form: ``"!op read My-Key"`` in config.json
+    pulls the key from the system secret manager at load time instead of
+    storing it in plaintext. The first stdout line (stripped) is the key;
+    stderr is ignored.
+
+    The command is parsed with ``shlex.split`` and executed WITHOUT a shell,
+    so shell features (pipes, env expansion, globs) and Windows backslash
+    paths are not supported — the value must be a plain ``executable arg...``
+    sequence. That is enough for secret-manager CLIs and keeps this
+    config-driven subprocess to argument-level control only: the string is
+    never handed to a shell interpreter.
+
+    Failures — unparsable command, missing binary, timeout, empty output —
+    degrade to an empty key instead of raising, so one broken entry cannot
+    prevent the CLI from starting; the agent then reports its normal
+    "LLM API key is not configured" error. The key itself is never logged.
+    """
+    command = value[1:].strip()
+    if not command:
+        return ""
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return ""
+    if not argv:
+        return ""
+    try:
+        completed = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=_API_KEY_COMMAND_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = completed.stdout.strip().splitlines()
+    return lines[0].strip() if lines else ""
 
 
 def config_to_public_dict(config: NexusCliConfig) -> dict[str, Any]:
@@ -456,8 +524,30 @@ def _dict_to_config(data: dict[str, Any]) -> NexusCliConfig:
         prompt=PromptConfig(**_filter_known(data.get("prompt", {}), PromptConfig)),
         features=FeatureConfig(**_filter_known(data.get("features", {}), FeatureConfig)),
         agent=_dict_to_agent(data.get("agent")),
+        workflow=_dict_to_workflow(data.get("workflow")),
         telemetry=TelemetryConfig(**_filter_known(data.get("telemetry", {}), TelemetryConfig)),
     )
+
+
+def _dict_to_workflow(raw: Any) -> WorkflowConfig:
+    """Parse the ``workflow`` config section, clamping bad values.
+
+    ``max_parallel_steps`` is clamped to at least 1 — a zero batch would stall
+    the scheduler forever — while non-numeric values fall back to the default
+    instead of raising, so one bad entry cannot prevent the CLI from starting
+    (same stance as :func:`_dict_to_agent`).
+    """
+    if not isinstance(raw, dict):
+        return WorkflowConfig()
+    fields = _filter_known(raw, WorkflowConfig)
+    default = WorkflowConfig()
+    try:
+        fields["max_parallel_steps"] = max(
+            1, int(fields.get("max_parallel_steps", default.max_parallel_steps))
+        )
+    except (TypeError, ValueError):
+        fields["max_parallel_steps"] = default.max_parallel_steps
+    return WorkflowConfig(**fields)
 
 
 def _dict_to_agent(raw: Any) -> AgentConfig:

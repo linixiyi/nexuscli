@@ -17,8 +17,10 @@ background-notifications.ts):
   disk and remain readable (best-effort persistence — the write happens at
   completion time, not on shutdown). No notification persistence, no session
   ledger, no cross-session recovery.
-- No cancellation: ``task_stop`` is not extended to background subagents in
-  this slice; the depth limit already bounds runaway delegation.
+- Cancellation: :meth:`BgSubagentRegistry.stop` cancels the wrapper task and
+  publishes a ``stopped`` result; the ``task_stop`` tool routes ids it cannot
+  find in the bash registry here. Still process-local: nothing survives the
+  REPL exiting on its own.
 - No mid-turn steering: completion notices are printed to the user only and
   are not injected into the model context (ZCode feeds them back to the
   model).
@@ -41,7 +43,7 @@ from typing import Literal
 from nexuscli.agent.subagent import AgentDefinition, run_subagent
 from nexuscli.tools.base import ToolContext
 
-BgSubagentStatus = Literal["running", "completed", "failed"]
+BgSubagentStatus = Literal["running", "completed", "failed", "stopped"]
 
 
 @dataclass(slots=True)
@@ -119,16 +121,62 @@ class BgSubagentRegistry:
         except Exception as exc:  # a background task must not interrupt the turn
             message = str(exc).strip() or exc.__class__.__name__
             error = message.splitlines()[0]
-            self._results[task_id] = BgSubagentResult(status="failed", report="", error=error)
+            self._publish(task_id, BgSubagentResult(status="failed", report="", error=error))
             note = f"Background subagent task {task_id} failed.\nerror: {error}\n"
         else:
-            self._results[task_id] = BgSubagentResult(status="completed", report=report)
+            self._publish(task_id, BgSubagentResult(status="completed", report=report))
             note = report
         # Best-effort report file: an unwritable home must not break the task.
         if entry is not None:
-            with suppress(OSError):
-                self._bg_dir().mkdir(parents=True, exist_ok=True)
-                entry.report_path.write_text(note, encoding="utf-8")
+            self._write_report(entry, note)
+
+    async def stop(self, task_id: str) -> BgSubagentStatus | None:
+        """Cancel a running background subagent; return its resulting status.
+
+        ``None`` means the id is unknown to this registry. A task that already
+        reached a terminal state keeps that state — stopping is a no-op there.
+        ``asyncio.Task.cancel()`` raises ``CancelledError`` (a ``BaseException``)
+        inside :meth:`_run`, whose ``except Exception`` does not catch it, so a
+        cancelled run can never publish a misleading ``completed``/``failed``
+        result behind our back; the ``stopped`` result is published here once
+        the coroutine has actually unwound.
+        """
+        entry = self._tasks.get(task_id)
+        if entry is None:
+            return None
+        if self._results.get(task_id) is not None:
+            return self._results[task_id].status
+        entry.task.cancel()
+        try:
+            await entry.task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 - the task never escapes its own wrapper
+            pass
+        # Race seam: the task may have completed between the terminal check and
+        # the cancellation taking effect — its own result wins over "stopped".
+        if self._results.get(task_id) is not None:
+            return self._results[task_id].status
+        self._publish(
+            task_id,
+            BgSubagentResult(status="stopped", report="", error="stopped by task_stop"),
+        )
+        self._write_report(entry, f"Background subagent task {task_id} stopped.\n")
+        return "stopped"
+
+    def _publish(self, task_id: str, result: BgSubagentResult) -> None:
+        """Cache a terminal result; a stop forgets it from the announcement set."""
+        self._results[task_id] = result
+        if result.status == "stopped":
+            # A stopped task is user-acknowledged at stop time; it must not
+            # reappear in the next end-of-turn announcement.
+            self._notified.add(task_id)
+
+    def _write_report(self, entry: BgSubagentTask, note: str) -> None:
+        """Best-effort report file write: an unwritable home must not break the task."""
+        with suppress(OSError):
+            self._bg_dir().mkdir(parents=True, exist_ok=True)
+            entry.report_path.write_text(note, encoding="utf-8")
 
     def status(self, task_id: str) -> BgSubagentStatus | None:
         result = self._results.get(task_id)

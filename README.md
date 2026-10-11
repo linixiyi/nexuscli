@@ -13,7 +13,7 @@
 
 ---
 
-NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路径有测试覆盖，也经过本地 smoke 和真实终端运行验证。
+NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路径有测试覆盖，也经过本地 smoke 和真实终端运行验证。最近一轮外围真实 LLM 冒烟全部通过：team 模式多 worker 协作（真实 token 消耗与两个 worker 迹象）、`mcp serve --transport http` 的 tools/list 返回完整工具表、`serve --http` 的 Runtime API 带 key 200 / 错 key 401；本地网关模型未配 `llm.prices` 时 cost 为 0 属预期（见[模型、Token 与费用](#-模型token-与费用)）。
 
 > 第一次部署？看 [TUTORIAL.md](TUTORIAL.md)：从安装依赖、配置模型 API 到第一次跑通 Agent 任务的完整运行教程。
 
@@ -72,7 +72,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 ### 模型与上下文
 
 - OpenAI-compatible 流式 LLM 客户端，默认面向 DeepSeek 配置，支持 `DEEPSEEK_API_KEY` 等 provider-specific API Key
-- 上下文预算与压缩：达到可用输入预算的 80% 后自动压缩旧轮次，保留近期消息和完整工具调用对；`/compact` 支持随时手动压缩并可指定保留重点
+- 上下文预算与压缩：达到可用输入预算的 80% 后自动压缩旧轮次，保留近期消息和完整工具调用对；`/compact` 支持随时手动压缩并可指定保留重点；provider 实报 context 超限时主循环自动压缩重试一次（见[记忆、动态 Prompt 与上下文压缩](#-记忆动态-prompt-与上下文压缩)）
 - 完整 usage、缓存命中/未命中 Token、reasoning Token 和可配置成本估算
 - 本地图片和远程图片输入，并根据模型能力自动降级
 
@@ -83,10 +83,10 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 - bash / execute_command 支持 `run_in_background` 后台执行：立即返回任务 id 与落盘输出文件路径，`task_output` 读取尾部输出、`task_stop` 终止任务
 - MCP client，支持 stdio 和 Streamable HTTP MCP server；附 Chrome DevTools MCP 配置助手
 - NexusCLI 自身也可以作为 MCP server 暴露内置工具
-- Skill 系统：builtin / user / project 分层、输入 Top-K 匹配、`load_skill` 当前回合懒加载，以及经 HITL 确认的 `save_skill` 流程沉淀
+- Skill 系统：builtin / user / project 分层（并扫描 Agent Skills 规范标准目录 `~/.agents/skills` 与 `.agents/skills`）、输入 Top-K 匹配、`load_skill` 当前回合懒加载、规范 frontmatter 字段 `allowed-tools` / `disable-model-invocation`（提示性/仅挡自动候选，见下文），以及经 HITL 确认的 `save_skill` 流程沉淀
 - 自定义斜杠命令：把 markdown 提示词放进 `~/.nexuscli/commands/` 或项目 `.nexuscli/commands/` 即可扩展 REPL 与 `-p` 模式；frontmatter 支持 `mode` / `allowed-tools` / `argument-hint`，正文可用 `$1..$9` 位置参数与 `` !`cmd` `` 输出注入
-- 子代理 `task` 工具：把自包含任务委派给独立子代理执行并回收报告，支持 `run_in_background` 后台执行与回合末完成播报，内置 `general-purpose` / `explore`，也支持 `.nexuscli/agents/*.md` 自定义代理；子代理之间可用 `mailbox_post` / `mailbox_read` 文件邮箱互发消息
-- 动态工作流：`/workflow run <file>.json` 按 JSON 步骤图（DAG）串行派发子代理并汇收报告，`/expert <topic>` 是同引擎的内置三步专家流程
+- 子代理 `task` 工具：把自包含任务委派给独立子代理执行并回收报告，支持 `run_in_background` 后台执行（`task_stop` 可终止后台子代理）与回合末完成播报，内置 `general-purpose` / `explore`，也支持 `.nexuscli/agents/*.md` 自定义代理（frontmatter `model:` 按代理路由模型）；子代理之间可用 `mailbox_post` / `mailbox_read` 文件邮箱互发消息
+- 动态工作流：`/workflow run <file>.json` 按 JSON 步骤图（DAG）做依赖批次并行派发（上界 `workflow.max_parallel_steps`，默认 3）并汇收报告，`/expert <topic>` 是同引擎的内置三步专家流程
 - 插件系统：`.nexuscli/plugins/<name>/plugin.json` 声明的本地插件可一并注入自定义代理、Skill 与斜杠命令
 
 ### 记忆与持久化
@@ -216,6 +216,14 @@ uv run nexuscli -p "解释这个仓库"
 
 原生 Anthropic provider（`NEXUSCLI_PROVIDER=anthropic`）走 Anthropic Messages API：API Key 只从 `ANTHROPIC_API_KEY` 环境变量（或既有 `llm.api_key` 配置路径）读取，默认 base_url 为 `https://api.anthropic.com`，默认上下文窗口 200K。注意两个边界：Anthropic 没有内置价格表，成本估算需要显式配置 `llm.prices`；该 provider 暂不支持图片输入，列表型消息会自动降级为文本。
 
+不想把 API Key 明文写进配置文件时，`llm.api_key` 支持 pi 兼容的 `"!command"` 形式——配置加载时执行命令、取 stdout 首行作为密钥（适合接系统密钥管理器）：
+
+```json
+{ "llm": { "provider": "deepseek", "api_key": "!op read My-DeepSeek-Key" } }
+```
+
+如实边界：命令用 `shlex.split` 解析并**不经 shell 直接执行**，所以管道、环境变量展开、glob 等 shell 特性不可用，Windows 下路径要写正斜杠（反斜杠会被 shlex posix 模式吃掉）；单次解析有 10 秒超时，命令解析失败、可执行文件缺失、超时或输出为空都**降级为空 key**而不是报错——CLI 照常启动，Agent 随后给出正常的「未配置 LLM API key」提示，密钥本身不写日志。环境变量的优先级仍然更高：`NEXUSCLI_API_KEY` 或 provider 专属环境变量（如 `DEEPSEEK_API_KEY`）存在时会整体覆盖配置值，`!command` 只在环境变量未提供时生效。
+
 两项默认关闭的可选诊断配置：
 
 ```json
@@ -329,7 +337,7 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 
 `/skill load <name>` 把指定 Skill 的正文强制注入你的下一条消息（一次性消费）：下一回合模型会先读到该 Skill 再继续任务，适合主动确保某个技能被加载。
 
-`/usage stats [N天]` 汇总本地 SQLite 用量库 `~/.nexuscli/usage.db`：近 N 天（缺省 7 天）的回合数、总 Token、总成本（USD/CNY）与按模型分布。落库为 best-effort：每完成一个普通回合（含自定义命令回合）记一行，值为该回合主代理自身的用量；`/init`、`/plan`、`/workflow`、`/expert` 派发的回合与单次 `-p` 模式不落库，所以统计值只反映 REPL 直连对话的用量。
+`/usage stats [N天]` 汇总本地 SQLite 用量库 `~/.nexuscli/usage.db`：近 N 天（缺省 7 天）的回合数、总 Token、总成本（USD/CNY）、按模型分布与按来源分布（By source）。落库为 best-effort：普通 REPL 回合（含自定义命令回合）记为 `source=repl`，值为该回合主代理自身的用量；`task` 工具委派的子代理与 `/workflow`、`/expert` 派发的工作流步骤，只要真实产出了 token，也各自落一行 `source=subagent`（记录器在 `run_subagent` 的 done 事件处，零 token 的空跑不落行），所以统计值覆盖 REPL 直连对话与委派回合两类；team/plan-and-execute 模式的 worker 回合与单次 `-p` 模式不落库。
 
 不带参数的 `/usage` 输出 JSON，除最近一回合的 usage/cost 外还带 `session_usage` 双口径：`historical_total`（恢复基线 + 本进程累计，两者之和等于当前转录的 usage 台账）与 `current_process`（仅本进程记录的回合），并附 `sources` 标注来源。`/clear`、`/resume`、`/fork` 都会同步重置基线与本进程累计，保证双口径始终对应当前转录。
 
@@ -341,7 +349,7 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 
 `/effort minimal|low|medium|high` 在会话内即时切换推理力度，无参数显示当前值。该字段只对白名单内的 chat-completions provider（`openai`、`openai-compatible`、`compatible`）随请求发送 `reasoning_effort`；deepseek / glm / kimi 等其他 provider 不支持、不会发送该字段，anthropic provider 会提示不支持。切换模型（`/model`）会创建新客户端并重置 effort。
 
-`/workflow run <file>.json` 加载 JSON 步骤图并按拓扑序串行派发子代理执行；`/expert <topic>` 是同一引擎的内置三步专家流程（调研 → 实施 → 复核）。JSON schema、校验规则与执行边界见 [docs/workflows.md](docs/workflows.md)。
+`/workflow run <file>.json` 加载 JSON 步骤图并按依赖批次并行派发子代理执行（上界 `workflow.max_parallel_steps`，默认 3）；`/expert <topic>` 是同一引擎的内置三步专家流程（调研 → 实施 → 复核）。JSON schema、校验规则与执行边界见 [docs/workflows.md](docs/workflows.md)。
 
 ## 🧰 内置工具
 
@@ -366,7 +374,7 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 
 - `read_file` 对 `.pdf` 后缀走 pypdf 整篇文本提取（不做分页范围），再套用与文本文件相同的行窗口。pypdf 是可选依赖，缺失时返回带安装指引的错误：`uv sync --extra pdf`（或 `pip install "nexuscli[pdf]"`）。
 - `grep` 对目录搜索先探测 PATH 上的 rg：命中则由 rg 子进程加速并映射回同一 `路径:行号: 内容` 格式，rg 缺失或失败时回退纯 Python 扫描。已知语义差异：rg 会跳过二进制文件，纯 Python 路径以 `errors="ignore"` 读取一切，文本文件结果一致。
-- `task` 的 `run_in_background: true` 立即返回后台任务 id 与落盘报告路径（`~/.nexuscli/bg-subagents/<task_id>.md`），不阻塞当前回合；回合结束时 REPL 会把**已**完成的后台子代理一次性播报给用户（`[bg-subagent] completed/failed ...`，不进入模型上下文）。后台子代理是进程内状态：未完成任务随 REPL 退出而终止，`task_stop` 目前不支持终止后台子代理；已完成的报告文件保留在磁盘上。
+- `task` 的 `run_in_background: true` 立即返回后台任务 id 与落盘报告路径（`~/.nexuscli/bg-subagents/<task_id>.md`），不阻塞当前回合；回合结束时 REPL 会把**已**完成的后台子代理一次性播报给用户（`[bg-subagent] completed/failed ...`，不进入模型上下文）。后台子代理是进程内状态：未完成任务随 REPL 退出而终止，已完成的报告文件保留在磁盘上；`task_stop` 可终止仍在跑的后台子代理（状态记为 `stopped`，不再回播），对已到终态的任务是 no-op。
 - `mailbox_post` / `mailbox_read` 是子代理之间的文件邮箱（`<cwd>/.nexuscli/mailbox/<run>/<agent>.jsonl`；run id 取 REPL 会话启动时盖的 12 位 uuid 戳，会话内 `/fork`、`/resume` 只换 writer、不重盖）：发送方由工具闭包绑定、不可伪造，`mailbox_read` 读即消费（清空收件箱）。这两个工具只注册在子代理的工具集中，主代理永远看不到。
 
 交互模式下按 `Shift+Tab` 可在三种会话权限模式间循环切换（详见 [Plan 模式](#-plan-模式)）：
@@ -391,8 +399,15 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 Skill 按 `builtin -> user -> project` 加载，同名时后层覆盖前层：
 
 - builtin：产品默认能力
-- user：`~/.nexuscli/skills/*/SKILL.md`，跨项目复用
-- project：`.nexuscli/skills/*/SKILL.md`，最贴近当前仓库并拥有最高优先级
+- user：`~/.nexuscli/skills/*/SKILL.md`（原生格式，跨项目复用）；另扫描 Agent Skills 规范标准目录 `~/.agents/skills/`
+- project：`.nexuscli/skills/*/SKILL.md`（原生格式，最贴近当前仓库）；另扫描规范标准目录 `.agents/skills/`
+
+每层内部扫描顺序是标准目录在前、原生目录在后，所以同层同名时**原生 `.nexuscli/skills` 目录的 Skill 胜出**（规范目录的价值在于让生态里的标准 Skill 包原样加载，不改文件即可用）。
+
+frontmatter 在 `name` / `description` / `tags` / `version` 之外还接受两个 Agent Skills 规范字段（连字符与下划线两种写法都认）：
+
+- `allowed-tools`：逗号分隔字符串（规范写法，如 `Bash(git:*), Read`）或内联列表。`load_skill` 把 Skill 正文注入上下文时会附一行「该技能激活期间允许的工具」提示；**如实边界：这是提示性约束，执行器不做硬限制**，真正的工具白名单仍由代理 frontmatter 的 `tools` 控制。
+- `disable-model-invocation`：`true` / `1` / `yes` 时该 Skill 退出自动 Top-K 匹配候选（模型不会被提示去加载它），但 `/skill load` 命令与显式 `load_skill` 调用照常可用——挡的是自动候选，不是加载通道。
 
 每次用户输入先用 name、description、tags 做中英文词法/字符 n-gram Top-K 匹配，再把候选交给模型决定是否调用 `load_skill`。Skill 正文只在真正加载后进入当前 ReAct 的下一模型轮；每个并发子 Agent 都有独立 Skill 缓冲区，不会串线。
 
@@ -423,9 +438,11 @@ Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态�
 
 `/compact` 走与自动压缩相同的确定性流程（不额外调用 LLM）：近端消息原样保留、旧轮次汇总为摘要，并输出压缩统计（tokens before/after 与被摘要的消息条数），方便确认压缩收益。历史为空时会友好提示，不会报错。
 
+**provider 超限自动压缩重试**：压缩阈值基于无 tokenizer 的估算，恢复的长会话或超大工具结果可能让请求越过估算直接撞上 provider 的真实 context 上限。这种报错（`llm/base.py` 的 `is_context_overflow_error` 按短语识别，覆盖 OpenAI「maximum context length」/`context_length_exceeded` 与 Anthropic「prompt is too long」等主流报文）不会立刻让回合失败：主循环先用与 `/compact` 相同的手动压缩器压一次历史并重试同一回合，只重试一次，通知以 `text_delta` 流出（「Provider reported a context-length overflow; compacting …」）。两种情况仍照常报错：历史已无可压内容（`compact_now` 报告未压缩），或重试后二次溢出。该行为随 `features.context_compression` 开关；如实边界：只接在主 Agent 的 ReAct 循环上，`task` 委派的子代理路径未接——子代理撞超限仍直接报错。新 provider 的报文措辞不在短语表里时不会触发重试，需要按需补充短语。
+
 ## 🗂 代码索引与检索
 
-`/index [path]` 扫描工作区中的文本文件，把逐行内容写入 `.nexuscli/code_index.sqlite3` 的 `code_chunks` 表建立本地代码索引，默认跳过 `.git`、`.venv`、`node_modules` 等目录。`/search <query>` 与内置 `search_code` 工具基于同一索引做关键词检索，多个关键词按 AND 匹配，返回 `路径:行号: 代码行` 形式的结果；代码变动后重新运行 `/index` 即可刷新。
+`/index [path]` 扫描工作区中的文本文件，把逐行内容写入 `.nexuscli/code_index.sqlite3` 的 `code_chunks` 表建立本地代码索引，默认跳过 `.git`、`.venv`、`node_modules` 等目录。`/search <query>` 与内置 `search_code` 工具基于同一索引做关键词检索：多个关键词按 AND 匹配，命中行按 **BM25 相关性排序**（纯 Python 实现，k1=1.5、b=0.75，无第三方依赖；词频按大小写不敏感子串计数，CJK 关键词同口径工作），按分降序返回 Top-N（N 即 `limit` 参数，默认 20，同分按路径与行号稳定并列）。`search_code` 工具输出末尾附一行命中统计（命中行数、候选窗口、检索词）；代码变动后重新运行 `/index` 即可刷新。如实边界：这是词法检索不是 embedding 语义检索——索引不做向量化、不联网；BM25 的语料统计在候选窗口（首词 LIKE 预筛的 500 行）内计算，窗口外的行不参与排序。
 
 ```text
 /index .
@@ -435,6 +452,21 @@ Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态�
 ## 💰 模型、Token 与费用
 
 默认 provider/model 是 `deepseek/deepseek-v4-flash`。DeepSeek V4 Flash/Pro 的内置 profile 使用 1M 上下文，并带有截至 2026-07-17 的官方每百万 Token 价格；价格会变化，因此可以用 `llm.context_window` 和 `llm.prices` 覆盖，未知 OpenAI-compatible 模型应显式配置。
+
+`llm.prices` 的键是币种，值是每百万 Token 的 `{input_cache_hit, input_cache_miss, output}` 覆盖项（会与内置价格表合并、优先级更高）。本地 OpenAI-compatible 网关（如 Ollama、vLLM、LM Studio）的模型不在任何内置价格表里，不配置时 `/usage` 与 `/usage stats` 的成本恒为 0（token 计数正常）——想要成本估算就按你的计费方显式给出价格，例如：
+
+```json
+{
+  "llm": {
+    "provider": "openai-compatible",
+    "base_url": "http://127.0.0.1:11434/v1",
+    "model": "qwen2.5-coder",
+    "prices": {
+      "usd": { "input_cache_hit": 0.0, "input_cache_miss": 0.05, "output": 0.1 }
+    }
+  }
+}
+```
 
 流式请求开启 `stream_options.include_usage`，并解析 `choices=[]` 的 usage-only 块、cache hit/miss 和 reasoning Token。REPL 用 `/usage` 查看最近一次普通 ReAct（含 `session_usage` 双口径，见[交互命令](#-交互命令)），用 `/usage stats [N天]` 查看本地落库的近 N 天汇总（默认 7 天，覆盖面边界见[交互命令](#-交互命令)），单次 CLI 用 `--json` 获取完整 usage/cost——带 `-c` / `--resume` 时 payload 还会附 `session_usage`（恢复基线 + 本次运行的历史累计，与仅本次运行的双口径；单次模式不把 usage 回写转录，该值为提示性数据）。成本以供应商返回的实际 Token 为准，不能只用“代码行数”精确推算。
 
@@ -527,7 +559,7 @@ Agent 处理多步任务时可以通过内置工具 `todo_write` 维护一份任
 
 ## 🧩 子代理 task 工具
 
-`task` 工具把一个自包含任务委派给独立的子代理：子代理有自己的历史、Skill 缓冲和工具集，跑完后只把最终报告交回主会话。内置 `general-purpose`（通用任务求解，默认值）与 `explore`（只读代码探索，检索类工具白名单，绝不修改内容）两个代理，始终可用；自定义代理放进 `~/.nexuscli/agents/*.md`（用户级）或 `.nexuscli/agents/*.md`（项目级，同名覆盖），frontmatter 声明 `name` / `description` / `tools`，正文即系统提示。
+`task` 工具把一个自包含任务委派给独立的子代理：子代理有自己的历史、Skill 缓冲和工具集，跑完后只把最终报告交回主会话。内置 `general-purpose`（通用任务求解，默认值）与 `explore`（只读代码探索，检索类工具白名单，绝不修改内容）两个代理，始终可用；自定义代理放进 `~/.nexuscli/agents/*.md`（用户级）或 `.nexuscli/agents/*.md`（项目级，同名覆盖），frontmatter 声明 `name` / `description` / `tools` / `model`，正文即系统提示。`model` 是按代理的模型路由：给调研类代理配一个小而便宜的模型、实现类代理沿用主配置的强模型；填写时该子代理的上下文窗口会按新模型重新解析（主配置的窗口大小是为主模型定的，不沿用）。
 
 深度限制为 1：子代理不能再委派子代理；权限规则与 HITL 审批回调原样透传给子代理，plan 态下 `task` 与其他非只读工具一样被硬拒绝。每个子代理的回合上限是固定的 `SUBAGENT_MAX_TURNS`（30），不随 `agent.max_turns` 放大（见[配置](#-配置)）。
 
@@ -537,7 +569,7 @@ Agent 处理多步任务时可以通过内置工具 `todo_write` 维护一份任
 
 ## 🔀 动态工作流与 /expert
 
-`/workflow run <file>.json` 把一个 JSON 步骤图交给编排器：工作流是 `{"steps": [{"id", "prompt", "depends_on"}]}` 形式的 DAG，加载时校验步骤 id 唯一、prompt 非空、依赖引用存在且无环（含自依赖）。执行按拓扑序**串行**派发：每一步都由内置 `general-purpose` 子代理执行（步骤不能指定代理类型），上游步骤的报告会原文注入下游步骤的提示词；某步失败会打印错误并中止剩余步骤，全部完成后逐一输出各步报告。
+`/workflow run <file>.json` 把一个 JSON 步骤图交给编排器：工作流是 `{"steps": [{"id", "prompt", "depends_on"}]}` 形式的 DAG，加载时校验步骤 id 唯一、prompt 非空、依赖引用存在且无环（含自依赖）。执行按**依赖批次并行**派发：每轮取全部依赖已完成的 ready 步骤，并发跑至多 `workflow.max_parallel_steps` 个（默认 3，`1` 退化为严格串行）。每一步都由内置 `general-purpose` 子代理执行（步骤不能指定代理类型），每个步骤有独立的邮箱代理名（并发兄弟步骤之间可用 `mailbox_post` 通信，邮箱名写在派发提示词里），上游步骤的报告会原文注入下游步骤的提示词；某步失败时同批兄弟步骤跑完后中止剩余步骤，全部完成后逐一输出各步报告。
 
 `/expert <topic>` 走同一引擎，内置固定的三步线性链：`research`（只读调研）→ `execute`（最小改动实施）→ `report`（复核与综合报告）。
 
@@ -551,7 +583,7 @@ Agent 处理多步任务时可以通过内置工具 `todo_write` 维护一份任
 }
 ```
 
-如实边界：本切片没有并行执行器与断点续跑；工作流派发的回合不计入 `/usage stats` 落库、也不注入会话目标提醒；与 `/init` 一样，用户自定义的同名命令（如自定义 `workflow` 命令）会优先于内置分支。schema、校验错误信息与派发提示词的完整说明见 [docs/workflows.md](docs/workflows.md)。
+如实边界：没有断点续跑/暂停语义；`workflow.max_parallel_steps` 是并发上界而非承诺（每批实际并发受 ready 步骤数限制，0/负数钳到 1、非数值回退默认）。工作流/专家派发的步骤只要产出真实 token 就会以 `source=subagent` 落进 `/usage stats`（零 token 空跑不落行），但不注入会话目标提醒；与 `/init` 一样，用户自定义的同名命令（如自定义 `workflow` 命令）会优先于内置分支。schema、校验错误信息、并行执行语义与邮箱隔离的完整说明见 [docs/workflows.md](docs/workflows.md)。
 
 ## ⏰ 定时任务（cron）
 

@@ -1,0 +1,30 @@
+# nexusCLI 自我迭代波 - 任务拆解
+
+- [x] usage 落库覆盖子代理回合
+  - id: task-usage-coverage
+  - boundary: src/nexuscli/entrypoints/commands/usage.py、src/nexuscli/agent/subagent.py、tests/test_usage_coverage.py
+  - verify: source 列迁移兼容（缺省 repl）、子代理 done 事件落库 source=subagent、零 token 跳过、stats by_source 分组
+- [x] 代码检索 BM25 排序
+  - id: task-search-rank
+  - boundary: src/nexuscli/rag/**、search_code 工具文件、tests/test_search_rank.py
+  - verify: 确定性打分排序（k1=1.5/b=0.75）、AND 语义与输出格式不变、Top-N 截断、CJK 口径工作
+- [x] /workflow 并行执行器
+  - id: task-workflow-parallel
+  - boundary: src/nexuscli/entrypoints/commands/workflow_cmds.py、config.py workflow 段、slash_commands.py（如需）、tests/test_workflow_parallel.py
+  - verify: 依赖批次并行、max_parallel_steps（默认 3，1=串行等价）、失败中止语义、每步独立 mailbox_name、expert 链不受影响
+- [x] 外围真实 LLM 冒烟（team / mcp serve / Runtime API）
+  - id: task-perimeter-smoke
+  - boundary: 不改仓库文件，证据落 .zcode/smoke2/
+  - verify: 三项判据全过、key 零落盘（grep 证实）
+- [x] 主流 Agent 调研与差距清单（含 pi 本机实测）
+  - id: task-agent-matrix
+  - boundary: 只读
+  - verify: 8 产品矩阵（refs/knowledge 来源标注）、差距 14 条经仓库逐条核实（宁缺勿滥）
+- [x] 自我迭代实现 3 条（provider 瞬时错误压缩重试 / Agent Skills 规范兼容 / key 经命令读取）
+  - id: task-iterate-items
+  - boundary: 实现员自选文件（不与并行工位冲突），测试配套
+  - verify: 各自新测试通过；5 条评估后主动跳过（会话分支树、tool search、scoped-models、/export、MCP 工具过滤，均已记录原因）
+- [x] 独立复审 + 集成处置 + 双轮全量校验门
+  - id: task-review-integrate
+  - boundary: 全工作树
+  - verify: 复审 8 条全处置；[升级波] 门一次全绿；[最终] 门第 1 轮 pytest 失败→修复→第 2 轮全绿；主线复跑 ruff/format/pytest → 652 passed；Mimosa 深度扫描 0 findings

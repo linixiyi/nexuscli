@@ -21,7 +21,7 @@ tools: read_file, grep, glob_files, search_code
 按严重程度输出问题清单，每条附绝对路径与行号。
 ```
 
-- `name` 与 `description` 必填，缺一则跳过该文件；`tools` 为逗号分隔白名单，省略则可用全部内置工具；`model` 目前解析但忽略（预留字段）
+- `name` 与 `description` 必填，缺一则跳过该文件；`tools` 为逗号分隔白名单，省略则可用全部内置工具；`model` 可选（按代理路由模型：填了就把该子代理的 LLM 换成指定模型并把上下文窗口重置为按该模型重新解析——主配置的窗口大小是为主模型定的，沿用会错绑另一个模型的上下文，见 `subagent.subagent_llm_config`）
 - 深度限制为 1：子代理不能再委派子代理，且 `task` 工具默认从子代理工具集中移除，双保险防递归
 - 权限规则、HITL 审批回调原样透传给子代理；plan 态下 `task` 与其他非只读工具一样被硬拒绝
 - 审批弹窗的 run 级授权（`r`）**不**透传到子代理：子代理每次 run 都新建自己的 ToolContext，主代理按 `r` 放行的工具在子代理里仍会独立弹审批。需要覆盖子代理的放行请用 auto 模式（`a`）或 `permissions.allow` 规则
@@ -33,8 +33,8 @@ tools: read_file, grep, glob_files, search_code
 
 - 回合结束时 REPL 会把**已经**完成的任务一次性播报给用户（`[bg-subagent] completed <agent> "<描述>" (task <id>) — report: <路径>`），仍在跑的保持安静、由之后的回合补报。播报只给用户看，**不会注入模型上下文**。
 - 播报覆盖面：普通回合与自定义命令回合会播报；斜杠命令内部派发的回合（如 `/init`、`/plan`）与 plan 模式内部回合不会。
-- 用 `task_output <task_id>` 可随时查看状态与报告（`[running]` / `[completed]` / `[failed]`）。
-- 如实边界：注册表是进程内状态，未完成任务随 REPL 退出而终止（已完成任务的报告文件保留）；`task_stop` 不能终止后台子代理；没有中途转向机制；后台任务里的审批提示可能与你正在输入的 REPL 行交错——`hitl_mode: "always"` 时请用前台委派。
+- 用 `task_output <task_id>` 可随时查看状态与报告（`[running]` / `[completed]` / `[failed]` / `[stopped]`）。
+- 如实边界：注册表是进程内状态，未完成任务随 REPL 退出而终止（已完成任务的报告文件保留）；`task_stop <task_id>` 可以终止仍在跑的后台子代理——取消包装任务并把状态发布为 `stopped`（报告文件写入 stopped 说明），已到终态的任务 stop 是 no-op、保持原状态；`stopped` 的任务不会再出现在回合末播报里。没有中途转向机制；后台任务里的审批提示可能与你正在输入的 REPL 行交错——`hitl_mode: "always"` 时请用前台委派。
 
 ## 子代理邮箱：`mailbox_post` / `mailbox_read`
 
@@ -44,6 +44,7 @@ tools: read_file, grep, glob_files, search_code
 - **读即消费**：`mailbox_read` 成功后清空收件箱，第二次读取返回空。损坏的行被跳过，不会让子代理回合失败。
 - **发送方不可伪造**：`from_agent` 由工具闭包绑定为发起代理自己的名字，模型只能选收件人。
 - **run 归属**：run id 取 `config.policy.session_id`（REPL 会话启动时盖的 12 位 uuid 戳）；单次执行没有会话戳时回退字面量 `"default"`。不同会话的邮箱目录互相隔离。
+- **并发调度给每步独立邮箱名**：`/workflow` 与 `/expert` 并行派发时，每个步骤都以独立邮箱代理名 `general-purpose.<步骤 id 清洗后>` 派发（`workflow_cmds._step_mailbox_name`），派发前清掉同会话内旧收件箱，兄弟步骤的邮箱名写进派发提示词——否则并发同名步骤会共用一个收件箱，读即消费的 drain 语义会让消息被兄弟步骤误消费。
 - **仅子代理可用**：这两个工具只注册进子代理注册表（`build_subagent_registry`），主代理注册表永远看不到；也遵循代理 frontmatter 的 `tools` 白名单。
 
 ## 子代理持久记忆目录（如实披露）

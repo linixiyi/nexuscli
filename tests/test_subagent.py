@@ -113,9 +113,9 @@ def test_load_subagents_parses_frontmatter_and_overrides_builtins(tmp_path):
     researcher = definitions["researcher"]
     assert researcher.name == "researcher"
     assert researcher.description == "深度研究代理"
-    assert researcher.tools == ["read_file", "grep"]  # 去重；model 字段解析但被忽略
+    assert researcher.tools == ["read_file", "grep"]  # 去重
     assert researcher.prompt == "研究任务提示词正文"
-    assert "model" not in AgentDefinition.__dataclass_fields__
+    assert researcher.model == "glm-5.2"  # per-agent 模型路由（subagent_llm_config）已生效
     assert definitions["planner"].description == "项目版规划"  # project 覆盖 user
     assert definitions["explore"].description == "项目定制探索"  # 覆盖内置同名代理
     assert definitions["explore"].prompt == "项目专属探索提示词"
@@ -226,6 +226,57 @@ def test_run_subagent_returns_placeholder_without_text(tmp_path, monkeypatch):
     )
 
     assert report == "(subagent returned no text)"
+
+
+def _spy_llm_factory(client: FakeClient, seen: list[Any]) -> Any:
+    """Capture the LlmConfig run_subagent hands to the client factory."""
+
+    def _factory(llm_config, **_kwargs):  # noqa: ANN001, ANN003 - test seam
+        seen.append(llm_config)
+        return client
+
+    return _factory
+
+
+def test_run_subagent_routes_per_agent_model(tmp_path, monkeypatch):
+    """frontmatter ``model:`` swaps the subagent's LLM (context window re-derived)."""
+    client = FakeClient([{"type": "text_delta", "text": "报告"}, {"type": "message_end"}])
+    config = _test_config(tmp_path)
+    config.llm.model = "main-strong-model"
+    config.llm.context_window = 123_456
+    seen: list[Any] = []
+    monkeypatch.setattr("nexuscli.llm.factory.create_llm_client", _spy_llm_factory(client, seen))
+    routed = AgentDefinition(name="cheap", description="d", prompt="正文", model="cheap-model")
+
+    report = asyncio.run(
+        run_subagent(routed, "任务", ToolContext(cwd=str(tmp_path), config=config))
+    )
+
+    assert report == "报告"
+    assert seen[0].model == "cheap-model"
+    # 主配置的窗口是为主模型定的，不沿用；按新模型重新解析。
+    assert seen[0].context_window is None
+    # dataclass 拷贝：主配置对象本身不被改写。
+    assert seen[0] is not config.llm
+
+
+def test_run_subagent_without_model_reuses_main_llm_config(tmp_path, monkeypatch):
+    client = FakeClient([{"type": "text_delta", "text": "报告"}, {"type": "message_end"}])
+    _use_fake_llm(monkeypatch, client)
+    config = _test_config(tmp_path)
+    seen: list[Any] = []
+    monkeypatch.setattr("nexuscli.llm.factory.create_llm_client", _spy_llm_factory(client, seen))
+
+    asyncio.run(
+        run_subagent(
+            BUILTIN_AGENTS["general-purpose"],
+            "任务",
+            ToolContext(cwd=str(tmp_path), config=config),
+        )
+    )
+
+    # 无 model 字段：原对象复用，客户端构建行为与改动前完全一致。
+    assert seen[0] is config.llm
 
 
 def test_run_subagent_agent_gets_explicit_small_max_turns(tmp_path, monkeypatch):

@@ -77,3 +77,24 @@ def _usage_stats_command(rest: str, console: Console) -> None:
             f"{row['total_cost']['cny']:.6f}",
         )
     console.print(per_model)
+    # Per-source split: repl rows are the main REPL turns that have always
+    # been recorded; subagent rows come from delegated runs — task-tool
+    # delegations and /workflow //expert step dispatches alike. .get keeps
+    # the view alive against an older store (or a stubbed one) without the key.
+    by_source = stats.get("by_source") or []
+    if by_source:
+        per_source = Table(title="By source")
+        per_source.add_column("Source")
+        per_source.add_column("Turns", justify="right")
+        per_source.add_column("Tokens", justify="right")
+        per_source.add_column("USD", justify="right")
+        per_source.add_column("CNY", justify="right")
+        for row in by_source:
+            per_source.add_row(
+                row["source"],
+                str(row["turns"]),
+                str(row["total_tokens"]),
+                f"{row['total_cost']['usd']:.6f}",
+                f"{row['total_cost']['cny']:.6f}",
+            )
+        console.print(per_source)

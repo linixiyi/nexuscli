@@ -6,7 +6,7 @@ from typing import Any
 
 from nexuscli.memory import MemoryManager
 from nexuscli.policy import CommandGuard
-from nexuscli.rag import CodeIndex
+from nexuscli.rag import CodeIndex, format_hit_stats
 from nexuscli.skill import SkillRegistry
 from nexuscli.snapshot import SnapshotService
 from nexuscli.tools import file_ops as fops
@@ -366,7 +366,9 @@ def get_builtin_tools() -> list[Tool]:
         ),
         Tool(
             name="search_code",
-            description="Search the local code index for semantically relevant lines.",
+            description=(
+                "Search the local code index; keyword AND matches ranked by BM25 relevance."
+            ),
             parameters=object_schema(
                 {
                     "query": {"type": "string", "description": "Search query"},
@@ -381,7 +383,7 @@ def get_builtin_tools() -> list[Tool]:
             name="task_output",
             description=(
                 "Read the current status and the last bytes of output of a background task "
-                "started with bash run_in_background."
+                "(bash run_in_background, or a background subagent's report)."
             ),
             parameters=object_schema(
                 {
@@ -399,8 +401,9 @@ def get_builtin_tools() -> list[Tool]:
         Tool(
             name="task_stop",
             description=(
-                "Terminate a background task started with bash run_in_background. Check it "
-                "with task_output first to see whether it is still running."
+                "Terminate a background task started with bash run_in_background or a "
+                "background subagent started with task run_in_background. Check it with "
+                "task_output first to see whether it is still running."
             ),
             parameters=object_schema(
                 {"task_id": {"type": "string", "description": "Background task id"}},
@@ -678,7 +681,20 @@ async def _task_output(payload: dict[str, Any], _context: ToolContext) -> ToolRe
 async def _task_stop(payload: dict[str, Any], _context: ToolContext) -> ToolResult:
     task_id = str(payload["task_id"])
     if background_registry.get(task_id) is None:
-        return ToolResult(f'Unknown background task id "{task_id}".', is_error=True)
+        # Not a bash background task — it may be a background subagent.
+        # Imported lazily for the same anti-cycle reason as in _task above.
+        from nexuscli.agent.bg_tasks import bg_subagent_registry
+
+        if bg_subagent_registry.get(task_id) is None:
+            return ToolResult(f'Unknown background task id "{task_id}".', is_error=True)
+        status = await bg_subagent_registry.stop(task_id)
+        # A terminal pre-stop status means the task had already finished on its
+        # own; the message reports the unchanged status instead of implying a
+        # kill happened.
+        return ToolResult(
+            f"Background subagent task {task_id} stopped (status: {status}).",
+            display_summary=f"Stopped subagent task {task_id}",
+        )
     status = await background_registry.stop(task_id)
     return ToolResult(
         f"Background task {task_id} stopped (status: {status}).",
@@ -785,6 +801,12 @@ async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResu
     content = skill.body or skill.content
     if len(content) > 5_000:
         content = content[:5_000] + "\n... [truncated; use /skill show for the full skill]"
+    if skill.allowed_tools:
+        # Agent Skills spec field: surface the tool restriction to the model
+        # (advisory here — the executor does not hard-enforce it).
+        content += "\n\n[Allowed tools while this skill is active] " + ", ".join(
+            skill.allowed_tools
+        )
     if context.skill_context_buffer:
         context.skill_context_buffer.push(skill.name, content)
         return ToolResult(
@@ -841,10 +863,14 @@ load_skill = _load_skill
 
 async def _search_code(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     index = CodeIndex(context.cwd)
-    results = index.search(str(payload["query"]), limit=int(payload.get("limit") or 20))
+    results, stats = index.search_with_stats(
+        str(payload["query"]), limit=int(payload.get("limit") or 20)
+    )
     if not results:
         return ToolResult("(no indexed matches; run /index first)")
-    return ToolResult("\n".join(f"{item.path}:{item.line}: {item.snippet}" for item in results))
+    lines = [f"{item.path}:{item.line}: {item.snippet}" for item in results]
+    lines.append(format_hit_stats(stats))
+    return ToolResult("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------

@@ -31,7 +31,7 @@ from nexuscli.config import NexusCliConfig
 from nexuscli.context import ContextBudget, ContextWindowManager
 from nexuscli.hooks import fire_event, has_hooks
 from nexuscli.image import parse_image_references
-from nexuscli.llm.base import LlmClient
+from nexuscli.llm.base import LlmClient, is_context_overflow_error
 from nexuscli.prompt import PromptAssembler
 from nexuscli.skill import SkillContextBuffer, SkillRegistry
 from nexuscli.snapshot import SnapshotService
@@ -155,6 +155,12 @@ class Agent:
             repeating the same tool call after a warning.
         ``error``
             {"type": "error", "error": Exception}
+
+        Provider-reported context-length overflows are not surfaced as
+        ``error`` right away: the react loop compacts the history with the
+        manual compressor and retries the same turn once (a notice is
+        streamed as ``text_delta`` first). Only a second failure — or a
+        history too short to compact — surfaces the provider error.
         ``done``
             {"type": "done", "total_turns": int, "total_tokens": int,
              "usage": {...}, "cost": {...}, "messages": [Message, ...]}
@@ -304,30 +310,71 @@ class Agent:
                         "summarized_messages": compression.summarized_messages,
                     }
 
-            # Call the LLM.
-            async for event in self.llm_client.chat(
-                messages,
-                tool_defs,
-                system_prompt=effective_system,
-            ):
-                event_type = event.get("type")
-                if event_type == "text_delta":
-                    delta = str(event.get("text") or "")
-                    text += delta
-                    yield {"type": "text_delta", "text": delta}
-                elif event_type == "thinking_delta":
-                    yield {"type": "thinking_delta", "thinking": str(event.get("thinking") or "")}
-                elif event_type == "tool_call_delta":
-                    _merge_tool_delta(tool_states, event["tool_call"])
-                elif event_type == "message_end":
-                    stop_reason = str(event.get("stop_reason") or "end_turn")
-                elif event_type == "usage":
-                    usage = Usage.from_mapping(event.get("usage") or {})
-                    turn_usage = turn_usage + usage
-                    yield {"type": "usage", "usage": usage.to_dict()}
-                elif event_type == "error":
-                    yield {"type": "error", "error": event["error"]}
-                    return
+            # Call the LLM. A provider-reported context overflow (the request
+            # itself exceeded the window — e.g. a resumed session or tool
+            # results that pushed past the estimate-based threshold) is
+            # compacted once with the manual compressor and retried instead
+            # of failing the whole turn. Everything else surfaces as before.
+            text = ""
+            stop_reason = "end_turn"
+            turn_usage = Usage()
+            tool_states: dict[int, dict[str, Any]] = {}
+            stream_error: BaseException | None = None
+            for attempt in range(2):
+                text = ""
+                stop_reason = "end_turn"
+                turn_usage = Usage()
+                tool_states = {}
+                stream_error = None
+                async for event in self.llm_client.chat(
+                    messages,
+                    tool_defs,
+                    system_prompt=effective_system,
+                ):
+                    event_type = event.get("type")
+                    if event_type == "text_delta":
+                        delta = str(event.get("text") or "")
+                        text += delta
+                        yield {"type": "text_delta", "text": delta}
+                    elif event_type == "thinking_delta":
+                        yield {
+                            "type": "thinking_delta",
+                            "thinking": str(event.get("thinking") or ""),
+                        }
+                    elif event_type == "tool_call_delta":
+                        _merge_tool_delta(tool_states, event["tool_call"])
+                    elif event_type == "message_end":
+                        stop_reason = str(event.get("stop_reason") or "end_turn")
+                    elif event_type == "usage":
+                        usage = Usage.from_mapping(event.get("usage") or {})
+                        turn_usage = turn_usage + usage
+                        yield {"type": "usage", "usage": usage.to_dict()}
+                    elif event_type == "error":
+                        stream_error = event["error"]
+                        break
+                if stream_error is None:
+                    break
+                overflow_recoverable = (
+                    attempt == 0
+                    and self.config.features.context_compression
+                    and is_context_overflow_error(stream_error)
+                )
+                if not overflow_recoverable:
+                    break
+                compression = context_manager.compact_now(messages)
+                if not compression.compressed:
+                    break  # nothing left to compact; surface the error as-is
+                messages = compression.messages
+                yield {
+                    "type": "text_delta",
+                    "text": (
+                        "\nProvider reported a context-length overflow; compacting the "
+                        "conversation history and retrying once.\n"
+                    ),
+                }
+            if stream_error is not None:
+                yield {"type": "error", "error": stream_error}
+                return
 
             total_usage = total_usage + turn_usage
             tool_calls = _finalize_tool_calls(tool_states)

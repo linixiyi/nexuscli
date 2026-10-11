@@ -412,6 +412,8 @@ def build_step_dispatch_prompt(
     graph: WorkflowGraph,
     step_id: str,
     upstream_reports: dict[str, str],
+    mailbox_name: str | None = None,
+    peer_mailbox_names: list[str] | None = None,
 ) -> str:
     """Build the controlled orchestration prompt for dispatching one step.
 
@@ -421,6 +423,13 @@ def build_step_dispatch_prompt(
     ends with the self-contained report requirement. Mirrors ZCode's
     ``buildPhasePrompt`` shape (workflow/expert/prompts.ts:13-52): frame, task,
     objective, upstream artifacts, scope constraint.
+
+    ``mailbox_name`` (passed by the parallel workflow scheduler, including its
+    /expert chain) tells the step the mailbox name its tools are bound to, and
+    ``peer_mailbox_names`` lists the concurrent batch siblings it can address
+    with ``mailbox_post`` — without this the model could only guess a shared
+    ``general-purpose`` name and its messages would land in an inbox nobody
+    drains. Linear chains dispatch one step per batch, so peers stay empty.
     """
     order = graph.topological_order()
     step = graph.steps[step_id]
@@ -443,6 +452,15 @@ def build_step_dispatch_prompt(
         for dep_id in step.depends_on:
             lines.append(f"### {dep_id}")
             lines.append(upstream_reports[dep_id])
+    if mailbox_name:
+        peers = peer_mailbox_names or []
+        lines.append("")
+        lines.append(f"你的邮箱代理名：{mailbox_name}（mailbox_read 读取发到这个名字的消息）。")
+        if peers:
+            lines.append(
+                f"同批次并发步骤的邮箱代理名：{', '.join(peers)}"
+                "（需要跨步骤同步时用 mailbox_post 的 to 指定对方邮箱名）。"
+            )
     lines.append("")
     lines.append("完成后输出自包含的步骤报告：明确结论、关键路径与验证结果。")
     return "\n".join(lines)
