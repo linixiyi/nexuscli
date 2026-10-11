@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 from nexuscli.config import load_config
 from nexuscli.mcp import McpClientManager
@@ -49,7 +50,10 @@ if __name__ == "__main__":
                 "mcpServers": {
                     "fake": {
                         "type": "stdio",
-                        "command": "python",
+                        # The test interpreter is the one guaranteed to have the
+                        # ``mcp`` package; a bare "python" resolves via the
+                        # host PATH and may be an interpreter without it.
+                        "command": sys.executable,
                         "args": [str(server)],
                     }
                 }
@@ -102,7 +106,9 @@ if __name__ == "__main__":
                 "mcpServers": {
                     "noisy": {
                         "type": "stdio",
-                        "command": "python",
+                        # Same reasoning as the fake server above: use the
+                        # interpreter pytest runs under, not the host's "python".
+                        "command": sys.executable,
                         "args": [str(server)],
                     }
                 }
