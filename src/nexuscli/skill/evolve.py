@@ -47,9 +47,7 @@ class SkillEvolutionStore:
     ):
         home = Path.home()
         self.root = Path(root or home / ".nexuscli" / "skill_history").expanduser()
-        self.user_skills_root = Path(
-            user_skills_root or home / ".nexuscli" / "skills"
-        ).expanduser()
+        self.user_skills_root = Path(user_skills_root or home / ".nexuscli" / "skills").expanduser()
 
     # -- paths ------------------------------------------------------------
 

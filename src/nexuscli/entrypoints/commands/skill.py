@@ -85,9 +85,7 @@ def _skill_evolve(rest: str, console: Console) -> None:
     try:
         version = store.save_versioned(name, rule, reason="evolve")
     except FileNotFoundError:
-        console.print(
-            f'Skill "{name}" not found in user skills ({store.skill_path(name).parent}).'
-        )
+        console.print(f'Skill "{name}" not found in user skills ({store.skill_path(name).parent}).')
         return
     except ValueError as exc:
         console.print(f"evolve failed: {exc}")
@@ -111,9 +109,7 @@ def _skill_rollback(rest: str, console: Console) -> None:
     try:
         safety_version = store.rollback(name, version)
     except FileNotFoundError:
-        console.print(
-            f'Skill "{name}" not found in user skills ({store.skill_path(name).parent}).'
-        )
+        console.print(f'Skill "{name}" not found in user skills ({store.skill_path(name).parent}).')
         return
     except ValueError as exc:
         console.print(f"rollback failed: {exc}")

@@ -90,9 +90,7 @@ def test_snapshot_copies_skill_and_tracks_versions(tmp_path, monkeypatch):
     }
 
     first = store.snapshot("demo")
-    skill_path.write_text(
-        "---\nname: demo\ndescription: d\n---\nbody v2\n", encoding="utf-8"
-    )
+    skill_path.write_text("---\nname: demo\ndescription: d\n---\nbody v2\n", encoding="utf-8")
     second = store.snapshot("demo")
 
     assert (first, second) == (1, 2)
@@ -176,9 +174,7 @@ def test_rollback_restores_version_and_keeps_pre_rollback_snapshot(tmp_path, mon
     assert records[-1]["version"] == 1
     assert records[-1]["reason"] == "rollback"
     # The safety snapshot survives: rolling forward again is possible.
-    assert [
-        item["version"] for item in store.version_info("demo")["history"]
-    ] == [1, 2, 3]
+    assert [item["version"] for item in store.version_info("demo")["history"]] == [1, 2, 3]
 
 
 def test_rollback_missing_version_returns_none(tmp_path, monkeypatch):
@@ -207,8 +203,7 @@ def test_version_cap_evicts_oldest(tmp_path, monkeypatch):
         store.save_versioned("demo", f"rule {index}", reason=f"r{index}")
 
     version_files = {
-        int(path.stem[1:])
-        for path in (home / ".nexuscli" / "skill_history" / "demo").glob("v*.md")
+        int(path.stem[1:]) for path in (home / ".nexuscli" / "skill_history" / "demo").glob("v*.md")
     }
     assert version_files == set(range(2, 12))
     info = store.version_info("demo")
@@ -343,7 +338,7 @@ def test_skill_command_evolve_unknown_skill_reports_not_found(tmp_path, monkeypa
 
     _skill_command("evolve nope some rule", console, str(tmp_path), agent)
 
-    assert 'not found in user skills' in _console_text(console)
+    assert "not found in user skills" in _console_text(console)
 
 
 def test_skill_command_rollback_missing_version_reports(tmp_path, monkeypatch):
