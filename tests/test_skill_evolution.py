@@ -144,7 +144,9 @@ def test_save_versioned_snapshots_appends_timestamped_rule_and_audits(tmp_path, 
 
 def test_save_versioned_appends_into_existing_rules_section(tmp_path, monkeypatch):
     home = _isolate_home(tmp_path, monkeypatch)
-    skill_path = _write_user_skill(home, "demo", body="intro\n\n## Evolved Rules\n\n- old\n\n## Next\n\nafter")
+    skill_path = _write_user_skill(
+        home, "demo", body="intro\n\n## Evolved Rules\n\n- old\n\n## Next\n\nafter"
+    )
     store = SkillEvolutionStore()
 
     store.save_versioned("demo", "new rule", reason="r")
@@ -277,7 +279,9 @@ def test_skill_command_evolve_rollback_stats(tmp_path, monkeypatch):
     agent = _agent_stub()
 
     evolve_console = _console()
-    _skill_command("evolve demo prefer pytest for every check", evolve_console, str(tmp_path), agent)
+    _skill_command(
+        "evolve demo prefer pytest for every check", evolve_console, str(tmp_path), agent
+    )
     assert "prefer pytest for every check" in skill_path.read_text(encoding="utf-8")
     _skill_command("evolve demo second rule", evolve_console, str(tmp_path), agent)
 

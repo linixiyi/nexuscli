@@ -3,6 +3,8 @@ load, evolve, stats, rollback)."""
 
 from __future__ import annotations
 
+import contextlib
+
 from rich.console import Console
 
 from nexuscli.agent import Agent
@@ -30,10 +32,8 @@ def _skill_command(arg: str, console: Console, cwd: str, agent: Agent) -> None:
         # Usage accounting at the real injection seam: the body queued here is
         # what the next turn prepends to the user message. Accounting must
         # never block a load, so IO errors are swallowed.
-        try:
+        with contextlib.suppress(OSError):
             SkillStateStore().record_use(skill.name)
-        except OSError:
-            pass
         console.print(
             f'[green]Skill "{skill.name}" loaded; '
             "it will be prepended to your next message.[/green]"

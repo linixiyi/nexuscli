@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -7,7 +8,7 @@ import unicodedata
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from nexuscli.plugins import load_plugins
@@ -95,10 +96,8 @@ class SkillContextBuffer:
         """
         if self.usage_store is None:
             return
-        try:
+        with contextlib.suppress(OSError):
             self.usage_store.record_use(name)
-        except OSError:
-            pass
 
     def drain(self) -> str:
         if not self._items:
@@ -194,7 +193,7 @@ class SkillStateStore:
 
 
 def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class SkillRegistry:

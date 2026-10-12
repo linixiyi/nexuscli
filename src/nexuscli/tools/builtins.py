@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from typing import Any
 
@@ -882,10 +883,8 @@ async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResu
         # without a usage_store (agent.py), so the buffer-level hook stays
         # inert and this is the single recorder for the model-side load.
         # Accounting must never block a load.
-        try:
+        with contextlib.suppress(OSError):
             SkillStateStore().record_use(skill.name)
-        except OSError:
-            pass
         return ToolResult(
             f'Loaded skill "{skill.name}" instructions for the next model turn.',
             display_summary=f"Loaded skill {skill.name}",
