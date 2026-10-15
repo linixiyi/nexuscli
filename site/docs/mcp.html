@@ -144,10 +144,9 @@ uv run nexuscli mcp serve --transport http --port 3000
   </div>
 </div>
 <footer>
-  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
-</footer>
-<script src="../site.js"></script>
+</footer><script src="../site.js"></script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {
@@ -156,12 +155,18 @@ uv run nexuscli mcp serve --transport http --port 3000
       var link = document.createElement("link");
       link.rel = "stylesheet";
       var apply = function () {
-        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+        var light = document.documentElement.getAttribute("data-theme") === "light";
+        link.href = light ? LIGHT : DARK;
       };
       apply();
       document.head.appendChild(link);
       window.addEventListener("nexuscli-themechange", apply);
-      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+      try {
+        new MutationObserver(apply).observe(
+          document.documentElement,
+          { attributes: true, attributeFilter: ["data-theme"] }
+        );
+      } catch (e) {}
     })();
   </script>
   <script>

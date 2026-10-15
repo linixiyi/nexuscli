@@ -33,8 +33,18 @@ DOC_META = {
 
 # reading order for the bottom pager on doc pages
 PAGER_ORDER = [
-    "permissions", "hooks", "mcp", "subagents", "workflows", "runtime-api",
-    "plugins", "slash-commands", "observability", "cron", "eval", "spec-skill",
+    "permissions",
+    "hooks",
+    "mcp",
+    "subagents",
+    "workflows",
+    "runtime-api",
+    "plugins",
+    "slash-commands",
+    "observability",
+    "cron",
+    "eval",
+    "spec-skill",
 ]
 
 FAVICON = (
@@ -119,13 +129,18 @@ def rewrite_links(html_str: str, in_docs_dir: bool) -> str:
         if target.startswith(("http://", "https://", "/")):
             return m.group(0)  # leave absolute URLs alone
         name = Path(target).name
+        prefix = "" if in_docs_dir else "docs/"
         if name == "README.md":
             url = REPO if not frag else f"{REPO}/blob/main/README.md{frag}"
             return f'href="{url}"'
         if name == "TUTORIAL.md":
-            return f'href="tutorial.html{frag}"' if not in_docs_dir else f'href="../tutorial.html{frag}"'
-        page = f"{name[:-3]}.html"
-        return f'href="{page}{frag}"' if in_docs_dir else f'href="docs/{page}{frag}"'
+            page = "tutorial.html"
+            if not in_docs_dir:
+                pass
+            else:
+                page = f"../{page}"
+            return f'href="{page}{frag}"'
+        return f'href="{prefix}{name[:-3]}.html{frag}"'
 
     return _MD_LINK.sub(repl, html_str)
 
@@ -133,6 +148,7 @@ def rewrite_links(html_str: str, in_docs_dir: bool) -> str:
 # --------------------------------------------------------------------------
 # page shell
 # --------------------------------------------------------------------------
+
 
 def nav_html(rel: str) -> str:
     return f"""<nav class="nav">
@@ -168,10 +184,9 @@ def shell(*, title: str, url: str, body: str, rel: str, desc: str = "") -> str:
 {nav_html(rel)}
 {body}
 <footer>
-  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="{REPO}" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p>NexusCLI · <a href="{REPO}" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="{rel}index.html">← 返回首页</a></p>
-</footer>
-<script src="{rel}site.js"></script>
+</footer><script src="{rel}site.js"></script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {{
@@ -180,12 +195,18 @@ def shell(*, title: str, url: str, body: str, rel: str, desc: str = "") -> str:
       var link = document.createElement("link");
       link.rel = "stylesheet";
       var apply = function () {{
-        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+        var light = document.documentElement.getAttribute("data-theme") === "light";
+        link.href = light ? LIGHT : DARK;
       }};
       apply();
       document.head.appendChild(link);
       window.addEventListener("nexuscli-themechange", apply);
-      try {{ new MutationObserver(apply).observe(document.documentElement, {{ attributes: true, attributeFilter: ["data-theme"] }}); }} catch (e) {{}}
+      try {{
+        new MutationObserver(apply).observe(
+          document.documentElement,
+          {{ attributes: true, attributeFilter: ["data-theme"] }}
+        );
+      }} catch (e) {{}}
     }})();
   </script>
   <script>
@@ -200,8 +221,10 @@ def shell(*, title: str, url: str, body: str, rel: str, desc: str = "") -> str:
 # builders
 # --------------------------------------------------------------------------
 
+
 def doc_layout(toc_html: str, content_html: str) -> str:
-    toc = toc_html if toc_html.strip() else "<p style='color:var(--faint);font-size:13px'>（本页暂无目录）</p>"
+    empty_toc = "<p style='color:var(--faint);font-size:13px'>（本页暂无目录）</p>"
+    toc = toc_html if toc_html.strip() else empty_toc
     return f"""<div class="layout">
   <aside class="toc">
     <div class="toc-title">目录</div>
@@ -250,19 +273,21 @@ def build_doc_page(name: str) -> None:
             '<span class="name">🚀 运行教程</span></a>'
         )
     pager_html = f'<div class="pager">{"".join(pager_bits)}</div>'
-    pager_html += (
-        f'<p class="edit-link">本页由 <a href="{REPO}/blob/main/docs/{name}.md" target="_blank" rel="noopener">docs/{name}.md</a> '
-        f'构建生成 · 源文件与站点内容同步</p>'
+    edit_link = (
+        f'<p class="edit-link">本页由 <a href="{REPO}/blob/main/docs/{name}.md" '
+        f'target="_blank" rel="noopener">docs/{name}.md</a> 构建生成 · 源文件与站点内容同步</p>'
     )
+    pager_html += edit_link
 
     content = (
         '<div class="doc-meta">'
         '<a class="crumb" href="../index.html#docs">← 文档中心</a>'
-        f'<span>·</span><span>{icon} {blurb}</span>'
-        '</div>'
+        f"<span>·</span><span>{icon} {blurb}</span>"
+        "</div>"
         '<div class="generated-banner">📄 本页由仓库 '
-        f'<code>docs/{name}.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div>'
-        + body + pager_html
+        f"<code>docs/{name}.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div>"
+        + body
+        + pager_html
     )
 
     page = shell(
@@ -286,20 +311,21 @@ def build_tutorial_page() -> None:
 
     pager_html = (
         '<div class="pager">'
-        '<a href="index.html" class="prev"><span class="dir">← 返回</span><span class="name">站点首页</span></a>'
+        '<a href="index.html" class="prev"><span class="dir">← 返回</span>'
+        '<span class="name">站点首页</span></a>'
         '<a href="docs/permissions.html" class="next"><span class="dir">继续阅读 →</span>'
         '<span class="name">🔐 权限规则</span></a>'
-        '</div>'
-        f'<p class="edit-link">本页由 <a href="{REPO}/blob/main/TUTORIAL.md" target="_blank" rel="noopener">TUTORIAL.md</a> 构建生成</p>'
+        "</div>"
+        f'<p class="edit-link">本页由 <a href="{REPO}/blob/main/TUTORIAL.md" '
+        f'target="_blank" rel="noopener">TUTORIAL.md</a> 构建生成</p>'
     )
     content = (
         '<div class="doc-meta">'
         '<a class="crumb" href="index.html#docs">← 文档中心</a>'
-        '<span>·</span><span>🚀 从零到第一次跑通 Agent 任务</span>'
-        '</div>'
+        "<span>·</span><span>🚀 从零到第一次跑通 Agent 任务</span>"
+        "</div>"
         '<div class="generated-banner">📄 本页由仓库 <code>TUTORIAL.md</code> 自动构建生成；'
-        '如需修改请编辑源文件后重新构建。</div>'
-        + body + pager_html
+        "如需修改请编辑源文件后重新构建。</div>" + body + pager_html
     )
 
     page = shell(
