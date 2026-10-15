@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hooks 生命周期钩子 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：七个生命周期事件的挂载方式与安全约束。">
+  <meta property="og:title" content="Hooks 生命周期钩子 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/hooks.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#工作区-hooks-的-sha256-信任机制">工作区 hooks 的 sha256 信任机制</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🪝 七个生命周期事件的挂载方式与安全约束</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/hooks.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="hooks-生命周期钩子"><a class="toclink" href="#hooks-生命周期钩子">Hooks 生命周期钩子</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🪝 Hooks 生命周期钩子」章节的完整版。</p>
+</blockquote>
+<p>在 config.json 的 <code>hooks</code> 里给七个生命周期事件挂 shell 命令（事件键为 camelCase）：</p>
+<pre><code class="language-json">{
+  &quot;hooks&quot;: {
+    &quot;PreToolUse&quot;: [
+      {
+        &quot;matcher&quot;: &quot;bash|write_file&quot;,
+        &quot;hooks&quot;: [
+          { &quot;type&quot;: &quot;command&quot;, &quot;command&quot;: &quot;python .nexuscli/hooks/guard.py&quot;, &quot;timeout&quot;: 10 }
+        ]
+      }
+    ],
+    &quot;Stop&quot;: [
+      { &quot;matcher&quot;: &quot;*&quot;, &quot;hooks&quot;: [{ &quot;type&quot;: &quot;command&quot;, &quot;command&quot;: &quot;notify-send done&quot; }] }
+    ]
+  }
+}
+</code></pre>
+<ul>
+<li>七个事件：<code>SessionStart</code>、<code>UserPromptSubmit</code>、<code>PreToolUse</code>、<code>PermissionRequest</code>、<code>PostToolUse</code>、<code>PostToolUseFailure</code>、<code>Stop</code>；<code>matcher</code> 是对工具名的正则（默认 <code>*</code> 全匹配，仅工具事件使用）</li>
+<li><code>PermissionRequest</code> 在审批决策前触发，可 deny/ask，payload 含 <code>tool_name</code> / <code>tool_input</code>；<code>PostToolUseFailure</code> 在工具失败时触发，payload 含 <code>tool_name</code> / <code>tool_input</code> / <code>error_message</code>，失败回合不再触发 <code>PostToolUse</code></li>
+<li>每条 hook 是 <code>{"type": "command", "command": "...", "timeout": 60}</code>；进程 stdin 收到 JSON 载荷（<code>hook_event_name</code>、<code>session_id</code>、<code>cwd</code>，工具事件另有 <code>tool_name</code> / <code>tool_input</code>，<code>PostToolUse</code> 另有 <code>tool_response</code>，<code>PostToolUseFailure</code> 另有 <code>error_message</code>，<code>UserPromptSubmit</code> 另有 <code>prompt</code>）</li>
+<li>协议：<strong>exit 2 阻断</strong>（stderr 作为拒绝原因），exit 0 时 stdout 可输出 JSON（<code>decision: block</code> 或 <code>hookSpecificOutput.permissionDecision: deny/ask</code>）同样生效；超时与其他退出码只作为非阻断错误提示</li>
+<li>安全边界：hook 返回 <code>allow</code> 只做记录，<strong>不会绕过审批</strong>——hooks 只能拒绝、追问或补充上下文，不能替人工放行</li>
+<li>未配置对应事件时零开销；用户级与项目级的 hook 列表同样按层拼接</li>
+</ul>
+<h2 id="工作区-hooks-的-sha256-信任机制"><a class="toclink" href="#工作区-hooks-的-sha256-信任机制">工作区 hooks 的 sha256 信任机制</a></h2>
+<p>项目级 <code>.nexuscli/config.json</code> 的 <code>hooks</code> 段是随仓库分发、加载时无条件合并的，克隆一个恶意仓库等于让任意 shell 命令挂在每个工具事件上。为此 REPL 在启动时对工作区 hooks 加了一道信任闸门（实现：<code>src/nexuscli/hooks/trust.py</code> 与 <code>repl._gate_workspace_hooks</code>）：</p>
+<ol>
+<li><strong>指纹</strong>：对项目层整个 <code>hooks</code> 段做规范化 JSON（键排序、紧凑分隔符）后取 sha256，文件里键序/缩进不同但内容相同的配置得到同一指纹。</li>
+<li><strong>一次性确认</strong>：首次遇到某工作区的未信任指纹时提示 <code>Workspace hooks detected ...</code> 并询问 <code>Trust workspace hooks? [y/n]</code>（默认 n）。同意后把 <code>{工作区路径: {fingerprint, trusted_at}}</code> 记入 <code>~/.nexuscli/hooks-trust.json</code>；同一工作区+同一指纹后续启动不再询问。</li>
+<li><strong>拒绝的后果</strong>：拒绝时本次会话把生效 hooks 替换为用户级 hooks（工作区 hooks 被剥离禁用），用户级 hooks 不受任何影响。</li>
+<li><strong>变更即重审</strong>：信任记录按指纹匹配，hooks 内容一变（哪怕只改一条命令）指纹即变，下次启动重新确认。</li>
+<li><strong>非交互环境</strong>：stdin 不是 TTY 时一律保守拒绝（与审批提示同一姿态），不静默放行。</li>
+</ol>
+<p>存储边界：信任文件只存指纹与时间戳，不存 hook 命令、工作区内容或任何秘密；文件以 best-effort <code>chmod 0600</code> 保护（NTFS 上退化为只读位，靠用户目录 ACL 兜底）。已知边界：该闸门目前只挂在交互式 REPL 入口，<code>nexuscli -p</code> 单次执行与 serve 路径不在本切片范围内——不信任的工作区请勿用 <code>-p</code> 执行。</p><div class="pager"><a href="permissions.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔐 权限规则</span></a><a href="mcp.html" class="next"><span class="dir">下一篇 →</span><span class="name">🔌 MCP</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/hooks.md" target="_blank" rel="noopener">docs/hooks.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

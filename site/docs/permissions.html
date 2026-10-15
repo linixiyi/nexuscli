@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>权限规则 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：allow / deny / ask 三组规则、命令级判定与审批透传。">
+  <meta property="og:title" content="权限规则 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/permissions.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#只读-bash-直通">只读 bash 直通</a></li>
+<li><a href="#审批弹窗的四个选项">审批弹窗的四个选项</a></li>
+<li><a href="#子进程环境清洗env_sanitization">子进程环境清洗（env_sanitization）</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🔐 allow / deny / ask 三组规则、命令级判定与审批透传</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/permissions.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="权限规则"><a class="toclink" href="#权限规则">权限规则</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🔐 权限规则」章节的完整版。</p>
+</blockquote>
+<p>在 config.json 的 <code>permissions</code> 里声明 <code>allow</code> / <code>deny</code> / <code>ask</code> 三组规则，就能在 HITL 之前自动放行安全操作、追问可疑调用或直接拦截高危动作：</p>
+<pre><code class="language-json">{
+  &quot;permissions&quot;: {
+    &quot;allow&quot;: [
+      &quot;read_file&quot;,
+      &quot;bash(git diff:*)&quot;,
+      &quot;bash(npm run *)&quot;,
+      &quot;write_file(src/**)&quot;
+    ],
+    &quot;ask&quot;: [&quot;web_fetch(domain:github.com)&quot;],
+    &quot;deny&quot;: [&quot;bash(curl | sh)&quot;, &quot;mcp__github__delete_*&quot;]
+  }
+}
+</code></pre>
+<p>规则写法（<code>工具(参数)</code> 或裸工具名）：</p>
+<table>
+<thead>
+<tr>
+<th>写法</th>
+<th>匹配逻辑</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_file</code></td>
+<td>该工具的每次调用</td>
+</tr>
+<tr>
+<td><code>bash(git diff:*)</code></td>
+<td>命令前缀匹配（<code>:*</code> 结尾表示"以此开头"）</td>
+</tr>
+<tr>
+<td><code>bash(npm run *)</code></td>
+<td>对完整命令串做 fnmatch 通配</td>
+</tr>
+<tr>
+<td><code>write_file(src/**)</code></td>
+<td>对工具载荷里的路径做 fnmatch 通配</td>
+</tr>
+<tr>
+<td><code>web_fetch(domain:github.com)</code></td>
+<td>域名精确或子域匹配</td>
+</tr>
+<tr>
+<td><code>mcp__github__*</code></td>
+<td>工具名支持 <code>*</code> / <code>?</code> 通配</td>
+</tr>
+</tbody>
+</table>
+<p>评估优先级是 <strong>deny &gt; ask &gt; allow</strong>：</p>
+<ul>
+<li><code>deny</code> 命中立即拒绝，错误信息与审计日志都带规则原文（approver 记为 <code>permission-rule</code>）</li>
+<li><code>ask</code> 强制走人工确认，即使同一次调用也命中了更宽的 <code>allow</code></li>
+<li><code>allow</code> 命中时跳过审批弹窗；但 <code>hitl_mode: "always"</code>（逐切确认）下仍会提示；<code>hitl_mode: "never"</code> 时 <code>ask</code> 按失败关闭原则直接拒绝</li>
+</ul>
+<p>规则与 HITL 一样按层拼接：用户级和项目级 config.json 的同名列表会合并去重，项目规则不会覆盖掉用户级 <code>deny</code>。</p>
+<h2 id="只读-bash-直通"><a class="toclink" href="#只读-bash-直通">只读 bash 直通</a></h2>
+<p><code>bash</code> / <code>execute_command</code> 的命令串会先做一次 argv 级只读静态判定。判定是保守的：只认单条简单命令（含 <code>;</code>、<code>|</code>、重定向、命令替换等元字符时一律视为不只读），并基于内置白名单——<code>ls</code>、<code>cat</code>、<code>grep</code>、<code>head</code> 等检查类命令，不带写动作参数的 <code>find</code>，只读子命令的 <code>git</code>（<code>status</code>、<code>log</code>、<code>diff</code>、<code>show</code> 等，<code>branch</code> / <code>tag</code> / <code>remote</code> / <code>config</code> 另有参数限制），以及 <code>python</code> / <code>node</code> / <code>npm</code> 的 <code>--version</code> / <code>--help</code> 式自述调用与 <code>uv</code> / <code>pip</code> 的列表类子命令；白名单之外的命令一律视为不只读，回落到正常审批链。</p>
+<p>判定为只读的命令在默认模式下免 HITL 审批直通执行，<code>plan</code> 态的只读闸门也按同一判定放行。直通不改变既有优先级：<code>deny</code> 命中照常拒绝，<code>ask</code> 命中照常追问，PreToolUse hook 的阻断与 ask 提示同样优先，<code>hitl_mode: "always"</code> 下仍会弹审批。直通不等于无痕：直通调用仍写审计日志，approver 记为 <code>readonly-rule</code>。</p>
+<h2 id="审批弹窗的四个选项"><a class="toclink" href="#审批弹窗的四个选项">审批弹窗的四个选项</a></h2>
+<p>HITL 审批弹窗（<code>bash</code>、写文件等需要人工确认的调用）提供五个键位，对应四档决策：</p>
+<table>
+<thead>
+<tr>
+<th>键</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>y</code></td>
+<td>放行本次调用（之后同工具再弹）</td>
+</tr>
+<tr>
+<td><code>r</code></td>
+<td><strong>run 级授权</strong>：本次 agent run 内、该主代理上下文里，同工具后续本会弹窗的调用直接放行</td>
+</tr>
+<tr>
+<td><code>a</code></td>
+<td>切到 auto 模式（会话级放行，除非 <code>ask</code> 规则或 hook ask 提示仍强制追问）</td>
+</tr>
+<tr>
+<td><code>s</code></td>
+<td>跳过本次调用（模型收到"被跳过"的 tool 结果）</td>
+</tr>
+<tr>
+<td><code>n</code></td>
+<td>拒绝本次调用</td>
+</tr>
+</tbody>
+</table>
+<p>run 级授权（<code>r</code>）只作用于「本来就会弹人工提示」的环节：<code>deny</code> 规则、<code>ask</code> 规则、PreToolUse / PermissionRequest hook 的 ask 提示与 <code>plan</code> 只读闸门都不受影响，仍按各自优先级生效。首按 <code>r</code> 的那次决策审计记为 <code>hitl</code>，之后被 run 级放行的调用记为 <code>run-scope</code>（与 <code>readonly-rule</code> 同风格）。</p>
+<p>边界要写清：run 的语义是<strong>一次 agent run 的主代理上下文</strong>——REPL 里即一个用户回合触发的完整 react 循环（<code>Agent._run_react</code> 每次 run 都新建 ToolContext，授权随之清零）。子代理（subagent）有自己的 ToolContext，主代理按 <code>r</code> 放行的工具在子代理里仍会独立弹审批。需要会话级放行请用 <code>a</code>（auto 模式）或 <code>permissions.allow</code> 规则。</p>
+<h2 id="子进程环境清洗env_sanitization"><a class="toclink" href="#子进程环境清洗env_sanitization">子进程环境清洗（env_sanitization）</a></h2>
+<p><code>bash</code> / <code>execute_command</code> 与后台任务派生会把<strong>清洗后的环境</strong>传给子进程，而不是父进程的全量 <code>os.environ</code>（实现：<code>src/nexuscli/policy/sandbox.py</code> 的 <code>sanitize_environment</code>）：</p>
+<ul>
+<li><strong>剔除机密形态键</strong>：变量名含 <code>KEY</code> / <code>SECRET</code> / <code>TOKEN</code> / <code>PASSWORD</code> / <code>CREDENTIAL</code> / <code>PRIVATE_KEY</code>（大小写不敏感子串）的键一律不传——一条 <code>env</code> 或 <code>printenv</code> 命令不再能读走宿主进程携带的 API key。</li>
+<li><strong>剔除内部变量</strong>：<code>NEXUSCLI_*</code> 前缀的 CLI 自身配置变量不传。</li>
+<li><strong>运行必需键强制保留</strong>：<code>PATH</code> / <code>PATHEXT</code> / <code>HOME</code> / <code>USERPROFILE</code> / <code>TEMP</code> / <code>TMP</code> / <code>SYSTEMROOT</code> / <code>COMSPEC</code> 等 18 个键即使命中上面的模式也保留，保证子进程能启动。</li>
+<li><strong>宁删勿漏</strong>：良性名字碰巧含模式（如 <code>MONKEY</code>）也会被删——少一个变量是可见的 bug，漏一把 key 不是。</li>
+</ul>
+<p>config.json 的 <code>policy.env_sanitization</code> 开关（默认 <code>true</code>）控制该护栏；设为 <code>false</code> 退回全量继承的旧行为。</p>
+<p><strong>如实边界：这是护栏，不是沙箱。</strong> 它是「黑名单 + 安全网」，不是能力系统——名字不带机密形态的变量照样传给子进程，防的是意外泄漏的地板，不是恶意子进程。当前只清洗两个 agent 面向的 spawn 点（前台 <code>bash</code> 与后台任务注册表）。<strong>仍未清洗</strong>的子进程路径，按覆盖面挂账而非缺陷列出：</p>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>现状</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MCP stdio server</td>
+<td>继承全量 <code>os.environ</code>（叠加 <code>spec.env</code>）</td>
+<td>server 合同上常需环境变量，直接清洗会破坏既有配置；接前需按 server 设计 allowlist</td>
+</tr>
+<tr>
+<td>hooks runner</td>
+<td>继承全量 <code>os.environ</code></td>
+<td>待接入</td>
+</tr>
+<tr>
+<td>slash 命令 <code>!`cmd`</code> 注入执行器</td>
+<td>继承全量 <code>os.environ</code></td>
+<td>待接入</td>
+</tr>
+</tbody>
+</table>
+<p>OS 级沙箱（容器、受限令牌）是更大体量的外部依赖，同样挂账；在它落地之前，不要把宿主机上不可泄露的机密放在子进程可读取的环境里并放开 HITL。</p><div class="pager"><a href="../index.html" class="prev"><span class="dir">← 返回</span><span class="name">站点首页</span></a><a href="hooks.html" class="next"><span class="dir">下一篇 →</span><span class="name">🪝 Hooks 生命周期钩子</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/permissions.md" target="_blank" rel="noopener">docs/permissions.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

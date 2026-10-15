@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>可观测性与调试 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：trace_id、OTel 遥测、模型 IO 落盘与 usage 统计。">
+  <meta property="og:title" content="可观测性与调试 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/observability.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#trace_id审计--llm-请求关联">trace_id：审计 ↔ LLM 请求关联</a></li>
+<li><a href="#opentelemetry-遥测可选依赖">OpenTelemetry 遥测（可选依赖）</a></li>
+<li><a href="#模型-io-调试落盘llmdebug_dump">模型 IO 调试落盘（llm.debug_dump）</a></li>
+<li><a href="#本地-usage-落库usage-stats-的数据源">本地 usage 落库（/usage stats 的数据源）</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🔭 trace_id、OTel 遥测、模型 IO 落盘与 usage 统计</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/observability.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="可观测性与调试"><a class="toclink" href="#可观测性与调试">可观测性与调试</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🔭 可观测性与调试」章节的完整版。</p>
+</blockquote>
+<p>本文覆盖四块彼此独立、可单独开关的观测能力：trace_id 关联、OpenTelemetry 遥测、模型 IO 调试落盘、本地 usage 落库。</p>
+<h2 id="trace_id审计--llm-请求关联"><a class="toclink" href="#trace_id审计--llm-请求关联">trace_id：审计 ↔ LLM 请求关联</a></h2>
+<p>每个 REPL 进程会话有一条 16 位十六进制的 trace id（实现：<code>src/nexuscli/observability.py</code>，首个消费者惰性生成，之后进程内稳定）：</p>
+<ul>
+<li><strong>审计日志</strong>：执行器写每条审计记录时附 <code>trace_id</code> 字段（<code>policy/audit_log.py</code>；REPL 里 <code>/audit [N]</code> 即可看到）。无 trace id 的调用方字段为空串，老记录格式兼容。</li>
+<li><strong>LLM 请求头</strong>：OpenAI-compatible 客户端在 <code>chat</code> 请求上附 <code>X-Request-ID: &lt;trace_id&gt;</code>（<code>llm/openai_compatible.py</code>）。刻意边界：<code>list_models</code> 走的 <code>/models</code> 请求不带该头，只有 chat 路径在切片内。</li>
+</ul>
+<p>同一会话内「这次模型调用 ↔ 这些工具审计」可用同一 id 对起来。作用域是<strong>进程内</strong>：跨进程传播明确不在切片内；子代理与主代理同进程，因此共享同一条 id。</p>
+<h2 id="opentelemetry-遥测可选依赖"><a class="toclink" href="#opentelemetry-遥测可选依赖">OpenTelemetry 遥测（可选依赖）</a></h2>
+<p>配置：</p>
+<pre><code class="language-json">{ &quot;telemetry&quot;: { &quot;enabled&quot;: false } }
+</code></pre>
+<p><code>telemetry.enabled</code> 默认 <code>false</code>。span 只在「开关打开 <strong>且</strong> 可选依赖 <code>opentelemetry-api/sdk</code> 已安装（<code>uv sync --extra telemetry</code>）」时才真正产生；任一条件不满足，全链路 no-op——调用点无分支、行为与没有遥测代码的构建逐字节一致（实现：<code>src/nexuscli/telemetry/tracing.py</code>）。</p>
+<p>两类 span：</p>
+<table>
+<thead>
+<tr>
+<th>span</th>
+<th>属性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>llm.chat</code>（<code>llm/openai_compatible.py</code> 的 chat 流程）</td>
+<td><code>nexuscli.trace_id</code>、<code>nexuscli.llm.model</code>、<code>nexuscli.llm.provider</code></td>
+</tr>
+<tr>
+<td><code>tool.call</code>（<code>tools/executor.py</code> 的工具执行）</td>
+<td><code>nexuscli.trace_id</code>、<code>nexuscli.tool.name</code>、<code>nexuscli.tool.outcome</code>（<code>ok</code>/<code>error</code>，在 span 结束前写入）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>支持边界（如实说明）</strong>：</p>
+<ul>
+<li>内置实现<strong>没有 OTLP exporter，未接真实 collector</strong>，不做任何网络导出；生产路径直接使用 OTel 全局 <code>TracerProvider</code>（不注入时即默认 <code>NonRecordingSpan</code>，等于不导出）——这是可复用 OTel instrumentation 的标准姿态。需要导出时，可在自己拉起的进程里先注册全局 <code>TracerProvider</code>（如 OTLP exporter 指向你自己的 collector）。</li>
+<li>仓库内的验证口径是 <strong>in-memory span exporter</strong> 的单元测试（<code>tests/test_telemetry.py</code>：断言 span 名称、属性、SDK 缺失时 no-op、工厂接线产出 chat span），未做真实 collector 的端到端验证。</li>
+<li>未移植（对比 ZCode）：agent_turn/agent_step/compaction 多层 span 层级、跨进程 span 传播、采样策略、错误脱敏器。</li>
+</ul>
+<h2 id="模型-io-调试落盘llmdebug_dump"><a class="toclink" href="#模型-io-调试落盘llmdebug_dump">模型 IO 调试落盘（<code>llm.debug_dump</code>）</a></h2>
+<pre><code class="language-json">{ &quot;llm&quot;: { &quot;debug_dump&quot;: true } }
+</code></pre>
+<p>默认 <code>false</code>。开启后（实现：<code>llm/openai_compatible.py</code>）：</p>
+<ul>
+<li>每回合追加两行 JSONL 到 <code>~/.nexuscli/debug/llm/&lt;YYYY-MM-DD&gt;.jsonl</code>：请求行（在首个流事件前落盘，含 <code>ts</code>/<code>direction: request</code>/<code>provider</code>/<code>model</code>/<code>url</code>/<code>headers</code>/<code>payload</code>）与响应行（流结束后落盘，含聚合 <code>text</code>、<code>tool_calls</code>、<code>usage</code>）</li>
+<li><strong>敏感头脱敏</strong>：<code>authorization</code>、<code>proxy-authorization</code>、<code>x-api-key</code>、<code>cookie</code>、<code>set-cookie</code> 的值替换为 <code>&lt;redacted&gt;</code>；payload 为完整请求体（model/messages/tools 及采样参数等），不含凭据</li>
+<li>超时或 HTTP 状态错误的回合落一行 <code>direction: response</code> 的错误摘要；连接类错误提前返回的回合只有请求行（每回合至少留下请求记录）</li>
+<li>落盘 best-effort：任何写失败被吞掉，绝不打断对话回合</li>
+</ul>
+<p><strong>注意</strong>：请求头脱敏 ≠ 内容脱敏——<code>messages</code> 正文里可能有你的代码与文件内容，该文件只在可信机器上临时开启排查，用完关闭。</p>
+<h2 id="本地-usage-落库usage-stats-的数据源"><a class="toclink" href="#本地-usage-落库usage-stats-的数据源">本地 usage 落库（<code>/usage stats</code> 的数据源）</a></h2>
+<p>REPL 每完成一个回合，把一行用量写入 SQLite <code>~/.nexuscli/usage.db</code>（表 <code>turn_usage</code>：时间戳、session_id、model、provider、input/output/total tokens、cost_usd、cost_cny；实现：<code>llm/usage_store.py</code>）。SQL 全部走绑定参数，落库 best-effort——磁盘错误、库被锁、缺字段都不会打断回合。</p>
+<p><strong>覆盖面边界（如实披露）</strong>：只有 REPL 的<strong>普通回合</strong>与<strong>自定义命令回合</strong>会落库。以下回合不产生记录：</p>
+<ul>
+<li><code>/init</code>、<code>/plan</code>、<code>/workflow</code>、<code>/expert</code> 派发的回合（<code>repl._record_turn_usage</code> 只挂在主循环两个回合分支上）</li>
+<li>单次 CLI 模式（<code>nexuscli -p</code>）的执行</li>
+<li>落库值取主代理自身的 <code>last_usage</code>——子代理（前台 <code>task</code> 或后台 <code>task</code>）是独立的 Agent 实例，其消耗<strong>不会</strong>合并进主回合的落库行，也没有自己的行</li>
+</ul>
+<p>因此 <code>/usage stats</code> 的统计值反映的是 REPL 直连对话中主代理的用量，不是含子代理的全局账单。</p>
+<p><strong>与转录 usage 记录是两条独立通道</strong>：除 usage.db 外，每个完成的普通回合还会把一条 <code>type: usage</code> 记录行追加进当前会话 JSONL 转录（字段：ts/model/provider/input/output/total/cache_hit/cache_miss/cost_usd/cost_cny；实现：<code>session/store.py</code> 的 <code>SessionWriter.append_usage</code>）。转录记录是会话内口径：<code>/resume</code>、<code>-c</code> / <code>--resume</code> 恢复时求和为历史基线，<code>/usage</code> 与单次 <code>--json</code> 的 <code>session_usage</code> 读的就是它（历史累计 = 基线 + 本进程累计，两者之和等于该转录的台账）；<code>/clear</code> / <code>/resume</code> / <code>/fork</code> 切换转录时基线与本进程累计同步重置。usage.db 不受转录切换影响，继续按天/按模型聚合全局历史。两条通道覆盖面一致（都只记 REPL 普通回合与自定义命令回合），单次 <code>-p</code> 模式两条都不写。</p><div class="pager"><a href="slash-commands.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🪄 自定义斜杠命令</span></a><a href="cron.html" class="next"><span class="dir">下一篇 →</span><span class="name">⏰ 定时任务（cron）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/observability.md" target="_blank" rel="noopener">docs/observability.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

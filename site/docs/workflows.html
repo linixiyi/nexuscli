@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>动态工作流与 /expert · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：JSON 步骤图 DAG、依赖批次并行与内置专家流程。">
+  <meta property="og:title" content="动态工作流与 /expert · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/workflows.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#工作流文件格式">工作流文件格式</a></li>
+<li><a href="#校验规则全部拒绝即报-workflow-error">校验规则（全部拒绝即报 Workflow error）</a></li>
+<li><a href="#执行语义">执行语义</a></li>
+<li><a href="#expert">/expert</a></li>
+<li><a href="#如实边界">如实边界</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🔀 JSON 步骤图 DAG、依赖批次并行与内置专家流程</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/workflows.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="动态工作流与-expert"><a class="toclink" href="#动态工作流与-expert">动态工作流与 /expert</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🔀 动态工作流与 /expert」章节的完整版。</p>
+</blockquote>
+<p>NexusCLI 提供一个 JSON 步骤图引擎（实现：<code>src/nexuscli/workflow/graph.py</code>，纯 schema 层，无网络无执行）和 REPL 侧的依赖批次并行派发器（<code>workflow_cmds._run_workflow_graph</code>）。两个入口共用同一引擎与提示词层：</p>
+<ul>
+<li><code>/workflow run &lt;file&gt;.json</code>：加载你写的步骤图（路径相对当前工作区解析）；</li>
+<li><code>/expert &lt;topic&gt;</code>：内置固定三步专家流程，无需写 JSON。</li>
+</ul>
+<h2 id="工作流文件格式"><a class="toclink" href="#工作流文件格式">工作流文件格式</a></h2>
+<pre><code class="language-json">{
+  &quot;steps&quot;: [
+    { &quot;id&quot;: &quot;research&quot;,  &quot;prompt&quot;: &quot;只读调研 X 的现状、相关文件与约束，输出要点清单&quot;, &quot;depends_on&quot;: [] },
+    { &quot;id&quot;: &quot;implement&quot;, &quot;prompt&quot;: &quot;基于调研结论完成 X 的最小改动实现&quot;, &quot;depends_on&quot;: [&quot;research&quot;] },
+    { &quot;id&quot;: &quot;verify&quot;,    &quot;prompt&quot;: &quot;验证 X 的实现，对照目标指出缺口与风险&quot;, &quot;depends_on&quot;: [&quot;implement&quot;] }
+  ]
+}
+</code></pre>
+<p>每个 step 三个字段：<code>id</code>（非空字符串，唯一）、<code>prompt</code>（非空字符串，派发给子代理的完整指令）、<code>depends_on</code>（字符串数组，缺省 <code>[]</code>）。顶层是 <code>{"steps": [...]}</code>，未知顶层键被忽略。</p>
+<h2 id="校验规则全部拒绝即报-workflow-error"><a class="toclink" href="#校验规则全部拒绝即报-workflow-error">校验规则（全部拒绝即报 <code>Workflow error</code>）</a></h2>
+<ul>
+<li>顶层必须是 JSON 对象；<code>steps</code> 必须是非空列表，每个 step 必须是对象</li>
+<li><code>id</code> / <code>prompt</code> 必须是非空字符串；<code>id</code> 重复拒绝</li>
+<li><code>depends_on</code> 必须是字符串数组；引用不存在的 id（含自依赖）拒绝</li>
+<li>依赖图含环（1/2/3 节点各种形态）在加载时即被 DFS 检出并拒绝</li>
+<li>文件不可读、非 UTF-8、JSON 语法错误同样报 <code>Workflow error</code>，不会让 REPL 退出</li>
+</ul>
+<h2 id="执行语义"><a class="toclink" href="#执行语义">执行语义</a></h2>
+<ul>
+<li><strong>依赖批次并行派发</strong>：每轮取全部依赖已完成的 ready 步骤，按拓扑位序取前 <code>workflow.max_parallel_steps</code> 个（默认 3，<code>1</code> 严格退化为旧的串行行为）用 <code>asyncio.gather</code> 并发派发（实现：<code>workflow_cmds._run_workflow_graph</code>）。某一批次内任一步骤失败时，已在跑的兄弟步骤会等它自然跑完（不取消、报告照常回收），但不再派发后续批次——失败步骤之后未运行的步骤会列出并中止（它们的上游输入已缺失）。</li>
+<li><strong>每步都是 <code>general-purpose</code> 子代理</strong>：步骤不能声明代理类型；子代理收到的是受控编排提示词——先列出全图拓扑序，再指定「本次执行的步骤 k/n」，原样注入上游报告，最后要求输出自包含步骤报告。</li>
+<li><strong>每步独立邮箱</strong>：并发派发时同名兄弟步骤若共用一个邮箱收件箱，会互相消费对方的消息（mailbox 是读后清空的 drain 语义）。因此每个步骤都被派发为独立的邮箱代理名 <code>general-purpose.&lt;步骤 id 清洗后&gt;</code>（收件箱按代理名分文件，派发前会清掉同会话内早前工作流运行残留的旧收件箱），并发批次内兄弟步骤的邮箱名会写进各自的派发提示词，跨步骤同步用 <code>mailbox_post</code> 的 <code>to</code> 指定对方的邮箱名即可。</li>
+<li><strong>上游报告注入</strong>：步骤 prompt 会带上所有 <code>depends_on</code> 上游的完整报告原文。</li>
+<li><strong>失败即中止</strong>：某步抛错时打印 <code>[workflow] Step &lt;id&gt; failed: ...</code> 并中止剩余步骤，已完成的报告不回滚。</li>
+<li><strong>进度与汇收</strong>：派发时打印 <code>[workflow] (k/n) dispatching step &lt;id&gt;</code>；全部完成后打印 <code>Workflow complete — n step reports:</code> 并逐一输出 <code>=== &lt;step_id&gt; ===</code> 报告。</li>
+</ul>
+<p>并发上界在配置里调（<code>~/.nexuscli/config.json</code> 或项目 <code>.nexuscli/config.json</code>）：</p>
+<pre><code class="language-json">{ &quot;workflow&quot;: { &quot;max_parallel_steps&quot;: 2 } }
+</code></pre>
+<h2 id="expert"><a class="toclink" href="#expert">/expert <topic></a></h2>
+<p><code>/expert</code> 把主题代入固定的三步线性链（实现：<code>slash_commands._EXPERT_STEPS</code>）：</p>
+<ol>
+<li><code>research</code> — 围绕主题只读调研：现状、相关文件与约束，输出带依据的要点清单</li>
+<li><code>execute</code> — 基于调研结论做最小改动实施，过程中做只读验证</li>
+<li><code>report</code> — 复核成果、指出缺口与风险，输出最终综合报告</li>
+</ol>
+<p>ZCode 参考实现的八阶段专家工作流与 critic 循环<strong>未</strong>移植，这里就是这三步。</p>
+<h2 id="如实边界"><a class="toclink" href="#如实边界">如实边界</a></h2>
+<ul>
+<li><strong>usage 覆盖面</strong>：工作流/专家派发的每一步，只要真实产出了 token，就由 <code>subagent.run_subagent</code> 的 done 事件记录器以 <code>source=subagent</code> 落一行进 <code>~/.nexuscli/usage.db</code>（<code>/usage stats</code> 的 By source 表可见）；零 token 的空跑（如脚本化 stub）不落行。派发器本身不再写任何行，工作流回合也不注入会话目标提醒（与 <code>/init</code>、<code>/plan</code> 同一边界）</li>
+<li><strong><code>workflow.max_parallel_steps</code></strong>：默认 3；配置为 0/负数会被钳到 1，非数值回退默认。它是并发的上界而不是承诺——每批实际并发数受当前 ready 步骤数限制；<code>1</code> 即严格串行</li>
+<li>步骤报告只打印到控制台，不做产物持久化与快照存储；没有断点续跑/暂停语义</li>
+<li>与 <code>/init</code> 一致的优先级约定：用户/项目自定义命令若叫 <code>workflow</code> 或 <code>expert</code>，会遮蔽内置分支</li>
+<li>ZCode 的 critic 迭代、澄清轮次、策略配置均未移植（并发调度前沿已按上面语义实现）</li>
+</ul><div class="pager"><a href="subagents.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🧩 子代理 task 工具</span></a><a href="runtime-api.html" class="next"><span class="dir">下一篇 →</span><span class="name">📡 Runtime API</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/workflows.md" target="_blank" rel="noopener">docs/workflows.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

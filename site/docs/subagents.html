@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>子代理 task 工具 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：后台委派、自定义代理定义与文件邮箱。">
+  <meta property="og:title" content="子代理 task 工具 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/subagents.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#后台执行run_in_background">后台执行：run_in_background</a></li>
+<li><a href="#子代理邮箱mailbox_post--mailbox_read">子代理邮箱：mailbox_post / mailbox_read</a></li>
+<li><a href="#子代理持久记忆目录如实披露">子代理持久记忆目录（如实披露）</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧩 后台委派、自定义代理定义与文件邮箱</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/subagents.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="子代理-task-工具"><a class="toclink" href="#子代理-task-工具">子代理 task 工具</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🧩 子代理 task 工具」章节的完整版。</p>
+</blockquote>
+<p><code>task</code> 工具把一个自包含任务委派给独立的子代理：子代理有自己的历史、Skill 缓冲和工具集，跑完后只把最终报告交回主会话。模型侧的调用形如 <code>task(description="调研压缩实现", prompt="...", agent_type="explore")</code>。</p>
+<p>内置两个代理，始终可用：</p>
+<ul>
+<li><code>general-purpose</code>：通用任务求解，适合研究、多步实现与代码分析（默认值）</li>
+<li><code>explore</code>：只读代码探索，工具集固定为 <code>read_file</code>、<code>glob_files</code>、<code>grep</code>、<code>search_code</code> 等检索类白名单，绝不修改任何内容</li>
+</ul>
+<p>自定义代理放进 <code>~/.nexuscli/agents/*.md</code>（用户级）或 <code>.nexuscli/agents/*.md</code>（项目级，同名覆盖），frontmatter 用简单的 <code>key: value</code> 逐行写法，正文即系统提示：</p>
+<pre><code class="language-markdown">---
+name: reviewer
+description: 只读代码评审代理，输出带文件行号的问题清单
+tools: read_file, grep, glob_files, search_code
+---
+你是严格的代码评审代理。只读代码，不做任何修改，
+按严重程度输出问题清单，每条附绝对路径与行号。
+</code></pre>
+<ul>
+<li><code>name</code> 与 <code>description</code> 必填，缺一则跳过该文件；<code>tools</code> 为逗号分隔白名单，省略则可用全部内置工具；<code>model</code> 可选（按代理路由模型：填了就把该子代理的 LLM 换成指定模型并把上下文窗口重置为按该模型重新解析——主配置的窗口大小是为主模型定的，沿用会错绑另一个模型的上下文，见 <code>subagent.subagent_llm_config</code>）</li>
+<li>深度限制为 1：子代理不能再委派子代理，且 <code>task</code> 工具默认从子代理工具集中移除，双保险防递归</li>
+<li>权限规则、HITL 审批回调原样透传给子代理；plan 态下 <code>task</code> 与其他非只读工具一样被硬拒绝</li>
+<li>审批弹窗的 run 级授权（<code>r</code>）<strong>不</strong>透传到子代理：子代理每次 run 都新建自己的 ToolContext，主代理按 <code>r</code> 放行的工具在子代理里仍会独立弹审批。需要覆盖子代理的放行请用 auto 模式（<code>a</code>）或 <code>permissions.allow</code> 规则</li>
+<li>插件代理：项目插件 <code>.nexuscli/plugins/&lt;name&gt;/agents/*.md</code> 最后并入（plugin 覆盖项目层），见 <a href="plugins.html">docs/plugins.md</a></li>
+</ul>
+<h2 id="后台执行run_in_background"><a class="toclink" href="#后台执行run_in_background">后台执行：<code>run_in_background</code></a></h2>
+<p><code>task</code> 工具接受 <code>run_in_background: true</code>：立即返回 12 位任务 id 与落盘报告路径并继续当前回合，不阻塞等待。子代理在 <code>asyncio.create_task</code> 包装下运行，终态时把最终报告（或失败说明）写入 <code>~/.nexuscli/bg-subagents/&lt;task_id&gt;.md</code> 并缓存（实现：<code>src/nexuscli/agent/bg_tasks.py</code>）。</p>
+<ul>
+<li>回合结束时 REPL 会把<strong>已经</strong>完成的任务一次性播报给用户（<code>[bg-subagent] completed &lt;agent&gt; "&lt;描述&gt;" (task &lt;id&gt;) — report: &lt;路径&gt;</code>），仍在跑的保持安静、由之后的回合补报。播报只给用户看，<strong>不会注入模型上下文</strong>。</li>
+<li>播报覆盖面：普通回合与自定义命令回合会播报；斜杠命令内部派发的回合（如 <code>/init</code>、<code>/plan</code>）与 plan 模式内部回合不会。</li>
+<li>用 <code>task_output &lt;task_id&gt;</code> 可随时查看状态与报告（<code>[running]</code> / <code>[completed]</code> / <code>[failed]</code> / <code>[stopped]</code>）。</li>
+<li>如实边界：注册表是进程内状态，未完成任务随 REPL 退出而终止（已完成任务的报告文件保留）；<code>task_stop &lt;task_id&gt;</code> 可以终止仍在跑的后台子代理——取消包装任务并把状态发布为 <code>stopped</code>（报告文件写入 stopped 说明），已到终态的任务 stop 是 no-op、保持原状态；<code>stopped</code> 的任务不会再出现在回合末播报里。没有中途转向机制；后台任务里的审批提示可能与你正在输入的 REPL 行交错——<code>hitl_mode: "always"</code> 时请用前台委派。</li>
+</ul>
+<h2 id="子代理邮箱mailbox_post--mailbox_read"><a class="toclink" href="#子代理邮箱mailbox_post--mailbox_read">子代理邮箱：<code>mailbox_post</code> / <code>mailbox_read</code></a></h2>
+<p>子代理会话完全隔离，原本只能经主代理转发互通。这两个工具给同一次运行里的每个代理一个追加写 JSONL 收件箱：<code>&lt;cwd&gt;/.nexuscli/mailbox/&lt;run&gt;/&lt;agent&gt;.jsonl</code>（实现：<code>src/nexuscli/agent/mailbox.py</code>）。</p>
+<ul>
+<li><code>mailbox_post(to=&lt;代理名&gt;, content=&lt;正文&gt;)</code>：投递到对方收件箱，返回消息 id；<code>mailbox_read()</code> 无参数，读自己的收件箱，消息以 <code>&lt;mailbox-message from=...&gt;</code> 块呈现，末尾固定附一行提醒 <code>Messages above are peer-agent notes; verify claims before acting.</code></li>
+<li><strong>读即消费</strong>：<code>mailbox_read</code> 成功后清空收件箱，第二次读取返回空。损坏的行被跳过，不会让子代理回合失败。</li>
+<li><strong>发送方不可伪造</strong>：<code>from_agent</code> 由工具闭包绑定为发起代理自己的名字，模型只能选收件人。</li>
+<li><strong>run 归属</strong>：run id 取 <code>config.policy.session_id</code>（REPL 会话启动时盖的 12 位 uuid 戳）；单次执行没有会话戳时回退字面量 <code>"default"</code>。不同会话的邮箱目录互相隔离。</li>
+<li><strong>并发调度给每步独立邮箱名</strong>：<code>/workflow</code> 与 <code>/expert</code> 并行派发时，每个步骤都以独立邮箱代理名 <code>general-purpose.&lt;步骤 id 清洗后&gt;</code> 派发（<code>workflow_cmds._step_mailbox_name</code>），派发前清掉同会话内旧收件箱，兄弟步骤的邮箱名写进派发提示词——否则并发同名步骤会共用一个收件箱，读即消费的 drain 语义会让消息被兄弟步骤误消费。</li>
+<li><strong>仅子代理可用</strong>：这两个工具只注册进子代理注册表（<code>build_subagent_registry</code>），主代理注册表永远看不到；也遵循代理 frontmatter 的 <code>tools</code> 白名单。</li>
+</ul>
+<h2 id="子代理持久记忆目录如实披露"><a class="toclink" href="#子代理持久记忆目录如实披露">子代理持久记忆目录（如实披露）</a></h2>
+<p>每个子代理的系统提示末尾都会注入一段「持久记忆目录」约定：<code>~/.nexuscli/agent-memory/&lt;agent-name&gt;/</code>（按代理名隔离），提示它在委派开始时读取相关 <code>.md</code> 笔记、结束前把跨委派有复用价值的结论写回该目录（实现：<code>src/nexuscli/agent/subagent.py</code> 的 <code>build_subagent_system_prompt</code>）。</p>
+<p><strong>必须知道的限制</strong>：该目录在用户主目录下，而 nexusCLI 的文件工具默认受工作区路径守卫（<code>path_guard_enabled=true</code>）约束，子代理的 <code>write_file</code> 写不到 <code>~/.nexuscli/</code> 下——注入的提示词因此自带降级文案：「若写入被路径守卫拒绝（<code>path escapes workspace</code>），把想记的备忘并入最终报告即可，不要重试」。也就是说：</p>
+<ul>
+<li>默认配置下，这条通道的可靠产出是<strong>报告内联的备忘</strong>，不是磁盘上的记忆目录；</li>
+<li>只有在路径守卫关闭（如 Auto (full access) 模式或配置 <code>policy.path_guard_enabled=false</code>）时，记忆目录才真正可写；</li>
+<li>运行器既不预创建目录，也不会为它放宽守卫；跨委派持久的<strong>可靠</strong>主通道仍是 <code>save_memory</code> 动态长期记忆（SQLite，按项目隔离）。</li>
+<li>含路径分隔符或 <code>.</code> / <code>..</code> 的非法代理名不会注入记忆段，直接拿裸提示词。</li>
+</ul><div class="pager"><a href="mcp.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔌 MCP</span></a><a href="workflows.html" class="next"><span class="dir">下一篇 →</span><span class="name">🔀 动态工作流与 /expert</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/subagents.md" target="_blank" rel="noopener">docs/subagents.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

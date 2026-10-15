@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NexusCLI 运行教程 · NexusCLI</title>
+  <meta name="description" content="NexusCLI 运行教程：从安装依赖、配置模型 API 到第一次跑通 Agent 任务的完整教程。">
+  <meta property="og:title" content="NexusCLI 运行教程 · NexusCLI">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/tutorial.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="index.html#features">功能</a>
+        <a href="index.html#docs">文档</a>
+        <a href="tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#1-前置条件">1. 前置条件</a></li>
+<li><a href="#2-安装依赖">2. 安装依赖</a></li>
+<li><a href="#3-配置模型-api核心步骤">3. 配置模型 API（核心步骤）</a><ul>
+<li><a href="#31-创建-env-文件">3.1 创建 .env 文件</a></li>
+<li><a href="#32-其他配置方式可选">3.2 其他配置方式（可选）</a></li>
+</ul>
+</li>
+<li><a href="#4-检查环境">4. 检查环境</a></li>
+<li><a href="#5-运行">5. 运行</a><ul>
+<li><a href="#51-单次任务推荐第一次先跑这个">5.1 单次任务（推荐第一次先跑这个）</a></li>
+<li><a href="#52-交互模式repl">5.2 交互模式（REPL）</a></li>
+<li><a href="#53-其他运行模式">5.3 其他运行模式</a></li>
+<li><a href="#54-平台能力速览">5.4 平台能力速览</a></li>
+</ul>
+</li>
+<li><a href="#6-把-agent-用起来下一步建议">6. 把 Agent 用起来（下一步建议)</a></li>
+<li><a href="#7-常见问题排查">7. 常见问题排查</a></li>
+<li><a href="#8-开发与测试可选">8. 开发与测试（可选）</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="index.html#docs">← 文档中心</a><span>·</span><span>🚀 从零到第一次跑通 Agent 任务</span></div><div class="generated-banner">📄 本页由仓库 <code>TUTORIAL.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="nexuscli-运行教程"><a class="toclink" href="#nexuscli-运行教程">NexusCLI 运行教程</a></h1>
+<p>本教程带你从零把 NexusCLI 跑起来：安装依赖 → 配置模型 API → 验证环境 → 真正跑通第一次 Agent 任务。配置示例以 OpenCodeGO 中转站（OpenAI-compatible / Chat Completions 格式）为准，同样适用于 DeepSeek、GLM 等官方直连。</p>
+<blockquote>
+<p>所有命令默认在项目根目录 <code>NexusCLI/</code>（即本仓库）下执行，终端用 PowerShell、CMD 或 Git Bash 均可。</p>
+</blockquote>
+<hr>
+<h2 id="1-前置条件"><a class="toclink" href="#1-前置条件">1. 前置条件</a></h2>
+<table>
+<thead>
+<tr>
+<th>依赖</th>
+<th>要求</th>
+<th>说明</th>
+<th>检查命令</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Python</td>
+<td>3.11 或更新</td>
+<td>运行时</td>
+<td><code>python --version</code></td>
+</tr>
+<tr>
+<td><a href="https://docs.astral.sh/uv/">uv</a></td>
+<td>任意近期版本</td>
+<td>包管理 + 运行入口，<strong>必装</strong></td>
+<td><code>uv --version</code></td>
+</tr>
+<tr>
+<td>rg (ripgrep)</td>
+<td>可选</td>
+<td>doctor 检测项；Agent 可经 bash 手动使用；装了它内置 <code>grep</code> 工具的目录搜索会自动加速（没有也能跑，自动回退纯 Python）</td>
+<td><code>rg --version</code></td>
+</tr>
+<tr>
+<td>Node.js</td>
+<td>20.19+（可选）</td>
+<td>仅 Chrome DevTools MCP 需要</td>
+<td><code>node --version</code></td>
+</tr>
+</tbody>
+</table>
+<p>没装 uv 的话，Windows PowerShell 一行安装：</p>
+<pre><code class="language-powershell">powershell -ExecutionPolicy ByPass -c &quot;irm https://astral.sh/uv/install.ps1 | iex&quot;
+</code></pre>
+<p>macOS / Linux：</p>
+<pre><code class="language-bash">curl -LsSf https://astral.sh/uv/install.sh | sh
+</code></pre>
+<h2 id="2-安装依赖"><a class="toclink" href="#2-安装依赖">2. 安装依赖</a></h2>
+<pre><code class="language-bash">uv sync --extra dev
+</code></pre>
+<p>uv 会自动创建虚拟环境（<code>.venv/</code>）、按 <code>pyproject.toml</code> + <code>uv.lock</code> 安装精确版本的依赖，并把本项目以可编辑方式装进去。之后所有命令都用 <code>uv run nexuscli ...</code> 的形式执行，不需要手动激活虚拟环境。</p>
+<p>两个可选依赖组按需追加（不影响基础功能）：</p>
+<pre><code class="language-bash">uv sync --extra pdf        # 让 read_file 能读 .pdf 文档（pypdf）
+uv sync --extra telemetry  # 启用 OpenTelemetry span（还需配置 telemetry.enabled=true）
+</code></pre>
+<p>首次验证安装成功：</p>
+<pre><code class="language-bash">uv run nexuscli --version
+# 输出: nexuscli 0.1.0
+
+uv run nexuscli --help
+</code></pre>
+<h2 id="3-配置模型-api核心步骤"><a class="toclink" href="#3-配置模型-api核心步骤">3. 配置模型 API（核心步骤）</a></h2>
+<p>NexusCLI 需要一个 OpenAI-compatible 的 Chat Completions 接口。下面按中转站（如 OpenCodeGO）的配置来写，<strong>推荐用项目根目录的 <code>.env</code> 文件</strong>，这是最省事、最不容易漏的方式。</p>
+<h3 id="31-创建-env-文件"><a class="toclink" href="#31-创建-env-文件">3.1 创建 <code>.env</code> 文件</a></h3>
+<p>在项目根目录新建名为 <code>.env</code> 的文件（没有扩展名前缀的点），内容如下：</p>
+<pre><code class="language-dotenv">NEXUSCLI_PROVIDER=openai-compatible
+NEXUSCLI_BASE_URL=https://&lt;你的中转站地址&gt;/v1
+NEXUSCLI_MODEL=deepseek-v4-flash
+NEXUSCLI_CONTEXT_WINDOW=1000000
+NEXUSCLI_API_KEY=sk-你的APIKey
+</code></pre>
+<p>逐行解释（对应服务商后台截图里的字段）：</p>
+<table>
+<thead>
+<tr>
+<th>环境变量</th>
+<th>填什么</th>
+<th>对应后台字段</th>
+<th>注意事项</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NEXUSCLI_PROVIDER</code></td>
+<td><code>openai-compatible</code></td>
+<td>API 格式 = Chat Completions</td>
+<td>凡是兼容 <code>/chat/completions</code> 的中转/自建服务都用这个</td>
+</tr>
+<tr>
+<td><code>NEXUSCLI_BASE_URL</code></td>
+<td><code>https://&lt;你的中转站地址&gt;/v1</code></td>
+<td>Base URL</td>
+<td><strong>填到 <code>/v1</code> 为止</strong>。程序会自动在后面拼 <code>/chat/completions</code>，不要自己把 <code>/chat/completions</code> 写进去，也不要少写 <code>/v1</code></td>
+</tr>
+<tr>
+<td><code>NEXUSCLI_MODEL</code></td>
+<td><code>deepseek-v4-flash</code></td>
+<td>模型列表</td>
+<td>必须和服务商模型名<strong>一字不差</strong></td>
+</tr>
+<tr>
+<td><code>NEXUSCLI_CONTEXT_WINDOW</code></td>
+<td><code>1000000</code></td>
+<td>模型徽标（如 1M）</td>
+<td>自定义模型默认按 128K 处理，按后台标注填可以充分利用长上下文</td>
+</tr>
+<tr>
+<td><code>NEXUSCLI_API_KEY</code></td>
+<td><code>sk-...</code></td>
+<td>API Key</td>
+<td>服务商签发的密钥</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>安全提醒</strong>：<code>.env</code> 已在 <code>.gitignore</code> 里，不会被提交到 git。不要把真实 Key 写进 README、教程或任何会被提交的文件，也不要发给别人；Key 泄漏后请立即在服务商后台重置。</p>
+</blockquote>
+<h3 id="32-其他配置方式可选"><a class="toclink" href="#32-其他配置方式可选">3.2 其他配置方式（可选）</a></h3>
+<p>除 <code>.env</code> 外，NexusCLI 还支持（优先级从低到高）：</p>
+<ol>
+<li>内置默认值</li>
+<li>用户级 <code>~/.nexuscli/config.json</code>（全局生效，Windows 即 <code>C:\Users\你\.nexuscli\config.json</code>）</li>
+<li>项目级 <code>.nexuscli/config.json</code>（只对当前仓库生效）</li>
+<li>项目级 <code>.env</code>（本教程推荐）</li>
+<li>CLI 参数（临时覆盖，优先级最高）</li>
+<li>当前进程环境变量</li>
+</ol>
+<p>JSON 配置文件对应写法（<code>~/.nexuscli/config.json</code>）：</p>
+<pre><code class="language-json">{
+  &quot;llm&quot;: {
+    &quot;provider&quot;: &quot;openai-compatible&quot;,
+    &quot;base_url&quot;: &quot;https://&lt;你的中转站地址&gt;/v1&quot;,
+    &quot;model&quot;: &quot;deepseek-v4-flash&quot;,
+    &quot;context_window&quot;: 1000000,
+    &quot;api_key&quot;: &quot;sk-你的APIKey&quot;
+  }
+}
+</code></pre>
+<p>临时用 CLI 参数覆盖（不改任何文件）：</p>
+<pre><code class="language-bash">uv run nexuscli --provider openai-compatible \
+  --base-url https://&lt;你的中转站地址&gt;/v1 \
+  --model deepseek-v4-flash \
+  --api-key sk-你的APIKey \
+  -p &quot;你好&quot;
+</code></pre>
+<p>如果用 DeepSeek 官方直连，则更简单——不用填 base_url：</p>
+<pre><code class="language-dotenv">NEXUSCLI_PROVIDER=deepseek
+NEXUSCLI_MODEL=deepseek-v4-flash
+DEEPSEEK_API_KEY=sk-你的DeepSeekKey
+</code></pre>
+<h2 id="4-检查环境"><a class="toclink" href="#4-检查环境">4. 检查环境</a></h2>
+<pre><code class="language-bash">uv run nexuscli doctor --cwd .
+</code></pre>
+<p>关键字段确认这三项即可：</p>
+<pre><code class="language-json">{
+  &quot;api_key&quot;: &quot;configured&quot;,
+  &quot;provider&quot;: &quot;openai-compatible&quot;,
+  &quot;model&quot;: &quot;deepseek-v4-flash&quot;
+}
+</code></pre>
+<ul>
+<li><code>api_key</code> 显示 <code>configured</code> 说明 Key 已被读取；显示 <code>missing</code> 说明 <code>.env</code> 没被找到或变量名拼错（见第 7 节排查）。</li>
+<li><code>python</code>、<code>uv</code> 显示正常即可；<code>node</code>/<code>npx</code>/<code>rg</code> 是可选项，缺失只影响对应可选功能。</li>
+</ul>
+<h2 id="5-运行"><a class="toclink" href="#5-运行">5. 运行</a></h2>
+<h3 id="51-单次任务推荐第一次先跑这个"><a class="toclink" href="#51-单次任务推荐第一次先跑这个">5.1 单次任务（推荐第一次先跑这个）</a></h3>
+<pre><code class="language-bash">uv run nexuscli --plain -p &quot;请用一句话介绍你自己,然后读取 README.md 的第一行并告诉我内容&quot;
+</code></pre>
+<p>实际运行输出示例：</p>
+<pre><code class="language-text">我是 NexusCLI，一个运行在终端中的 Python AI Agent CLI，对标 Claude Code，提供交互式 REPL、单次 Prompt、SDK、MCP Server 和后台 Task Worker 等能力。
+
+现在读取 README.md 的第一行：README.md 的第一行内容是：`# NexusCLI`
+</code></pre>
+<p>看到模型自我介绍、并且<strong>自动调用了 <code>read_file</code> 工具</strong>读到真实文件内容，说明整条链路（流式调用 → ReAct 工具循环 → 结果回灌）已经完全跑通。</p>
+<p>想看本次任务的 Token 用量，加 <code>--json</code>：</p>
+<pre><code class="language-bash">uv run nexuscli -p &quot;只回复两个字:成功&quot; --json
+</code></pre>
+<pre><code class="language-json">{&quot;text&quot;: &quot;成功&quot;, &quot;mode&quot;: &quot;react&quot;, &quot;turns&quot;: 1,
+ &quot;usage&quot;: {&quot;input_tokens&quot;: 29463, &quot;output_tokens&quot;: 62, &quot;total_tokens&quot;: 29525}}
+</code></pre>
+<blockquote>
+<p><code>cost</code> 字段为空是正常的：自定义 openai-compatible 模型没有内置单价，需要时可在配置的 <code>llm.prices</code> 里填每百万 Token 单价。</p>
+</blockquote>
+<h3 id="52-交互模式repl"><a class="toclink" href="#52-交互模式repl">5.2 交互模式（REPL）</a></h3>
+<pre><code class="language-bash">uv run nexuscli
+</code></pre>
+<p>进入后直接打字对话即可，Agent 会自主调用工具。常用操作：</p>
+<ul>
+<li>输入 <code>/help</code> 查看全部命令，<code>/exit</code> 或 <code>Ctrl+C</code> 退出</li>
+<li><code>/tools</code> 查看可用工具，<code>/config</code> 查看运行时配置，<code>/usage</code> 查看上次用量</li>
+<li><code>/model</code> 打开交互式模型选择器（可保存多套 BYOK 配置到 <code>~/.nexuscli/models.json</code>）</li>
+<li><code>Shift+Tab</code> 循环切换会话权限模式：<code>Default</code>（危险操作需人工确认）→ <code>Auto (full access)</code>（免审批，谨慎使用）→ <code>plan (read-only)</code>（只读审阅，非只读工具被拒绝，判定为只读的 bash 命令如 <code>git status</code>、<code>ls</code> 仍放行）→ 回到 <code>Default</code></li>
+</ul>
+<p>常用斜杠命令速查：</p>
+<table>
+<thead>
+<tr>
+<th>命令</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/plan &lt;任务&gt;</code></td>
+<td>先规划成 DAG 再按依赖执行</td>
+</tr>
+<tr>
+<td><code>/team &lt;任务&gt;</code></td>
+<td>多 Agent 协作（Planner/Worker/Reviewer）</td>
+</tr>
+<tr>
+<td><code>/save &lt;事实&gt;</code></td>
+<td>写入长期记忆</td>
+</tr>
+<tr>
+<td><code>/memory [search\|stats]</code></td>
+<td>查看/搜索长期记忆</td>
+</tr>
+<tr>
+<td><code>/index [路径]</code></td>
+<td>建本地代码索引，配合 <code>/search &lt;query&gt;</code></td>
+</tr>
+<tr>
+<td><code>/snapshot</code> / <code>/restore &lt;id&gt;</code></td>
+<td>项目快照与恢复现场</td>
+</tr>
+<tr>
+<td><code>/resume</code> / <code>/resume &lt;序号\|id&gt;</code></td>
+<td>查看/切换历史会话</td>
+</tr>
+<tr>
+<td><code>/compact [重点]</code></td>
+<td>手动压缩会话历史，可指定摘要保留重点</td>
+</tr>
+<tr>
+<td><code>/usage stats [N天]</code></td>
+<td>本地落库的近 N 天用量统计（默认 7 天）</td>
+</tr>
+<tr>
+<td><code>/fork [标题]</code></td>
+<td>分叉当前会话为新会话并切换过去（原会话不变）</td>
+</tr>
+<tr>
+<td><code>/goal set &lt;目标&gt;</code></td>
+<td>设置跨回合的长程目标，每回合自动提醒，<code>/goal clear</code> 清除</td>
+</tr>
+<tr>
+<td><code>/effort low</code></td>
+<td>会话内切换推理力度（仅 openai/openai-compatible 类 provider 实际发送）</td>
+</tr>
+<tr>
+<td><code>/skill list</code></td>
+<td>查看已装的 Skill</td>
+</tr>
+<tr>
+<td><code>/clear</code></td>
+<td>清空当前会话上下文（并开启新会话）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>会话会自动保存</strong>：REPL 里的每轮对话都写入 <code>~/.nexuscli/sessions/</code>，退出后可以继续：</p>
+<pre><code class="language-bash">uv run nexuscli sessions            # 列出本项目的会话
+uv run nexuscli -c                  # 继续最近一次会话
+uv run nexuscli --resume &lt;id&gt;       # 按会话 id 恢复
+</code></pre>
+<p>单次模式同样能带历史：<code>uv run nexuscli -p "继续刚才的任务" -c</code>。</p>
+<p><strong>自定义命令（可选）</strong>：把 markdown 提示词文件放进 <code>~/.nexuscli/commands/</code>（用户级）或
+<code>.nexuscli/commands/</code>（项目级），文件名就是命令名，REPL 和 <code>-p</code> 模式都能用：
+<code>/命令名 参数</code> 会展开成提示词发给 Agent。示例见仓库 <code>examples/commands/</code>。</p>
+<h3 id="53-其他运行模式"><a class="toclink" href="#53-其他运行模式">5.3 其他运行模式</a></h3>
+<pre><code class="language-bash"># Plan-and-Execute 模式
+uv run nexuscli --mode plan -p &quot;先读取 README，再验证项目&quot;
+
+# 多 Agent 协作模式
+uv run nexuscli --mode team --worker-mode plan -p &quot;并行审计核心模块&quot;
+</code></pre>
+<h3 id="54-平台能力速览"><a class="toclink" href="#54-平台能力速览">5.4 平台能力速览</a></h3>
+<p>跑通基础流程后，建议按下面三步把平台能力用起来。全程只需要两个文件加三次按键。</p>
+<p><strong>第一步：配置权限规则和 Hooks</strong>（项目 <code>.nexuscli/config.json</code>）：</p>
+<pre><code class="language-json">{
+  &quot;permissions&quot;: {
+    &quot;allow&quot;: [&quot;read_file&quot;, &quot;bash(git diff:*)&quot;, &quot;write_file(src/**)&quot;],
+    &quot;deny&quot;: [&quot;bash(curl | sh)&quot;]
+  },
+  &quot;hooks&quot;: {
+    &quot;PreToolUse&quot;: [
+      {
+        &quot;matcher&quot;: &quot;write_file&quot;,
+        &quot;hooks&quot;: [
+          { &quot;type&quot;: &quot;command&quot;, &quot;command&quot;: &quot;python .nexuscli/hooks/check.py&quot;, &quot;timeout&quot;: 10 }
+        ]
+      }
+    ]
+  }
+}
+</code></pre>
+<p>这样 <code>git diff</code>、写 <code>src/**</code> 不再弹审批，<code>curl | sh</code> 直接被拒；每次写文件前 <code>check.py</code> 会先通过 stdin 收到 JSON 载荷，脚本以 exit 2 退出即可阻断这次写入。</p>
+<p><strong>第二步：定义一个自定义命令</strong>（项目 <code>.nexuscli/commands/review.md</code>）：</p>
+<pre><code class="language-markdown">---
+description: 只读评审指定文件
+mode: plan
+allowed-tools: read_file, grep, glob_files
+argument-hint: &lt;文件路径&gt;
+---
+请只读评审 $1 的问题，按严重程度列出，不要修改任何文件。
+</code></pre>
+<p><strong>第三步：进 REPL 体验完整闭环</strong>：</p>
+<pre><code class="language-text">uv run nexuscli
+&gt; Shift+Tab            # 切到 Auto，再按一次切到 plan (read-only)，状态栏变蓝
+&gt; /review src/nexuscli/config.py
+  （mode: plan 生效，Agent 只读调研并给出评审结论，写文件会被硬拒绝）
+&gt; Shift+Tab            # 切回 Default
+&gt; （让 Agent 按结论修改代码，这次写操作正常走审批）
+&gt; /compact 权限评审结论  # 会话太长时手动压缩，摘要优先保留指定重点
+</code></pre>
+<p><code>Shift+Tab</code> 在 <code>Default → Auto (full access) → plan (read-only)</code> 三态间循环；<code>/compact [focus]</code> 会立即压缩历史并输出 tokens before/after 统计。各能力的完整说明见 README 的<a href="https://github.com/linixiyi/nexuscli/blob/main/README.md#-权限规则">权限规则</a>、<a href="https://github.com/linixiyi/nexuscli/blob/main/README.md#-hooks-生命周期钩子">Hooks</a>、<a href="https://github.com/linixiyi/nexuscli/blob/main/README.md#-plan-模式">Plan 模式</a>与<a href="https://github.com/linixiyi/nexuscli/blob/main/README.md#-自定义斜杠命令">自定义斜杠命令</a>章节。</p>
+<h2 id="6-把-agent-用起来下一步建议"><a class="toclink" href="#6-把-agent-用起来下一步建议">6. 把 Agent 用起来（下一步建议)</a></h2>
+<ul>
+<li>在项目里放一个 <code>NEXUS.md</code>（或 <code>AGENTS.md</code>）写清工程约定，Agent 每次运行都会读它作为长期上下文</li>
+<li>用 <code>.nexuscli/skills/&lt;名字&gt;/SKILL.md</code> 沉淀项目级技能，<code>~/.nexuscli/skills/</code> 放跨项目技能</li>
+<li>接入 MCP 工具：<code>uv run nexuscli mcp init-chrome --scope project</code> 一键生成 Chrome DevTools MCP 配置</li>
+<li>把 NexusCLI 当 MCP server 用：<code>uv run nexuscli mcp serve --transport stdio</code></li>
+</ul>
+<h2 id="7-常见问题排查"><a class="toclink" href="#7-常见问题排查">7. 常见问题排查</a></h2>
+<table>
+<thead>
+<tr>
+<th>现象</th>
+<th>原因</th>
+<th>解决</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>doctor</code> 显示 <code>api_key: missing</code></td>
+<td><code>.env</code> 不在项目根目录、文件名不对（要叫 <code>.env</code>）、或变量名拼错</td>
+<td>核对文件位置和 <code>NEXUSCLI_API_KEY</code> 拼写</td>
+</tr>
+<tr>
+<td>报 <code>LLM API key is not configured</code></td>
+<td>同上</td>
+<td>同上</td>
+</tr>
+<tr>
+<td>HTTP 401 / <code>invalid api key</code></td>
+<td>Key 错误、过期，或复制时带了空格</td>
+<td>重新复制 Key，确认未过期</td>
+</tr>
+<tr>
+<td>HTTP 404 / <code>model not found</code></td>
+<td>模型名与服务商不一致，或 base_url 少了 <code>/v1</code></td>
+<td>按服务商模型列表逐字核对 <code>NEXUSCLI_MODEL</code>；确认 URL 到 <code>/v1</code> 结束</td>
+</tr>
+<tr>
+<td><code>Could not connect to ...</code></td>
+<td>网络不通、需要代理，或 base_url 域名错误</td>
+<td>浏览器能打开该域名后重试；需要代理时给终端设置 <code>HTTPS_PROXY</code></td>
+</tr>
+<tr>
+<td>报 <code>LLM context window is not configured</code></td>
+<td>该模型没有内置档案且未配置窗口</td>
+<td>设置 <code>NEXUSCLI_CONTEXT_WINDOW</code>（如 <code>1000000</code>）</td>
+</tr>
+<tr>
+<td>回复为空或卡住</td>
+<td>中转站限流/超时</td>
+<td>稍后重试，或调大配置 <code>llm.timeout</code></td>
+</tr>
+</tbody>
+</table>
+<p>排查配置是否生效的最快方式永远是：</p>
+<pre><code class="language-bash">uv run nexuscli doctor --cwd .
+</code></pre>
+<p>它显示的就是"当前实际会生效"的 provider/model/key 状态。</p>
+<h2 id="8-开发与测试可选"><a class="toclink" href="#8-开发与测试可选">8. 开发与测试（可选）</a></h2>
+<pre><code class="language-bash">uv run python -m ruff check .        # 代码检查
+uv run python -m ruff format .       # 格式化
+uv run python -m pytest              # 单元测试
+uv build                             # 构建发布包
+</code></pre>
+<hr>
+<p>配置或运行中遇到其他问题，先跑 <code>doctor</code>，再用第 7 节对号入座；仍然解决不了的话，带上 <code>doctor</code> 输出（Key 已自动脱敏）去排查。</p><div class="pager"><a href="index.html" class="prev"><span class="dir">← 返回</span><span class="name">站点首页</span></a><a href="docs/permissions.html" class="next"><span class="dir">继续阅读 →</span><span class="name">🔐 权限规则</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/TUTORIAL.md" target="_blank" rel="noopener">TUTORIAL.md</a> 构建生成</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="index.html">← 返回首页</a></p>
+</footer>
+<script src="site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

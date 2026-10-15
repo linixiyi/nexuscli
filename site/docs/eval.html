@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eval — Offline Task-Level Regression · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：脚本化场景、断言体系与回归 diff 门禁。">
+  <meta property="og:title" content="Eval — Offline Task-Level Regression · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/eval.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#commands">Commands</a></li>
+<li><a href="#scenario-schema">Scenario schema</a><ul>
+<li><a href="#assertions">Assertions</a></li>
+</ul>
+</li>
+<li><a href="#how-a-scenario-runs">How a scenario runs</a></li>
+<li><a href="#regression-comparison">Regression comparison</a></li>
+<li><a href="#scope-and-honest-boundaries">Scope and honest boundaries</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧪 脚本化场景、断言体系与回归 diff 门禁</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/eval.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="eval--offline-task-level-regression"><a class="toclink" href="#eval--offline-task-level-regression">Eval — Offline Task-Level Regression</a></h1>
+<p><code>nexuscli eval</code> is an offline evaluation harness for task-level agent
+behavior. Instead of calling a real LLM, a <strong>scripted (fake) LLM client</strong>
+drives the real <code>Agent</code> through JSON scenarios; assertions then check the
+tool-call sequence and the final output. Consecutive runs are diffed so a
+change that breaks an agent workflow shows up as a <strong>regression</strong> before it
+reaches production.</p>
+<h2 id="commands"><a class="toclink" href="#commands">Commands</a></h2>
+<pre><code class="language-bash">nexuscli eval list              # list built-in scenarios (examples/evals)
+nexuscli eval run               # run every built-in scenario (same as --all)
+nexuscli eval run --all         # explicit form of the default
+nexuscli eval run --file path   # one scenario file, or a directory of *.json
+</code></pre>
+<p><code>eval run</code> prints one <code>PASS/FAIL</code> line per scenario plus a summary, writes the
+report to <code>&lt;cwd&gt;/.nexuscli/evals/last-report.json</code>, and exits <code>1</code> when any
+scenario failed (CI-friendly).</p>
+<h2 id="scenario-schema"><a class="toclink" href="#scenario-schema">Scenario schema</a></h2>
+<p>A scenario is one JSON document. Required keys are <code>name</code>, <code>prompt</code>,
+<code>scripted_turns</code>; everything else is optional but strictly validated — unknown
+keys, wrong shapes, deny rules targeting tools the scenario does not define,
+or invalid JSON all fail with a clear error naming the file.</p>
+<pre><code class="language-jsonc">{
+  &quot;name&quot;: &quot;read-task-details&quot;,          // required, non-empty
+  &quot;description&quot;: &quot;Happy path&quot;,          // optional, shown by `eval list`
+  &quot;prompt&quot;: &quot;List the tasks ...&quot;,       // required: the user message fed to the agent
+  &quot;tools&quot;: [                            // optional: deterministic stub tools
+    {
+      &quot;name&quot;: &quot;list_tasks&quot;,
+      &quot;description&quot;: &quot;List tracked tasks.&quot;,
+      &quot;result&quot;: &quot;1. fix login (urgent)&quot;, // canned tool output
+      &quot;is_error&quot;: false,                 // optional (default false)
+      &quot;read_only&quot;: true,                 // optional (default true)
+      &quot;requires_approval&quot;: false,        // optional (default false)
+      &quot;danger_level&quot;: &quot;safe&quot;             // optional: safe | medium | high
+    }
+  ],
+  &quot;scripted_turns&quot;: [                   // required, non-empty: the fake LLM's
+    {                                   // responses, replayed in order
+      &quot;tool_calls&quot;: [                   // each call: {&quot;name&quot;, &quot;arguments&quot;}
+        {&quot;name&quot;: &quot;list_tasks&quot;, &quot;arguments&quot;: {}}
+      ]
+    },
+    {
+      &quot;text&quot;: &quot;The most urgent task is 'fix login'.&quot;  // final assistant text
+    }
+  ],
+  &quot;permission_deny&quot;: [&quot;deploy_app&quot;],    // optional: injected as deny rules
+  &quot;hitl_mode&quot;: &quot;auto&quot;,                  // optional: auto | never | always
+  &quot;assertions&quot;: {                       // optional; four supported checks
+    &quot;expected_tool_sequence&quot;: [&quot;list_tasks&quot;],
+    &quot;final_contains&quot;: [&quot;fix login&quot;],
+    &quot;forbidden_tools&quot;: [&quot;bash&quot;],
+    &quot;max_turns&quot;: 3
+  }
+}
+</code></pre>
+<h3 id="assertions"><a class="toclink" href="#assertions">Assertions</a></h3>
+<table>
+<thead>
+<tr>
+<th>assertion</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>expected_tool_sequence</code></td>
+<td>the exact ordered list of tool names the agent must call</td>
+</tr>
+<tr>
+<td><code>final_contains</code></td>
+<td>every listed substring must appear in the final assistant text</td>
+</tr>
+<tr>
+<td><code>forbidden_tools</code></td>
+<td>none of these tool names may appear anywhere in the call sequence</td>
+</tr>
+<tr>
+<td><code>max_turns</code></td>
+<td>the react loop must finish within this many turns</td>
+</tr>
+</tbody>
+</table>
+<p>A turn is one scripted LLM response. A turn with <code>tool_calls</code> gets
+<code>stop_reason=tool_use</code> (so the loop continues after the tools run); a turn
+with only <code>text</code> ends the run.</p>
+<h2 id="how-a-scenario-runs"><a class="toclink" href="#how-a-scenario-runs">How a scenario runs</a></h2>
+<p>The runner reuses the same fake-LLM injection pattern as the agent unit tests
+(<code>tests/test_agent_turns.py</code>): a <code>ScriptedLlmClient</code> replays <code>scripted_turns</code>
+as the streaming event protocol, and the scenario's tools are injected as
+deterministic stub tools into a real <code>ToolRegistry</code>.</p>
+<p><strong>Stub tools, deliberately chosen over a real builtin read-only subset.</strong> The
+whole execution path — tool validation, permission rules, plan/HITL gates,
+the react loop — is the real one; only each tool's <em>effect</em> is canned. Real
+builtin tools would read the actual workspace, making scenarios depend on
+repo contents and machine layout; stubs keep every scenario hermetic and
+byte-identical across machines, which is what a regression baseline needs.
+(Scenario <code>02_denied_privileged_call.json</code> proves the gate chain is real: its
+canned result <code>"deployed"</code> never appears — the deny rule intercepts first.)</p>
+<p>Each run is isolated: no network call, no real LLM, telemetry disabled
+(no usage recording), audit log disabled, no context compression or skill
+prefixes. The report itself is written under the project's own
+<code>.nexuscli/evals/</code>.</p>
+<p>One known side effect, disclosed rather than hidden: scenarios run the real
+<code>Agent.run</code>, whose pre/post-turn snapshot step still executes — each turn
+copies the project tree to <code>~/.nexuscli/snapshots/&lt;digest&gt;</code> (twice per turn,
+like any other agent run). Nothing else escapes the project or the user home.</p>
+<h2 id="regression-comparison"><a class="toclink" href="#regression-comparison">Regression comparison</a></h2>
+<p>Every run writes <code>.nexuscli/evals/last-report.json</code>. On the next run the
+previous report is read back and each scenario is marked:</p>
+<table>
+<thead>
+<tr>
+<th>previous → current</th>
+<th>verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>pass → fail</td>
+<td><code>regression</code></td>
+</tr>
+<tr>
+<td>fail → pass</td>
+<td><code>fixed</code></td>
+</tr>
+<tr>
+<td>pass → pass</td>
+<td><code>unchanged</code></td>
+</tr>
+<tr>
+<td>fail → fail</td>
+<td><code>still_failing</code></td>
+</tr>
+<tr>
+<td>no previous entry</td>
+<td><code>new</code></td>
+</tr>
+</tbody>
+</table>
+<p>The summary counts <code>regressions</code> and <code>fixed</code> separately, so
+<code>nexuscli eval run</code> doubles as a CI gate: nonzero exit on any failure, and
+the <code>regressions</code> count tells you which failures are new. A corrupt previous
+report is an error, not a silent reset — silently dropping the baseline would
+turn real regressions into <code>new</code> verdicts.</p>
+<h2 id="scope-and-honest-boundaries"><a class="toclink" href="#scope-and-honest-boundaries">Scope and honest boundaries</a></h2>
+<p>Scripted evals cover <strong>orchestration and tool-chain regression</strong>: the react
+loop, tool sequencing, permission gating, convergence within a turn budget,
+and the shape of the final answer. They do <strong>not</strong> measure real LLM quality —
+the "model" is a fixed script, so prompt sensitivity, reasoning quality,
+hallucination behavior, and cost/latency are all out of scope. Use this
+harness to guard the wiring you control; evaluate real model behavior
+separately.</p><div class="pager"><a href="cron.html" class="prev"><span class="dir">← 上一篇</span><span class="name">⏰ 定时任务（cron）</span></a><a href="spec-skill.html" class="next"><span class="dir">下一篇 →</span><span class="name">📐 Spec 任务包工作流（spec 技能详解）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/eval.md" target="_blank" rel="noopener">docs/eval.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

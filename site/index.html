@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NexusCLI — 运行在终端里的 AI Agent CLI</title>
+  <meta name="description" content="NexusCLI 是一个面向真实项目开发场景的终端 AI Agent CLI：读写文件、执行命令、联网检索、MCP 工具、Plan-and-Execute、多 Agent 协作、记忆与快照，全部内置。">
+  <meta property="og:title" content="NexusCLI — 运行在终端里的 AI Agent CLI">
+  <meta property="og:description" content="面向真实项目开发场景的终端 AI Agent CLI。12 篇文档 + 完整教程，全部站点化。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="#features">功能</a>
+        <a href="#modes">模式</a>
+        <a href="#docs">文档</a>
+        <a href="tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="hero-grid">
+      <div>
+        <div class="hero-badge"><span class="dot"></span>v1.x · Python 3.11+ · MIT License</div>
+        <h1>把一个<span class="grad">真正的 AI Agent</span>装进你的终端</h1>
+        <p class="hero-sub">NexusCLI 是一个面向真实项目开发场景的终端 Agent CLI：读写文件、执行命令、联网检索、MCP 工具、记忆与快照，按 Claude Code 的工作方式设计，以 Python 实现。</p>
+        <div class="hero-tags">
+          <span>Plan-and-Execute</span><span>Multi-Agent</span><span>MCP</span>
+          <span>Hooks</span><span>Skills</span><span>Runtime API</span><span>快照恢复</span>
+        </div>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub 仓库 ↗</a>
+          <a class="btn btn-ghost" href="tutorial.html">运行教程</a>
+          <a class="btn btn-ghost" href="#docs">浏览文档</a>
+        </div>
+      </div>
+      <div class="term" aria-label="终端演示">
+        <div class="term-bar"><i></i><i></i><i></i><em>nexuscli — 交互 REPL</em></div>
+        <div class="term-body"><span class="t-dim">$</span> <span class="t-a">uv run nexuscli</span>
+
+<span class="t-dim">╭─</span> <span class="t-p">NexusCLI</span> <span class="t-dim">──────────────────────────╮</span>
+<span class="t-dim">│</span> 终端里的 AI Agent，已就绪。           <span class="t-dim">│</span>
+<span class="t-dim">╰──────────────────────────────────────╯</span>
+
+<span class="t-p">›</span> /mode plan 先梳理这个仓库再修 lint 告警
+
+<span class="t-c">plan:</span> 已生成 4 项任务（2 批并行）
+  <span class="t-w">◆</span> 扫描 src/ 的 lint 告警      <span class="t-dim">→ done</span>
+  <span class="t-w">◆</span> 归纳重复模式                <span class="t-dim">→ done</span>
+  <span class="t-w">◇</span> 修复 ruff 告警              <span class="t-dim">→ running</span>
+  <span class="t-w">◇</span> 重跑 CI 校验                <span class="t-dim">→ pending</span>
+
+<span class="t-dim">›</span> <span class="term-cursor"></span></div>
+      </div>
+    </div>
+  </header>
+
+  <div class="stats rv">
+    <div class="stat"><b class="accent">665</b><span>自动化测试（pytest）</span></div>
+    <div class="stat"><b>21,400+</b><span>核心源码行数（Python）</span></div>
+    <div class="stat"><b>20+</b><span>内置 Agent 工具</span></div>
+    <div class="stat"><b>12</b><span>篇深度文档（本站）</span></div>
+  </div>
+
+  <section class="section" id="features">
+    <div class="section-head rv">
+      <div class="kicker">Features</div>
+      <h2>为什么是 NexusCLI</h2>
+      <p>不是一个空壳 Demo：核心路径有测试覆盖，经过本地 smoke 与真实终端运行验证，文档里的每个「支持」都能在真实入口运行。</p>
+    </div>
+    <div class="features">
+      <div class="feature rv">
+        <div class="ico">🧭</div>
+        <h3>Plan-and-Execute</h3>
+        <p>独立 Planner 生成任务 DAG，按依赖批次并行执行；图级 checkpoint 默认开启，<code>/plan --resume</code> 跨进程续跑，协作式中断不打断已完成批次。</p>
+      </div>
+      <div class="feature rv">
+        <div class="ico">🤖</div>
+        <h3>Multi-Agent 协作</h3>
+        <p>Planner / Worker / Reviewer 分工，依赖调度与并行 worker，review 不通过自动重试；子代理可用 <code>task</code> 工具后台委派并经文件邮箱互通消息。</p>
+      </div>
+      <div class="feature rv">
+        <div class="ico">🔌</div>
+        <h3>MCP 双向</h3>
+        <p>既能作为 client 连接 stdio / Streamable HTTP server（带 <code>allowed_tools</code> 过滤），也能把自身内置工具暴露为 MCP server 供其他 Agent 使用。</p>
+      </div>
+      <div class="feature rv">
+        <div class="ico">🧠</div>
+        <h3>记忆与压缩</h3>
+        <p>静态项目记忆 + SQLite 动态长期记忆（去重、TTL、相关性召回）；上下文达预算 80% 自动压缩旧轮次，<code>/compact</code> 随时手动压缩并指定保留重点。</p>
+      </div>
+      <div class="feature rv">
+        <div class="ico">📸</div>
+        <h3>快照与恢复</h3>
+        <p>Agent run 前后自动快照，支持恢复现场；<code>vfs_ls / vfs_read</code> 把历史快照挂载为只读虚拟文件系统，改前改后对比无需回滚工作区。</p>
+      </div>
+      <div class="feature rv">
+        <div class="ico">🪝</div>
+        <h3>Hooks · Skills · 插件</h3>
+        <p>七个生命周期事件挂 shell 钩子；builtin/user/project 三层 Skill 体系 + HITL 确认的技能沉淀；本地插件目录可注入代理、Skill 与斜杠命令。</p>
+      </div>
+      <div class="feature rv">
+        <div class="ico">🔐</div>
+        <h3>权限与安全</h3>
+        <p>allow / deny / ask 三组规则在 HITL 之前自动放行、追问或拦截；写文件后自动语法诊断，危险动作经 policy、HITL 与 audit 全链路处理。</p>
+      </div>
+      <div class="feature rv">
+        <div class="ico">📡</div>
+        <h3>Runtime API</h3>
+        <p><code>serve --http</code> 把线程、turn、事件流与后台任务暴露为带鉴权的 HTTP API，外部系统可以直接接入 Agent 能力。</p>
+      </div>
+      <div class="feature rv">
+        <div class="ico">🧪</div>
+        <h3>离线评测回归</h3>
+        <p><code>nexuscli eval</code> 用脚本化假 LLM 驱动真实 Agent 跑 JSON 场景，两次运行自动 diff，<code>regression</code> 计数可直接当 CI 门禁。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="modes">
+    <div class="section-head rv">
+      <div class="kicker">Modes</div>
+      <h2>三种运行模式</h2>
+      <p>同一套工具与权限体系，三种推进方式。会话中按 <code>Shift+Tab</code> 还可在 Default / Auto / plan 之间循环切换权限态。</p>
+    </div>
+    <div class="modes">
+      <div class="mode rv">
+        <h3>⚡ React <span class="chip">默认</span></h3>
+        <p>经典 ReAct 工具调用循环：thinking → tool call → result → final，带循环调用检测与回合预算，交互 REPL 与单次 <code>-p</code> 均可用。</p>
+      </div>
+      <div class="mode rv">
+        <h3>📋 Plan <span class="chip">先规划</span></h3>
+        <p>先由 Planner 拆解为依赖 DAG，再按批次并行执行；checkpoint 跨进程续跑，适合多步骤改造、审计与迁移类任务。</p>
+      </div>
+      <div class="mode rv">
+        <h3>👥 Team <span class="chip">协作</span></h3>
+        <p>Planner + 多 Worker + Reviewer 全链路协作，review 重试直至通过，也可把 worker 切到 plan 模式承接更重的并行任务。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="docs">
+    <div class="section-head rv">
+      <div class="kicker">Documentation</div>
+      <h2>文档中心</h2>
+      <p>以下 12 篇文档由仓库 <code>docs/*.md</code> 构建生成，内容与源文件同步；每页带侧边目录与滚动高亮。</p>
+    </div>
+    <div class="docs-grid">
+      <a class="doc-card rv" href="tutorial.html"><div class="ico">🚀</div><div><h3>运行教程</h3><p>从安装依赖、配置模型 API 到第一次跑通 Agent 任务。</p></div></a>
+      <a class="doc-card rv" href="docs/permissions.html"><div class="ico">🔐</div><div><h3>权限规则</h3><p>allow / deny / ask 三组规则、命令级判定与审批透传。</p></div></a>
+      <a class="doc-card rv" href="docs/hooks.html"><div class="ico">🪝</div><div><h3>Hooks 生命周期钩子</h3><p>七个生命周期事件的挂载方式与安全约束。</p></div></a>
+      <a class="doc-card rv" href="docs/mcp.html"><div class="ico">🔌</div><div><h3>MCP</h3><p>stdio / HTTP server 接入、工具过滤与自身暴露为 server。</p></div></a>
+      <a class="doc-card rv" href="docs/subagents.html"><div class="ico">🧩</div><div><h3>子代理 task 工具</h3><p>后台委派、自定义代理定义与文件邮箱。</p></div></a>
+      <a class="doc-card rv" href="docs/workflows.html"><div class="ico">🔀</div><div><h3>动态工作流与 /expert</h3><p>JSON 步骤图 DAG、依赖批次并行与内置专家流程。</p></div></a>
+      <a class="doc-card rv" href="docs/runtime-api.html"><div class="ico">📡</div><div><h3>Runtime API</h3><p>线程、turn、事件流与后台任务的 HTTP 接入面。</p></div></a>
+      <a class="doc-card rv" href="docs/plugins.html"><div class="ico">🧱</div><div><h3>插件系统</h3><p>本地目录插件的发现、manifest 与组件并入链。</p></div></a>
+      <a class="doc-card rv" href="docs/slash-commands.html"><div class="ico">🪄</div><div><h3>自定义斜杠命令</h3><p>markdown 提示词、frontmatter 与占位符注入。</p></div></a>
+      <a class="doc-card rv" href="docs/observability.html"><div class="ico">🔭</div><div><h3>可观测性与调试</h3><p>trace_id、OTel 遥测、模型 IO 落盘与 usage 统计。</p></div></a>
+      <a class="doc-card rv" href="docs/cron.html"><div class="ico">⏰</div><div><h3>定时任务（cron）</h3><p>离线任务注册表与外部调度器驱动方式。</p></div></a>
+      <a class="doc-card rv" href="docs/eval.html"><div class="ico">🧪</div><div><h3>评测回归（eval）</h3><p>脚本化场景、断言体系与回归 diff 门禁。</p></div></a>
+      <a class="doc-card rv" href="docs/spec-skill.html"><div class="ico">📐</div><div><h3>Spec 任务包工作流</h3><p>规范驱动开发技能的核心概念与质量门禁。</p></div></a>
+    </div>
+  </section>
+
+  <section class="cta-band rv">
+    <div class="cta-inner">
+      <div>
+        <h2>五分钟跑起来</h2>
+        <p>克隆仓库、同步依赖、配一个 OpenAI-compatible API key，第一个 Agent 任务就能在终端里跑通。</p>
+      </div>
+      <a class="btn btn-primary" href="tutorial.html">查看运行教程 →</a>
+    </div>
+  </section>
+
+  <footer>
+    <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+    <p>本站由仓库 docs/ 下的 markdown 源文件构建 · <a href="https://linixiyi.github.io/nexuscli/architecture.html">交互式架构图</a></p>
+  </footer>
+
+  <script src="site.js"></script>
+</body>
+</html>

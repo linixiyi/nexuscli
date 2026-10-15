@@ -9,7 +9,9 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Tests](https://github.com/linixiyi/nexuscli/actions/workflows/ci.yml/badge.svg)
 
-[架构总览](#-架构总览) · [运行教程](TUTORIAL.md) · [快速开始](#-快速开始)
+[架构总览](#-架构总览) · [文档站点](https://linixiyi.github.io/nexuscli/) · [运行教程](TUTORIAL.md) · [快速开始](#-快速开始)
+
+> 🖥️ **文档站点**：[linixiyi.github.io/nexuscli](https://linixiyi.github.io/nexuscli/) —— 带导航与侧边目录的文档中心，收录本仓库全部 12 篇深度文档与运行教程；还有[交互式架构图](https://linixiyi.github.io/nexuscli/architecture.html)（节点搜索、路径追踪、深浅色主题）。站点页面由 `docs/*.md` 与 `TUTORIAL.md` 经 `site/build.py` 构建生成，内容与源文件同步。
 
 ---
 

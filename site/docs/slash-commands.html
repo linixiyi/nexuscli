@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>自定义斜杠命令 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：markdown 提示词、frontmatter 与占位符注入。">
+  <meta property="og:title" content="自定义斜杠命令 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/slash-commands.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul></ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🪄 markdown 提示词、frontmatter 与占位符注入</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/slash-commands.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="自定义斜杠命令"><a class="toclink" href="#自定义斜杠命令">自定义斜杠命令</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🪄 自定义斜杠命令」章节的完整版。</p>
+</blockquote>
+<p>把 markdown 文件放进命令目录，文件名（去掉 <code>.md</code>）就是命令名：</p>
+<ul>
+<li>用户级：<code>~/.nexuscli/commands/&lt;命令名&gt;.md</code>（跨项目可用）</li>
+<li>项目级：<code>.nexuscli/commands/&lt;命令名&gt;.md</code>（同名时覆盖用户级；该目录默认被 gitignore，适合放个人常用命令）</li>
+</ul>
+<p>文件格式（frontmatter 全部可选）：</p>
+<pre><code class="language-markdown">---
+description: 对指定代码做快速 review
+mode: plan
+allowed-tools: read_file, grep, glob_files
+argument-hint: &lt;文件路径&gt;
+---
+请对下面的目标做 code review：
+
+$ARGUMENTS
+</code></pre>
+<ul>
+<li><code>$ARGUMENTS</code> 会被替换为命令后面的参数；<code>$1</code>..<code>$9</code> 依次接收前九个位置参数（按空白切分、支持引号，越界替换为空串）；没有任何占位符时，参数会追加到提示词末尾</li>
+<li>frontmatter 的 <code>description</code> 会显示在 <code>/help</code> 里，<code>argument-hint</code> 提示参数写法</li>
+<li><code>mode: react|plan|team</code> 让命令在指定模式下运行（如 <code>plan</code> 只读审阅），运行完恢复原模式</li>
+<li><code>allowed-tools</code> 逗号分隔，命令运行期间只保留白名单内的工具，结束后恢复</li>
+<li>正文支持 <code>!`cmd`</code> 注入：展开时先执行命令并把 stdout 替换进提示词（30 秒超时）。被命令守卫判为高危的命令会被拒绝，原片段替换为 <code>[refused: &lt;cmd&gt; — blocked by command guard]</code> 标记，不会静默执行也不会炸掉整个展开</li>
+<li>REPL 输入 <code>/命令名</code> 或单次模式 <code>nexuscli -p "/命令名 参数"</code> 都会展开为提示词发给模型</li>
+<li>示例见仓库 <code>examples/commands/</code>，复制到命令目录即可使用</li>
+</ul>
+<p>注意：在 Git Bash 里调用 <code>-p "/命令名"</code> 时，MSYS 可能把开头的 <code>/</code> 当路径转换；加 <code>MSYS_NO_PATHCONV=1</code> 前缀即可。交互模式不受影响。</p><div class="pager"><a href="plugins.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🧱 插件系统（本地目录 MVP）</span></a><a href="observability.html" class="next"><span class="dir">下一篇 →</span><span class="name">🔭 可观测性与调试</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/slash-commands.md" target="_blank" rel="noopener">docs/slash-commands.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

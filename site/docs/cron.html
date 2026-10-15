@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>定时任务（cron） · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：离线任务注册表与外部调度器驱动方式。">
+  <meta property="og:title" content="定时任务（cron） · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/cron.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#任务表">任务表</a></li>
+<li><a href="#表达式语法">表达式语法</a></li>
+<li><a href="#cli-命令">CLI 命令</a></li>
+<li><a href="#外部调度器触发模式">外部调度器触发模式</a></li>
+<li><a href="#如实边界未从-zcode-移植的部分">如实边界（未从 ZCode 移植的部分）</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>⏰ 离线任务注册表与外部调度器驱动方式</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/cron.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="定时任务cron"><a class="toclink" href="#定时任务cron">定时任务（cron）</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「⏰ 定时任务（cron）」章节的完整版。</p>
+</blockquote>
+<p><code>nexuscli cron</code> 是<strong>离线形态</strong>的定时提示词注册表（实现：<code>src/nexuscli/runtime/cron.py</code> + <code>entrypoints/cli.py</code> 的 <code>cron_app</code>）：任务表就是一个 JSON 文件，CLI 只做解析与读取面，<strong>没有常驻守护进程、没有调度循环、模块内也不做任何 LLM/网络调用</strong>。真正到点触发由你或外部调度器驱动。</p>
+<h2 id="任务表"><a class="toclink" href="#任务表">任务表</a></h2>
+<p>任务表位于 <code>~/.nexuscli/cron.json</code>，<strong>手工维护</strong>（当前 CLI 不提供 create/update/delete 写操作）：</p>
+<pre><code class="language-json">{
+  &quot;tasks&quot;: [
+    { &quot;id&quot;: &quot;daily-standup&quot;,  &quot;cron&quot;: &quot;30 9 * * 1-5&quot;, &quot;prompt&quot;: &quot;汇总本项目的近期改动，生成一份晨会纪要&quot;, &quot;enabled&quot;: true },
+    { &quot;id&quot;: &quot;weekly-report&quot;,  &quot;cron&quot;: &quot;0 18 * * 5&quot;,   &quot;prompt&quot;: &quot;读取本周会话记录并生成周报草稿&quot;, &quot;enabled&quot;: false }
+  ]
+}
+</code></pre>
+<p>字段：<code>id</code>（字符串）、<code>cron</code>（5 字段表达式）、<code>prompt</code>（触发时要交给模型的提示词）、<code>enabled</code>（缺省 <code>true</code>）。容错读取：文件缺失、JSON 损坏、结构不对都按空表处理；缺 <code>id</code>/<code>cron</code>/<code>prompt</code> 的条目被跳过，坏一条不会拖垮整个表。</p>
+<h2 id="表达式语法"><a class="toclink" href="#表达式语法">表达式语法</a></h2>
+<p>标准 vixie cron 的 5 字段：<code>分 时 日 月 周</code>（本地时区，全程 naive local time）。</p>
+<ul>
+<li>每字段支持：<code>*</code>、数字、逗号列表 <code>a,b</code>、区间 <code>a-b</code>、步进 <code>*/n</code> 与 <code>a-b/n</code></li>
+<li>值域：分 0-59、时 0-23、日 1-31、月 1-12、周 0-7（0=周日，<strong>7 规范化为 0</strong>）</li>
+<li>日/周两字段都被显式限制时按 vixie cron 的 <strong>OR</strong> 语义匹配（任一字段命中即可）；只限制其中一个时两字段都要满足</li>
+<li><code>next</code> 按分钟粒度向前扫描，最多一年（跨年不饱和的表达式报错）；<code>now</code> 本身命中的时刻不会被返回（严格「之后」）</li>
+</ul>
+<h2 id="cli-命令"><a class="toclink" href="#cli-命令">CLI 命令</a></h2>
+<pre><code class="language-bash">uv run nexuscli cron list          # 每行：id  cron  enabled/disabled  prompt
+uv run nexuscli cron next          # 每行：id  YYYY-MM-DD HH:MM（本地时间）；解析失败的任务标 [warn] 不中断整表
+uv run nexuscli cron run &lt;id&gt;      # 原样打印该任务的 prompt 后退出——不执行任何东西
+</code></pre>
+<p><code>cron run</code> 的行为：任务不存在或已 <code>enabled: false</code> 时报错退出码 1；否则把 prompt 原样输出到 stdout。这是刻意的离线设计：执行交给外部调度器串联。</p>
+<h2 id="外部调度器触发模式"><a class="toclink" href="#外部调度器触发模式">外部调度器触发模式</a></h2>
+<p>让系统 cron / Windows 任务计划程序在计划时刻运行：</p>
+<pre><code class="language-bash"># bash / Git Bash 示例：把打印出的 prompt 喂给单次执行
+uv run nexuscli -p &quot;$(uv run nexuscli cron run daily-standup)&quot;
+</code></pre>
+<pre><code class="language-powershell"># PowerShell 示例
+$p = uv run nexuscli cron run daily-standup; uv run nexuscli -p $p
+</code></pre>
+<h2 id="如实边界未从-zcode-移植的部分"><a class="toclink" href="#如实边界未从-zcode-移植的部分">如实边界（未从 ZCode 移植的部分）</a></h2>
+<ul>
+<li>无常驻守护进程与进程内调度循环——错过触发不补跑</li>
+<li>无 <code>delayMinutes</code> 相对调度、无 <code>intervalUnit+interval</code> 间隔调度、无会话边界约束</li>
+<li>无桌面通知；CLI 无任务的增删改命令，写表即手工编辑 JSON</li>
+</ul><div class="pager"><a href="observability.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔭 可观测性与调试</span></a><a href="eval.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧪 Eval — Offline Task-Level Regression</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/cron.md" target="_blank" rel="noopener">docs/cron.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

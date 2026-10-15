@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Runtime API · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：线程、turn、事件流与后台任务的 HTTP 接入面。">
+  <meta property="og:title" content="Runtime API · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/runtime-api.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul></ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>📡 线程、turn、事件流与后台任务的 HTTP 接入面</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/runtime-api.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="runtime-api"><a class="toclink" href="#runtime-api">Runtime API</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「📡 Runtime API」章节的完整版。</p>
+</blockquote>
+<p>NexusCLI 内置轻量 Runtime API，适合外部系统接入线程、turn、事件和后台任务。</p>
+<p>启动服务：</p>
+<pre><code class="language-bash">NEXUSCLI_RUNTIME_API_KEY=dev-key \
+uv run nexuscli serve --http --port 8080
+</code></pre>
+<p>创建线程：</p>
+<pre><code class="language-bash">curl -sS -X POST http://127.0.0.1:8080/v1/threads \
+  -H 'x-api-key: dev-key'
+</code></pre>
+<p>发送 turn：</p>
+<pre><code class="language-bash">curl -sS -X POST http://127.0.0.1:8080/v1/threads/&lt;thread_id&gt;/turns \
+  -H 'content-type: application/json' \
+  -H 'x-api-key: dev-key' \
+  -d '{&quot;message&quot;:&quot;总结这个项目&quot;}'
+</code></pre>
+<p>读取事件：</p>
+<pre><code class="language-bash">curl -sS http://127.0.0.1:8080/v1/threads/&lt;thread_id&gt;/events \
+  -H 'x-api-key: dev-key'
+</code></pre>
+<p>创建并查看后台任务：</p>
+<pre><code class="language-bash">curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
+  -H 'content-type: application/json' \
+  -H 'x-api-key: dev-key' \
+  -d '{&quot;message&quot;:&quot;后台总结这个仓库&quot;,&quot;mode&quot;:&quot;plan&quot;}'
+
+curl -sS http://127.0.0.1:8080/v1/tasks \
+  -H 'x-api-key: dev-key'
+</code></pre>
+<p>也可以只启动队列消费者，不暴露 HTTP：</p>
+<pre><code class="language-bash">uv run nexuscli worker --workers 2 --cwd .
+</code></pre>
+<p>任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。</p><div class="pager"><a href="workflows.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔀 动态工作流与 /expert</span></a><a href="plugins.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧱 插件系统（本地目录 MVP）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/runtime-api.md" target="_blank" rel="noopener">docs/runtime-api.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>插件系统（本地目录 MVP） · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：本地目录插件的发现、manifest 与组件并入链。">
+  <meta property="og:title" content="插件系统（本地目录 MVP） · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/plugins.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#目录布局">目录布局</a></li>
+<li><a href="#pluginjson">plugin.json</a></li>
+<li><a href="#三类组件并入何处">三类组件并入何处</a></li>
+<li><a href="#健壮性约定">健壮性约定</a></li>
+<li><a href="#如实边界">如实边界</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧱 本地目录插件的发现、manifest 与组件并入链</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/plugins.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="插件系统本地目录-mvp"><a class="toclink" href="#插件系统本地目录-mvp">插件系统（本地目录 MVP）</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🧱 插件系统」章节的完整版。</p>
+</blockquote>
+<p>插件是一个放在项目 <code>.nexuscli/plugins/&lt;name&gt;/</code> 下的目录：一个 <code>plugin.json</code> manifest 加最多三个组件子目录（实现：<code>src/nexuscli/plugins/loader.py</code>）。启动装配时（<code>bootstrap.py</code> 第一步）只做<strong>发现</strong>——纯文件读取，无网络、无执行；三类组件的并入发生在各自的注册表加载函数里。</p>
+<h2 id="目录布局"><a class="toclink" href="#目录布局">目录布局</a></h2>
+<pre><code class="language-text">.nexuscli/plugins/my-plugin/
+├── plugin.json
+├── agents/
+│   └── reviewer.md          # 子代理定义（frontmatter: name/description/tools）
+├── skills/
+│   └── refactoring/
+│       └── SKILL.md         # Skill 包（目录名即技能名）
+└── commands/
+    └── review.md            # 自定义斜杠命令
+</code></pre>
+<h2 id="pluginjson"><a class="toclink" href="#pluginjson">plugin.json</a></h2>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;my-plugin&quot;,
+  &quot;description&quot;: &quot;团队共享的评审代理与命令&quot;,
+  &quot;version&quot;: &quot;0.1.0&quot;
+}
+</code></pre>
+<ul>
+<li><code>name</code> 必填（非空字符串）；<code>description</code> / <code>version</code> 可选，非字符串值回退默认而不是拒绝整个插件；未知键静默忽略</li>
+<li>组件目录存在才并入（存在性判定，不要求三者齐备）</li>
+</ul>
+<h2 id="三类组件并入何处"><a class="toclink" href="#三类组件并入何处">三类组件并入何处</a></h2>
+<table>
+<thead>
+<tr>
+<th>组件目录</th>
+<th>并入目标</th>
+<th>优先级</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agents/*.md</code></td>
+<td><code>task</code> 工具可委派的子代理注册表（<code>agent/subagent.load_subagents</code>）</td>
+<td>plugin &gt; 项目 &gt; 用户 &gt; 内置</td>
+</tr>
+<tr>
+<td><code>skills/*/SKILL.md</code></td>
+<td>Skill 注册表（<code>skill/registry.py</code>，在项目层之后扫描）</td>
+<td>plugin &gt; 项目 &gt; 用户 &gt; builtin</td>
+</tr>
+<tr>
+<td><code>commands/*.md</code></td>
+<td>自定义斜杠命令查找（<code>entrypoints/slash_commands.load_slash_commands</code>）</td>
+<td>plugin &gt; 项目 &gt; 用户</td>
+</tr>
+</tbody>
+</table>
+<p>并入遵循各注册表既有的「后扫描者覆盖」链，<strong>没有</strong> <code>${plugin}:${component}</code> 命名空间隔离——插件组件与手写组件同名时直接覆盖。</p>
+<h2 id="健壮性约定"><a class="toclink" href="#健壮性约定">健壮性约定</a></h2>
+<ul>
+<li><code>plugin.json</code> 缺失、不可读、非 UTF-8 字节、非法 JSON、非对象、缺 <code>name</code>：以 <code>[nexuscli:plugins]</code> 前缀发 <code>warnings.warn</code> 并<strong>只跳过该插件</strong>，其余插件与启动流程不受影响——一个坏插件不能拖垮 CLI 启动</li>
+<li>发现结果按解析后的 cwd 做进程级缓存：坏 manifest 每进程只警告一次（启动装配预热缓存）</li>
+</ul>
+<h2 id="如实边界"><a class="toclink" href="#如实边界">如实边界</a></h2>
+<ul>
+<li><strong>仅项目级本地目录</strong>：没有用户级插件目录（<code>~/.nexuscli/plugins/</code> 不生效），没有远程/市场分发（GitHub 归档、zip 均不支持）</li>
+<li>manifest 不支持显式组件路径声明（ZCode <code>collectComponentDirs</code> 的字符串/数组形式未移植）</li>
+<li>hooks / MCP servers / LSP servers / output styles 等其他组件类型不在本切片</li>
+<li>无用户配置项（userConfig）、无诊断结构（PluginDiagnostic）</li>
+</ul><div class="pager"><a href="runtime-api.html" class="prev"><span class="dir">← 上一篇</span><span class="name">📡 Runtime API</span></a><a href="slash-commands.html" class="next"><span class="dir">下一篇 →</span><span class="name">🪄 自定义斜杠命令</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/plugins.md" target="_blank" rel="noopener">docs/plugins.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · Terminal AI Agent CLI in Python · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer>
+<script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        link.href = (document.documentElement.getAttribute("data-theme") === "light") ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try { new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>
