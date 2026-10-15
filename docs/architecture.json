@@ -6,6 +6,12 @@
     "locale": "zh-CN",
     "output": "docs/architecture.html",
     "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/linixiyi/nexuscli.git",
+      "revision": "b2e0ef2688cf891c2cfb592abe86f33d2adad067",
+      "provider": "github",
+      "link_mode": "web"
+    },
     "views": [
       {
         "id": "main-path",
@@ -16,7 +22,7 @@
           "engine",
           "llm"
         ],
-        "note": "从终端输入到 OpenAI-compatible 流式对话的核心 ReAct 路径。"
+        "note": "从终端输入到 OpenAI-compatible 流式对话的核心 ReAct 路径，loop_guard 拦截重复工具循环。"
       },
       {
         "id": "tools-and-guard",
@@ -27,18 +33,19 @@
           "policy",
           "state"
         ],
-        "note": "写文件、执行命令等危险动作经过 policy、HITL 与 JSONL 审计后才会落盘。"
+        "note": "命令守卫 → bash 写域守卫 → 子进程环境净化 → HITL 四级审批 → JSONL 审计，危险动作才会落盘。"
       },
       {
-        "id": "remote-extend",
-        "label": "远程扩展",
+        "id": "self-iterate",
+        "label": "自迭代与扩展",
         "focus": [
           "engine",
-          "mcp",
-          "mcpsrv",
-          "skill"
+          "skill",
+          "workflow",
+          "hooks",
+          "entry"
         ],
-        "note": "MCP 远程工具与 builtin/user/project 分层 Skill 构成能力扩展面。"
+        "note": "技能自进化（版本快照/审计/回滚）、workflow 依赖派发、plan checkpoint 断点续跑与 hooks/plugins/eval 扩展面。"
       },
       {
         "id": "runtime-access",
@@ -49,45 +56,267 @@
           "engine",
           "context"
         ],
-        "note": "外部系统经 Runtime API 创建 thread、turn、事件与持久化后台任务。"
+        "note": "外部系统经 Runtime API 创建 thread/turn/事件，后台子代理任务与 cron 定时提示在进程内持久化。"
       }
     ]
   },
-  "layout": {
-    "mode": "grid",
-    "origin": [
-      40,
-      70
-    ],
-    "cols": 4,
-    "gapX": 150,
-    "gapY": 64,
-    "cellW": 180,
-    "cellH": 72
-  },
   "components": [
+    {
+      "id": "hooks",
+      "type": "backend",
+      "label": "Hooks 系统",
+      "sublabel": "事件协议 · 信任门 · 决策",
+      "pos": [
+        260,
+        236
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/hooks/runner.py",
+          "line": 1,
+          "end_line": 16
+        },
+        {
+          "path": "src/nexuscli/hooks/trust.py",
+          "line": 1,
+          "end_line": 16
+        }
+      ]
+    },
     {
       "id": "runtime",
       "type": "backend",
       "label": "Runtime API",
-      "sublabel": "threads · 任务队列",
-      "row": 0,
-      "col": 1,
+      "sublabel": "threads · 后台任务 · cron",
+      "pos": [
+        700,
+        236
+      ],
       "size": [
         180,
         72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/runtime/api.py",
+          "line": 1,
+          "end_line": 16
+        },
+        {
+          "path": "src/nexuscli/runtime/cron.py",
+          "line": 1,
+          "end_line": 22
+        }
+      ]
+    },
+    {
+      "id": "workflow",
+      "type": "backend",
+      "label": "Workflow 引擎",
+      "sublabel": "步骤图 · 依赖就绪派发",
+      "pos": [
+        640,
+        100
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/workflow/graph.py",
+          "line": 1,
+          "end_line": 12
+        }
       ]
     },
     {
       "id": "context",
       "type": "backend",
       "label": "上下文管理",
-      "sublabel": "预算压缩 · 动态 Prompt",
-      "row": 0,
-      "col": 2,
+      "sublabel": "预算压缩 · microcompact",
+      "pos": [
+        860,
+        100
+      ],
       "size": [
         180,
         72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/context/manager.py",
+          "line": 1,
+          "end_line": 10
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "backend",
+      "label": "Agent 引擎",
+      "sublabel": "react · plan · team · 循环守卫",
+      "tag": "plan checkpoint 续跑",
+      "pos": [
+        1140,
+        100
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/agent/agent.py",
+          "line": 1,
+          "end_line": 13
+        },
+        {
+          "path": "src/nexuscli/agent/plan_execute.py",
+          "line": 1,
+          "end_line": 17
+        },
+        {
+          "path": "src/nexuscli/agent/loop_guard.py",
+          "line": 1,
+          "end_line": 8
+        }
+      ]
+    },
+    {
+      "id": "entry",
+      "type": "frontend",
+      "label": "CLI · REPL · SDK",
+      "sublabel": "entrypoints · sdk.py · eval 回归",
+      "pos": [
+        320,
+        100
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/entrypoints/cli.py",
+          "line": 1,
+          "end_line": 3
+        },
+        {
+          "path": "src/nexuscli/entrypoints/repl.py",
+          "line": 1,
+          "end_line": 10
+        },
+        {
+          "path": "src/nexuscli/entrypoints/cli.py",
+          "line": 554,
+          "end_line": 554,
+          "label": "eval"
+        }
+      ]
+    },
+    {
+      "id": "skill",
+      "type": "backend",
+      "label": "Skill 系统",
+      "sublabel": "builtin → project → user",
+      "tag": "自进化 · 版本回滚",
+      "pos": [
+        480,
+        236
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/skill/evolve.py",
+          "line": 1,
+          "end_line": 19
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "backend",
+      "label": "内置工具",
+      "sublabel": "file · bash · grep · web · vfs",
+      "pos": [
+        480,
+        410
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/tools/builtins.py",
+          "line": 624,
+          "end_line": 642
+        },
+        {
+          "path": "src/nexuscli/vfs/tools.py",
+          "line": 1,
+          "end_line": 18
+        }
+      ]
+    },
+    {
+      "id": "policy",
+      "type": "security",
+      "label": "Policy · HITL",
+      "sublabel": "命令守卫 · 写域守卫 · 环境净化",
+      "pos": [
+        920,
+        236
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/policy/sandbox.py",
+          "line": 1,
+          "end_line": 21
+        },
+        {
+          "path": "src/nexuscli/policy/fs_scope.py",
+          "line": 1,
+          "end_line": 12
+        }
+      ]
+    },
+    {
+      "id": "mcp",
+      "type": "backend",
+      "label": "MCP Client",
+      "sublabel": "stdio · HTTP · 工具白名单",
+      "pos": [
+        1140,
+        236
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/mcp/config.py",
+          "line": 42,
+          "end_line": 45
+        },
+        {
+          "path": "src/nexuscli/mcp/client.py",
+          "line": 131,
+          "end_line": 138
+        }
       ]
     },
     {
@@ -95,32 +324,10 @@
       "type": "external",
       "label": "开发者",
       "sublabel": "终端 · 外部系统",
-      "row": 1,
-      "col": 0,
-      "size": [
-        180,
-        72
-      ]
-    },
-    {
-      "id": "entry",
-      "type": "frontend",
-      "label": "CLI · REPL · SDK",
-      "sublabel": "entrypoints · sdk.py",
-      "row": 1,
-      "col": 1,
-      "size": [
-        180,
-        72
-      ]
-    },
-    {
-      "id": "engine",
-      "type": "backend",
-      "label": "Agent 引擎",
-      "sublabel": "react · plan · team",
-      "row": 1,
-      "col": 2,
+      "pos": [
+        0,
+        100
+      ],
       "size": [
         180,
         72
@@ -131,57 +338,32 @@
       "type": "cloud",
       "label": "LLM Client",
       "sublabel": "OpenAI 兼容协议",
-      "tag": "DeepSeek · GLM",
-      "row": 1,
-      "col": 3,
+      "tag": "429/5xx 瞬时重试",
+      "pos": [
+        1444,
+        100
+      ],
       "size": [
         180,
         72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/llm/openai_compatible.py",
+          "line": 82,
+          "end_line": 89
+        }
       ]
     },
     {
-      "id": "policy",
-      "type": "security",
-      "label": "Policy · HITL",
-      "sublabel": "守卫 · JSONL 审计",
-      "row": 2,
-      "col": 1,
-      "size": [
-        180,
-        72
-      ]
-    },
-    {
-      "id": "tools",
-      "type": "backend",
-      "label": "内置工具",
-      "sublabel": "file · bash · grep · web",
-      "row": 2,
-      "col": 2,
-      "size": [
-        180,
-        72
-      ]
-    },
-    {
-      "id": "mcp",
-      "type": "backend",
-      "label": "MCP Client",
-      "sublabel": "stdio · HTTP",
-      "row": 2,
-      "col": 3,
-      "size": [
-        180,
-        72
-      ]
-    },
-    {
-      "id": "skill",
-      "type": "backend",
-      "label": "Skill 系统",
-      "sublabel": "builtin → project",
-      "row": 3,
-      "col": 1,
+      "id": "mcpsrv",
+      "type": "external",
+      "label": "外部 MCP Server",
+      "sublabel": "Chrome DevTools 等",
+      "pos": [
+        1444,
+        236
+      ],
       "size": [
         180,
         72
@@ -191,24 +373,26 @@
       "id": "state",
       "type": "database",
       "label": "本地状态",
-      "sublabel": "记忆 · 会话 · 快照",
-      "row": 3,
-      "col": 2,
+      "sublabel": "记忆 · 会话 · 快照 · plan_runs",
+      "pos": [
+        40,
+        410
+      ],
       "size": [
         180,
         72
-      ]
-    },
-    {
-      "id": "mcpsrv",
-      "type": "external",
-      "label": "外部 MCP Server",
-      "sublabel": "Chrome DevTools 等",
-      "row": 3,
-      "col": 3,
-      "size": [
-        180,
-        72
+      ],
+      "sources": [
+        {
+          "path": "src/nexuscli/session/store.py",
+          "line": 1,
+          "end_line": 8
+        },
+        {
+          "path": "src/nexuscli/plan/checkpoint.py",
+          "line": 1,
+          "end_line": 9
+        }
       ]
     }
   ],
@@ -217,14 +401,16 @@
       "kind": "region",
       "label": "NexusCLI 进程",
       "wraps": [
-        "entry",
+        "hooks",
         "runtime",
-        "engine",
+        "workflow",
         "context",
-        "tools",
+        "engine",
+        "entry",
         "skill",
-        "mcp",
-        "policy"
+        "tools",
+        "policy",
+        "mcp"
       ],
       "pad": 24
     },
@@ -250,14 +436,13 @@
       "from": "entry",
       "to": "engine",
       "label": "启动 Agent run",
-      "variant": "emphasis",
-      "labelDy": 24
+      "variant": "emphasis"
     },
     {
       "id": "engine-to-llm",
       "from": "engine",
       "to": "llm",
-      "label": "流式对话",
+      "label": "流式对话 · 瞬时重试",
       "variant": "emphasis"
     },
     {
@@ -265,15 +450,7 @@
       "from": "user",
       "to": "runtime",
       "label": "REST 接入",
-      "variant": "dashed",
-      "fromSide": "top",
-      "toSide": "left",
-      "via": [
-        [
-          130,
-          106
-        ]
-      ]
+      "variant": "dashed"
     },
     {
       "id": "runtime-to-engine",
@@ -291,27 +468,25 @@
       "id": "engine-to-tools",
       "from": "engine",
       "to": "tools",
-      "label": "ReAct 工具调用",
-      "labelDy": 24
+      "label": "ReAct 工具调用"
     },
     {
       "id": "engine-to-mcp",
       "from": "engine",
       "to": "mcp",
-      "label": "mcp__* 注册"
+      "label": "mcp__* 注册 · 过滤"
     },
     {
       "id": "mcp-to-mcpsrv",
       "from": "mcp",
       "to": "mcpsrv",
-      "label": "stdio · HTTP",
-      "labelDy": 24
+      "label": "stdio · HTTP"
     },
     {
       "id": "tools-to-policy",
       "from": "tools",
       "to": "policy",
-      "label": "危险动作守卫",
+      "label": "守卫 · HITL 审批",
       "variant": "security"
     },
     {
@@ -324,8 +499,20 @@
       "id": "tools-to-state",
       "from": "tools",
       "to": "state",
-      "label": "todo · 记忆读写",
-      "labelDy": 24
+      "label": "todo · 记忆读写"
+    },
+    {
+      "id": "entry-to-workflow",
+      "from": "entry",
+      "to": "workflow",
+      "label": "/workflow 派发"
+    },
+    {
+      "id": "engine-to-hooks",
+      "from": "engine",
+      "to": "hooks",
+      "label": "事件 · 决策回注",
+      "variant": "dashed"
     }
   ],
   "cards": [
@@ -335,6 +522,7 @@
       "items": [
         "CLI / REPL 与单次 -p 模式",
         "Python SDK 与 Runtime API",
+        "nexuscli eval 剧本式回归（离线假 LLM）",
         "自身也可作为 MCP server"
       ]
     },
@@ -343,16 +531,29 @@
       "title": "Agent 核心",
       "items": [
         "react / plan / team 三种运行模式",
-        "80% 预算触发上下文压缩",
-        "动态记忆按问题 Top-K 召回"
+        "loop_guard 相同调用指纹计数拦截",
+        "80% 预算触发压缩 · microcompact",
+        "BM25 记忆召回 · 429/5xx 自动重试"
       ]
     },
     {
       "dot": "rose",
       "title": "安全与持久化",
       "items": [
-        "命令/路径守卫 · HITL 确认 · JSONL 审计",
-        "SQLite 记忆 · 会话恢复 · 快照回滚"
+        "命令守卫 → 写域守卫 → 子进程环境净化",
+        "HITL 四级审批：单次 / run / 会话 / 全局",
+        "JSONL 审计 · SQLite 记忆 · 会话恢复",
+        "快照回滚 · vfs 只读视图 · plan checkpoint"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "自迭代与扩展",
+      "items": [
+        "技能自进化：版本快照 / 审计日志 / 回滚",
+        "workflow 依赖就绪批次派发（可并行）",
+        "hooks 事件协议 + 项目层 sha256 信任门",
+        "plugins 目录注入 subagents/skills/slash"
       ]
     }
   ]
