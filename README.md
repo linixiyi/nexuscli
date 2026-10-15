@@ -54,9 +54,9 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 
 ## 📐 架构总览
 
-[![NexusCLI 架构图](docs/architecture.png)](https://raw.githack.com/linixiyi/nexuscli/main/docs/architecture.html)
+[![NexusCLI 架构图](docs/architecture.png)](https://linixiyi.github.io/nexuscli/architecture.html)
 
-静态快照如上，[交互式版本](https://raw.githack.com/linixiyi/nexuscli/main/docs/architecture.html) 支持节点搜索、路径追踪、引导式故事和深浅色主题（按 `?` 查看操作指南）。图表源文件是 [docs/architecture.json](docs/architecture.json)，交互 HTML 由 [Archify](https://github.com/tt-a1i/archify) 从该源文件生成。
+静态快照如上，[交互式版本](https://linixiyi.github.io/nexuscli/architecture.html) 支持节点搜索、路径追踪、引导式故事和深浅色主题（按 `?` 查看操作指南）。图表源文件是 [docs/architecture.json](docs/architecture.json)，交互 HTML 由 [Archify](https://github.com/tt-a1i/archify) 从该源文件生成。
 
 ## ✨ 功能特性
 
