@@ -54,9 +54,9 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 
 ## 📐 架构总览
 
-[![NexusCLI 架构图](docs/architecture.png)](docs/architecture.html)
+**[🖥️ 打开交互式架构图](https://raw.githack.com/linixiyi/nexuscli/main/docs/architecture.html)** —— 支持节点搜索、路径追踪、引导式故事和深浅色主题（按 `?` 查看操作指南）。图表源文件是 [docs/architecture.json](docs/architecture.json)，交互 HTML 由 [Archify](https://github.com/tt-a1i/archify) 从该源文件生成。
 
-上图为静态快照，[交互式版本](docs/architecture.html) 支持节点搜索、路径追踪、引导式故事和深浅色主题（按 `?` 查看操作指南）。图表源文件是 [docs/architecture.json](docs/architecture.json)，交互 HTML 由 [Archify](https://github.com/tt-a1i/archify) 从该源文件生成。
+> 本地查看：直接打开仓库里的 `docs/architecture.html` 即可；GitHub 网页上点开 HTML 文件只会显示源码，需用上面的 raw.githack 链接（或启用 GitHub Pages 后的站点链接）。
 
 一条主路径贯穿全局：**开发者** 通过 **CLI / REPL / SDK** 发起会话，**Agent 引擎** 按 `react / plan / team` 三种模式驱动，经 **上下文管理** 组装 Prompt 并压缩预算，与 **LLM** 流式对话，并通过 **内置工具** 与 **MCP** 操作本地系统和外部世界；所有危险动作都要经过 **Policy · HITL · 审计** 才会落盘。
 
