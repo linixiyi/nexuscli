@@ -208,9 +208,7 @@ class ModelSelectorState:
             fragments.append(("class:error", f"  拉取失败: {self.fetch_error}\n"))
         if not self.fetch:
             fragments.append(("class:muted", "  尚未拉取。回到选择器后会提示输入 API 地址。\n"))
-            fragments.append(
-                ("class:muted", "  按 r 重新输入地址并拉取；Esc 退出。\n\n")
-            )
+            fragments.append(("class:muted", "  按 r 重新输入地址并拉取；Esc 退出。\n\n"))
             return fragments
         base_label = self.fetch_base_url or "(unknown)"
         fragments.append(("class:muted", f"  来源: {base_label}\n"))

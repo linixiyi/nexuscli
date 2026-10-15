@@ -74,9 +74,7 @@ def _parse_models_payload(payload: object) -> list[_ModelListing]:
         if not isinstance(model_id, str) or not model_id.strip():
             continue
         context = item.get("context_length")
-        context_window = (
-            int(context) if isinstance(context, (int, float)) and context > 0 else None
-        )
+        context_window = int(context) if isinstance(context, (int, float)) and context > 0 else None
         listings.append(_ModelListing(model_id=model_id.strip(), context_window=context_window))
     return listings
 

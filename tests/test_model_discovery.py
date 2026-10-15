@@ -228,9 +228,7 @@ def test_store_fetched_profiles_persists_and_activates(tmp_path):
         ModelListingProfile(
             model="cbcn/glm-5.3-flash", context_window=1_000_000, base_url=BASE_URL
         ),
-        ModelListingProfile(
-            model="cbcn/kimi-k2.7", context_window=256_000, base_url=BASE_URL
-        ),
+        ModelListingProfile(model="cbcn/kimi-k2.7", context_window=256_000, base_url=BASE_URL),
     ]
     config = NexusCliConfig()
     config.llm.provider = "openai-compatible"
