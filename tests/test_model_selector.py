@@ -138,7 +138,12 @@ def _zai_test_credential() -> str:
 
 
 def test_glm_startup_uses_official_zai_api_key_and_context(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # Patch both HOME and USERPROFILE: Path.home() prefers USERPROFILE on
+    # Windows, so an unpatched USERPROFILE would leak the developer's real
+    # ~/.nexuscli/config.json into this test (win32 gotcha).
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     config = load_config(
         project_root=tmp_path,
         env={

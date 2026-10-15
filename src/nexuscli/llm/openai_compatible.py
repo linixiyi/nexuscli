@@ -18,6 +18,117 @@ from nexuscli.types import Message, Usage
 
 
 @dataclass(slots=True)
+class ModelListingProfile:
+    """One discovered model from a gateway listing.
+
+    Deliberately not a full :class:`~nexuscli.llm.model_profiles.ModelProfile`:
+    the provider id, display name, and persistence decisions belong to the
+    /model command layer, which converts these into real profiles once the
+    user picks them.
+    """
+
+    model: str
+    context_window: int
+    base_url: str = ""
+
+
+@dataclass(slots=True)
+class ModelFetchError(RuntimeError):
+    """Raised by :func:`fetch_available_models` with a user-readable reason.
+
+    ``reason`` is meant to be shown back to the user inside the /model
+    selector (connection refused, HTTP status, unexpected body shape, ...);
+    it never embeds the API key or any credential material.
+    """
+
+    reason: str = ""
+
+
+@dataclass(slots=True)
+class _ModelListing:
+    """One entry of an OpenAI-compatible ``GET /models`` response."""
+
+    model_id: str
+    context_window: int | None
+
+
+def _parse_models_payload(payload: object) -> list[_ModelListing]:
+    """Extract (id, context_window) pairs from a ``/v1/models`` body.
+
+    Accepts the standard OpenAI shape ``{"object": "list", "data": [...]}``
+    and tolerates providers that omit ``object``. Each entry's ``id`` must be
+    a non-empty string; ``context_length`` (used by several gateways) is
+    picked up when present and positive, everything else falls back to the
+    caller-provided default context window.
+    """
+    if not isinstance(payload, dict):
+        raise ModelFetchError("响应不是 JSON 对象")
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise ModelFetchError("响应缺少 data 列表（不是 OpenAI /models 格式）")
+    listings: list[_ModelListing] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            continue
+        context = item.get("context_length")
+        context_window = (
+            int(context) if isinstance(context, (int, float)) and context > 0 else None
+        )
+        listings.append(_ModelListing(model_id=model_id.strip(), context_window=context_window))
+    return listings
+
+
+def fetch_available_models(
+    base_url: str,
+    api_key: str = "",
+    *,
+    timeout: float = 15.0,
+    default_context_window: int = 128_000,
+) -> list[ModelListingProfile]:
+    """Fetch the model list from an OpenAI-compatible gateway.
+
+    Issues a synchronous ``GET {base_url}/models`` (the standard
+    ``GET /v1/models`` discovery endpoint) carrying ``Authorization: Bearer
+    <key>`` only when a key was supplied. Returns one :class:`ModelListingProfile`
+    per model, preserving the gateway's ordering; ``context_window`` prefers
+    the response's ``context_length`` field and falls back to
+    ``default_context_window``. Raises :class:`ModelFetchError` with a
+    user-readable reason on transport, HTTP, or payload-shape failures.
+    """
+    base = (base_url or "").strip().rstrip("/")
+    if not base.startswith(("http://", "https://")):
+        raise ModelFetchError("API 地址必须以 http:// 或 https:// 开头")
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    url = f"{base}/models"
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(url, headers=headers)
+    except httpx.HTTPError as exc:
+        raise ModelFetchError(f"无法连接 {base}（{type(exc).__name__}）") from exc
+    if response.status_code != 200:
+        raise ModelFetchError(f"网关返回 HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ModelFetchError("响应不是合法 JSON") from exc
+    listings = _parse_models_payload(payload)
+    if not listings:
+        raise ModelFetchError("模型列表为空")
+    return [
+        ModelListingProfile(
+            model=listing.model_id,
+            context_window=listing.context_window or default_context_window,
+        )
+        for listing in listings
+    ]
+
+
+@dataclass(slots=True)
 class OpenAICompatibleClient:
     provider_name: str
     model: str

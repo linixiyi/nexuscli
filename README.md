@@ -337,7 +337,9 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 /restore <snapshot-id-or-index>
 ```
 
-`/model` 会打开交互式模型选择器：`Tab` 或左右方向键在 `Default`、`Custom` 之间切换，上下方向键选择模型，`Enter` 立即切换当前 Agent。`Custom` 中可以选择已保存的 BYOK 模型、创建新的 DeepSeek/GLM/OpenAI-compatible 配置，或按 `d` 删除配置。自定义配置保存在权限为 `0600` 的 `~/.nexuscli/models.json`；建议填写 API Key 环境变量名，只有显式输入 API Key 时才会把密钥写入该文件。
+`/model` 会打开交互式模型选择器：`Tab` 或左右方向键在 `Default`、`Custom`、`API 拉取` 之间切换，上下方向键选择模型，`Enter` 立即切换当前 Agent。`Custom` 中可以选择已保存的 BYOK 模型、创建新的 DeepSeek/GLM/OpenAI-compatible 配置，或按 `d` 删除配置。自定义配置保存在权限为 `0600` 的 `~/.nexuscli/models.json`；建议填写 API Key 环境变量名，只有显式输入 API Key 时才会把密钥写入该文件。
+
+`API 拉取` tab 面向 OpenAI Chat Completions 协议的自建网关/中转站（例如 `http://localhost:20128/v1`）：首次进入会提示输入 API 地址（缺省用当前 provider 的 base_url），确认后 CLI 向 `{地址}/models` 发起 `GET`（当前 provider 已配置密钥时自动携带 `Authorization: Bearer`），把返回的模型列表渲染成勾选清单。交互：上下方向键移动、输入字母实时过滤模型、`空格` 勾选/取消、`a` 全选、`n` 取消全选、`r` 重新输入地址拉取、`Enter` 添加所选、`Esc` 退出。`Enter` 后所选模型写入 `~/.nexuscli/models.json` 的 Custom 列表（同名同地址自动去重）并立即切换到第一个选中模型；模型的上下文窗口优先取响应里的 `context_length` 字段，缺省 128K。地址不可达、HTTP 错误或响应不是标准 `{"data": [...]}` 格式时在选择器内给出可读错误，按 `r` 可重试。
 
 `/skill load <name>` 把指定 Skill 的正文强制注入你的下一条消息（一次性消费）：下一回合模型会先读到该 Skill 再继续任务，适合主动确保某个技能被加载。
 
