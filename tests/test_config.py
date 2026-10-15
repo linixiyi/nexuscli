@@ -32,7 +32,12 @@ def test_config_precedence(tmp_path, monkeypatch):
 
 
 def test_provider_specific_api_key(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # Patch both HOME and USERPROFILE: Path.home() prefers USERPROFILE on
+    # Windows, so an unpatched USERPROFILE would leak the developer's real
+    # ~/.nexuscli/config.json into this test (win32 gotcha).
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("NEXUSCLI_PROVIDER", "deepseek")
     monkeypatch.delenv("NEXUSCLI_API_KEY", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
