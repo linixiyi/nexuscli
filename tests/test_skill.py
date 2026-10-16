@@ -15,7 +15,10 @@ from nexuscli.tools.executor import ToolExecutor
 
 
 def test_skill_registry_layers_and_state(tmp_path, monkeypatch):
+    # Windows: Path.home() reads USERPROFILE (ntpath.expanduser ignores HOME),
+    # so patch both to keep the implicit ~/.agents/skills scan inside tmp_path.
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     builtin = tmp_path / "builtin"
     user = tmp_path / "user"
     project = tmp_path / "project"

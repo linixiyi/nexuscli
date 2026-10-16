@@ -61,9 +61,16 @@ class PlanExecuteAgent:
         self._interrupt_requested.set()
 
     async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
-        snapshot = SnapshotService(self.cwd)
-        with suppress(Exception):
-            snapshot.create("pre-turn")
+        # Automatic turn snapshots are opt-in (features.auto_snapshot): a full
+        # workspace copy per turn is too slow on some disks. Keeping the service
+        # unconstructed also skips its pointless mkdir. Manual /snapshot and
+        # /restore commands are not gated by this.
+        snapshot: SnapshotService | None = (
+            SnapshotService(self.cwd) if self.config.features.auto_snapshot else None
+        )
+        if snapshot is not None:
+            with suppress(Exception):
+                snapshot.create("pre-turn")
         self._interrupt_requested.clear()
         total_usage = Usage()
         total_turns = 0
@@ -106,8 +113,9 @@ class PlanExecuteAgent:
             yield {"type": "error", "error": exc}
             return
         finally:
-            with suppress(Exception):
-                snapshot.create("post-turn")
+            if snapshot is not None:
+                with suppress(Exception):
+                    snapshot.create("post-turn")
         done: dict[str, Any] = {
             "type": "done",
             "total_turns": total_turns,
@@ -257,7 +265,7 @@ class PlanExecuteAgent:
                 "text": "计划已停滞，因为任务依赖未满足。\n\n",
             }
         # Terminal state is checkpointed too, so a finished plan's store entry
-        # reflects completion instead of a stale mid-run snapshot.
+        # reflects completion instead of a stale mid-run state.
         self._save_checkpoint(plan)
 
     async def _apply_task_result(

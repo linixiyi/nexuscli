@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -176,6 +177,15 @@ async def start_repl(
     continue_last: bool = False,
 ) -> None:
     console = Console()
+    # Piped/scripted stdin (``echo '/help' | nexuscli``) has no terminal:
+    # prompt_toolkit would fail mid-event-loop with "Event loop stopped before
+    # Future completed" and a full rich traceback. Point script users at the
+    # one-shot mode instead of entering the prompt loop at all.
+    if not sys.stdin.isatty():
+        console.print(
+            'Interactive REPL needs a terminal. For piped/script use, run: nexuscli -p "<prompt>"'
+        )
+        raise SystemExit(1)
     permission_mode = PermissionModeController(config)
     registry, mcp_manager = await build_tool_registry(config=config, cwd=cwd)
     client = create_llm_client(config.llm, telemetry_enabled=config.telemetry.enabled)
