@@ -83,6 +83,39 @@ def test_fetch_defaults_context_when_missing(monkeypatch):
     assert models[0].context_window == 128_000
 
 
+def test_fetch_parses_effort_capability_tri_state(monkeypatch):
+    payload = {
+        "data": [
+            {
+                "id": "cbai/deepseek-v4-pro",
+                "context_length": 1000000,
+                "capabilities": {
+                    "thinkingEffortSupported": True,
+                    "thinkingCanDisable": True,
+                },
+            },
+            {
+                "id": "cbcn/glm-5.3-flash",
+                "context_length": 1000000,
+                "capabilities": {
+                    "thinkingEffortSupported": False,
+                    "thinkingCanDisable": True,
+                },
+            },
+            {"id": "plain-openai-model"},
+        ],
+    }
+    models = _fetch(monkeypatch, payload)
+    pro, glm, plain = models
+    assert pro.reasoning_effort_supported is True
+    assert pro.thinking_can_disable is True
+    assert glm.reasoning_effort_supported is False
+    assert glm.thinking_can_disable is True
+    # undeclared capabilities stay unknown, never guessed
+    assert plain.reasoning_effort_supported is None
+    assert plain.thinking_can_disable is None
+
+
 def test_fetch_sends_bearer_header(monkeypatch):
     captured: dict = {}
 
@@ -214,6 +247,27 @@ def test_selector_empty_fetch_tab_selects_nothing():
     assert action.fetched == ()
 
 
+def test_selector_fetch_render_shows_capability_badges():
+    state = _selector(
+        [
+            ModelListingProfile(
+                model="cbai/deepseek-v4-pro",
+                context_window=1_000_000,
+                reasoning_effort_supported=True,
+                thinking_can_disable=True,
+            ),
+            ModelListingProfile(model="cbcn/glm-5.3-flash", context_window=1_000_000),
+        ]
+    )
+    state.switch_tab(2)
+    rendered = "".join(text for _style, text in state.render())
+    assert "强度✓" in rendered
+    assert "思考可关" in rendered
+    # undeclared capability renders no badge, no guess
+    glm_line = next(line for line in rendered.splitlines() if "glm-5.3-flash" in line)
+    assert "强度✓" not in glm_line
+
+
 def test_store_fetched_profiles_persists_and_activates(tmp_path):
     import io
 
@@ -226,9 +280,19 @@ def test_store_fetched_profiles_persists_and_activates(tmp_path):
     store = CustomModelStore(tmp_path / "models.json")
     listings = [
         ModelListingProfile(
-            model="cbcn/glm-5.3-flash", context_window=1_000_000, base_url=BASE_URL
+            model="cbcn/glm-5.3-flash",
+            context_window=1_000_000,
+            base_url=BASE_URL,
+            reasoning_effort_supported=False,
+            thinking_can_disable=True,
         ),
-        ModelListingProfile(model="cbcn/kimi-k2.7", context_window=256_000, base_url=BASE_URL),
+        ModelListingProfile(
+            model="cbai/deepseek-v4-pro",
+            context_window=1_000_000,
+            base_url=BASE_URL,
+            reasoning_effort_supported=True,
+            thinking_can_disable=True,
+        ),
     ]
     config = NexusCliConfig()
     config.llm.provider = "openai-compatible"
@@ -250,8 +314,12 @@ def test_store_fetched_profiles_persists_and_activates(tmp_path):
     assert exited is True
     assert len(activated) == 1
     stored = store.list()
-    assert {p.model for p in stored} == {"cbcn/glm-5.3-flash", "cbcn/kimi-k2.7"}
+    assert {p.model for p in stored} == {"cbai/deepseek-v4-pro", "cbcn/glm-5.3-flash"}
     assert all(p.provider == "openai-compatible" for p in stored)
+    by_model = {p.model: p for p in stored}
+    assert "强度档位" in by_model["cbai/deepseek-v4-pro"].description
+    assert "思考可关闭" in by_model["cbcn/glm-5.3-flash"].description
+    assert "强度档位" not in by_model["cbcn/glm-5.3-flash"].description
 
 
 def test_store_fetched_profiles_skips_duplicates(tmp_path):
@@ -343,3 +411,11 @@ def test_live_gateway_fetch():
     except ModelFetchError as exc:
         pytest.skip(f"live gateway unavailable: {exc.reason}")
     assert models, "live gateway returned no models"
+    by_model = {m.model: m for m in models}
+    pro = by_model.get("cbai/deepseek-v4-pro")
+    if pro is not None:
+        assert pro.reasoning_effort_supported is True
+    glm = by_model.get("cbcn/glm-5.3-flash")
+    if glm is not None:
+        assert glm.thinking_can_disable is True
+        assert glm.reasoning_effort_supported is False

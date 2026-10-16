@@ -221,13 +221,28 @@ class ModelSelectorState:
             style = "class:selected" if selected else "class:model"
             checkbox = "[x]" if checked else "[ ]"
             context = f" · ctx {profile.context_window:,}" if profile.context_window else ""
-            fragments.append((style, f"{marker}{checkbox} {profile.model}{context}\n"))
+            badges = _capability_badges(profile)
+            fragments.append((style, f"{marker}{checkbox} {profile.model}{context}{badges}\n"))
         summary = f"\n  共 {len(self.fetch)} 个，已勾选 {len(self.fetch_checked)} 个\n"
         fragments.append(("class:muted", summary))
         return fragments
 
     def _tab(self, tab: ModelTab, label: str) -> StyleAndTextTuples:
         return [("class:tab.active" if self.tab == tab else "class:tab", f" {label} ")]
+
+
+def _capability_badges(profile: ModelListingProfile) -> str:
+    """Short suffix badges for discovered reasoning-effort capability.
+
+    Tri-state discipline: only declared capabilities get a badge; ``None``
+    (gateway did not say) renders nothing rather than a guess.
+    """
+    badges = ""
+    if profile.reasoning_effort_supported:
+        badges += " · 强度✓"
+    if profile.thinking_can_disable:
+        badges += " · 思考可关"
+    return badges
 
 
 async def run_model_selector(state: ModelSelectorState) -> ModelSelectorAction | None:

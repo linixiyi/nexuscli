@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 from rich.console import Console
 from rich.prompt import Prompt
 
@@ -171,6 +173,9 @@ def _store_fetched_profiles(
         except ValueError as exc:
             console.print(f"[red]跳过 {item.model}：[/red]{exc}")
             continue
+        capability_note = _capability_description(item)
+        if capability_note:
+            profile = dataclasses.replace(profile, description=capability_note)
         profiles.append(profile)
     if not profiles:
         return False
@@ -187,6 +192,21 @@ def _store_fetched_profiles(
     _activate_model(profiles[0], config, agent, registry, renderer, cwd)
     console.print(f"[green]已切换到：[/green]{profiles[0].model}")
     return True
+
+
+def _capability_description(listing) -> str:
+    """One-line capability note persisted into the profile description.
+
+    Mirrors the selector badges: effort support maps to the /effort levels,
+    disable-ability is noted so users know they can turn thinking off; an
+    undeclared capability (None) contributes nothing.
+    """
+    parts: list[str] = []
+    if listing.reasoning_effort_supported:
+        parts.append("支持强度档位 (/effort minimal/low/medium/high)")
+    if listing.thinking_can_disable:
+        parts.append("思考可关闭")
+    return "；".join(parts)
 
 
 def _prompt_custom_model(console: Console) -> ModelProfile | None:

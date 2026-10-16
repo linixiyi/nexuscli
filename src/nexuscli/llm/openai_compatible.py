@@ -25,11 +25,18 @@ class ModelListingProfile:
     the provider id, display name, and persistence decisions belong to the
     /model command layer, which converts these into real profiles once the
     user picks them.
+
+    Reasoning-effort capability fields are tri-state: ``True`` / ``False``
+    from the gateway's capability block, or ``None`` when the gateway did not
+    declare one (plain OpenAI /models bodies carry no ``capabilities``) —
+    unknown is never guessed.
     """
 
     model: str
     context_window: int
     base_url: str = ""
+    reasoning_effort_supported: bool | None = None
+    thinking_can_disable: bool | None = None
 
 
 @dataclass(slots=True)
@@ -50,6 +57,16 @@ class _ModelListing:
 
     model_id: str
     context_window: int | None
+    reasoning_effort_supported: bool | None = None
+    thinking_can_disable: bool | None = None
+
+
+def _parse_capability_bool(capabilities: object, key: str) -> bool | None:
+    """Read one boolean capability; anything but a real bool is unknown."""
+    if not isinstance(capabilities, dict):
+        return None
+    value = capabilities.get(key)
+    return value if isinstance(value, bool) else None
 
 
 def _parse_models_payload(payload: object) -> list[_ModelListing]:
@@ -75,7 +92,17 @@ def _parse_models_payload(payload: object) -> list[_ModelListing]:
             continue
         context = item.get("context_length")
         context_window = int(context) if isinstance(context, (int, float)) and context > 0 else None
-        listings.append(_ModelListing(model_id=model_id.strip(), context_window=context_window))
+        capabilities = item.get("capabilities")
+        listings.append(
+            _ModelListing(
+                model_id=model_id.strip(),
+                context_window=context_window,
+                reasoning_effort_supported=_parse_capability_bool(
+                    capabilities, "thinkingEffortSupported"
+                ),
+                thinking_can_disable=_parse_capability_bool(capabilities, "thinkingCanDisable"),
+            )
+        )
     return listings
 
 
@@ -121,6 +148,8 @@ def fetch_available_models(
         ModelListingProfile(
             model=listing.model_id,
             context_window=listing.context_window or default_context_window,
+            reasoning_effort_supported=listing.reasoning_effort_supported,
+            thinking_can_disable=listing.thinking_can_disable,
         )
         for listing in listings
     ]
