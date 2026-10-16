@@ -12,13 +12,21 @@ _EFFORT_LEVELS = ("minimal", "low", "medium", "high")
 def _effort_command(arg: str, console: Console, agent: Agent) -> None:
     """Session-level reasoning effort switch (live on the current client)."""
     client = agent.llm_client
+    usage = "/effort " + "|".join(_EFFORT_LEVELS)
     if not arg:
-        current = getattr(client, "reasoning_effort", None)
+        if not hasattr(client, "reasoning_effort"):
+            console.print(
+                f"[yellow]Provider {client.provider_name} does not support "
+                "reasoning effort.[/yellow]"
+            )
+            return
+        current = client.reasoning_effort
         console.print(f"Reasoning effort: {current or 'not set (provider default)'}")
+        console.print(f"[dim]Usage:[/dim] {usage}")
         return
     level = arg.strip().lower()
     if level not in _EFFORT_LEVELS:
-        console.print("[red]Usage:[/red] /effort minimal|low|medium|high")
+        console.print(f"[red]Usage:[/red] {usage}")
         return
     if not hasattr(client, "reasoning_effort"):
         # AnthropicClient is a slots dataclass without the field

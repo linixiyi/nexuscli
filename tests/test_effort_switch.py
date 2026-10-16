@@ -119,6 +119,7 @@ def test_effort_command_set_show_invalid_and_unsupported(tmp_path: Path) -> None
     _run_slash("/effort", console, tmp_path, config, agent)
 
     assert "Reasoning effort: high" in console.file.getvalue()[marker:]
+    assert "Usage: /effort minimal|low|medium|high" in console.file.getvalue()[marker:]
 
     marker = len(console.file.getvalue())
     _run_slash("/effort bogus", console, tmp_path, config, agent)
@@ -133,6 +134,12 @@ def test_effort_command_set_show_invalid_and_unsupported(tmp_path: Path) -> None
 
     assert "does not support" in console.file.getvalue()[marker:]
     assert not hasattr(unsupported, "reasoning_effort")
+
+    marker = len(console.file.getvalue())
+    _run_slash("/effort", console, tmp_path, config, agent2)
+
+    assert "does not support" in console.file.getvalue()[marker:]
+    assert "Usage:" not in console.file.getvalue()[marker:]
 
     _run_slash("/effort MINIMAL", console, tmp_path, config, agent)
 
