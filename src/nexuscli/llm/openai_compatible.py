@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -106,6 +108,30 @@ def _parse_models_payload(payload: object) -> list[_ModelListing]:
     return listings
 
 
+def httpx_client_kwargs(base_url: str) -> dict[str, Any]:
+    """Keyword args every httpx client for *base_url* should pass.
+
+    A machine-local system proxy (Clash/v2ray publishing 127.0.0.1:7890 via
+    the Windows registry) is routinely ON while a local LLM gateway is the
+    actual destination; letting httpx route a loopback base_url through it
+    yields empty-body 502s that look like the gateway is down. Loopback
+    hosts therefore get ``trust_env=False``; every other host returns no
+    override so corporate proxies keep working.
+    """
+    try:
+        host = (urlsplit(base_url).hostname or "").lower()
+    except ValueError:
+        host = ""
+    if host == "localhost" or host == "::1":
+        return {"trust_env": False}
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return {"trust_env": False}
+    except ValueError:
+        pass
+    return {}
+
+
 def fetch_available_models(
     base_url: str,
     api_key: str = "",
@@ -131,7 +157,7 @@ def fetch_available_models(
         headers["Authorization"] = f"Bearer {api_key}"
     url = f"{base}/models"
     try:
-        with httpx.Client(timeout=timeout) as client:
+        with httpx.Client(timeout=timeout, **httpx_client_kwargs(base)) as client:
             response = client.get(url, headers=headers)
     except httpx.HTTPError as exc:
         raise ModelFetchError(f"无法连接 {base}（{type(exc).__name__}）") from exc
@@ -369,7 +395,9 @@ class OpenAICompatibleClient:
         produced_delta = False
         try:
             async with (
-                httpx.AsyncClient(timeout=self.timeout, http2=False) as client,
+                httpx.AsyncClient(
+                    timeout=self.timeout, http2=False, **httpx_client_kwargs(self.base_url)
+                ) as client,
                 client.stream("POST", url, headers=headers, json=payload) as response,
             ):
                 await _raise_for_status_with_body(response)
@@ -411,7 +439,9 @@ class OpenAICompatibleClient:
         replay_payload = dict(payload)
         replay_payload["stream"] = False
         replay_payload.pop("stream_options", None)
-        async with httpx.AsyncClient(timeout=self.timeout, http2=False) as client:
+        async with httpx.AsyncClient(
+            timeout=self.timeout, http2=False, **httpx_client_kwargs(self.base_url)
+        ) as client:
             response = await client.post(url, headers=headers, json=replay_payload)
             await _raise_for_status_with_body(response)
             completion = response.json()
@@ -508,7 +538,9 @@ class OpenAICompatibleClient:
             "user-agent": "NexusCLI-Python/0.1.0",
         }
         url = self.base_url.rstrip("/") + "/models"
-        async with httpx.AsyncClient(timeout=15.0, http2=False) as client:
+        async with httpx.AsyncClient(
+            timeout=15.0, http2=False, **httpx_client_kwargs(self.base_url)
+        ) as client:
             try:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()

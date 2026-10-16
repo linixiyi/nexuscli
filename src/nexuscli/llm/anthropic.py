@@ -42,6 +42,7 @@ from nexuscli.llm.openai_compatible import (
     _http_error_message,
     _iter_sse,
     _raise_for_status_with_body,
+    httpx_client_kwargs,
 )
 from nexuscli.llm.pricing import CostBreakdown, ModelPriceProfile, calculate_cost
 from nexuscli.types import Message, Usage
@@ -119,7 +120,9 @@ class AnthropicClient:
         }
         try:
             async with (
-                httpx.AsyncClient(timeout=self.timeout, http2=False) as client,
+                httpx.AsyncClient(
+                    timeout=self.timeout, http2=False, **httpx_client_kwargs(self.base_url)
+                ) as client,
                 client.stream("POST", url, headers=headers, json=payload) as response,
             ):
                 await _raise_for_status_with_body(response)
