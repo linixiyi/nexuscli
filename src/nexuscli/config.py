@@ -169,6 +169,11 @@ class FeatureConfig:
     audit_log: bool = True
     context_compression: bool = True
     code_index: bool = True
+    # Automatic pre-turn/post-turn workspace snapshots copy the whole
+    # workspace twice per turn, which can dominate first-response latency on
+    # slow disks — so they are opt-in. The /snapshot and /restore manual
+    # commands stay available regardless of this flag.
+    auto_snapshot: bool = False
 
 
 @dataclass(slots=True)

@@ -165,9 +165,16 @@ class Agent:
             {"type": "done", "total_turns": int, "total_tokens": int,
              "usage": {...}, "cost": {...}, "messages": [Message, ...]}
         """
-        snapshot = SnapshotService(self.cwd)
-        with suppress(Exception):
-            snapshot.create("pre-turn")
+        # Automatic turn snapshots are opt-in (features.auto_snapshot): a full
+        # workspace copy per turn is too slow on some disks. Keeping the service
+        # unconstructed also skips its pointless mkdir. Manual /snapshot and
+        # /restore commands are not gated by this.
+        snapshot: SnapshotService | None = (
+            SnapshotService(self.cwd) if self.config.features.auto_snapshot else None
+        )
+        if snapshot is not None:
+            with suppress(Exception):
+                snapshot.create("pre-turn")
 
         try:
             # UserPromptSubmit hooks gate the message before it reaches any
@@ -199,8 +206,9 @@ class Agent:
                 async for event in self._run_react(message):
                     yield event
         finally:
-            with suppress(Exception):
-                snapshot.create("post-turn")
+            if snapshot is not None:
+                with suppress(Exception):
+                    snapshot.create("post-turn")
 
         # Stop hooks fire once the turn loop ended normally; a block is only a
         # notice to the user, it never forces the agent to keep running.

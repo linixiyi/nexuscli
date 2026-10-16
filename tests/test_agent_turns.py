@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -317,9 +318,17 @@ def test_repl_passes_config_max_turns_to_agent(tmp_path, monkeypatch):
         async def prompt_async(self):
             raise EOFError
 
+    class _TtyStdin:
+        # start_repl's non-TTY guard calls sys.stdin.isatty(); pytest capture
+        # installs DontReadFromInput (isatty() == False), so the terminal path
+        # must be simulated explicitly here.
+        def isatty(self):
+            return True
+
     async def fake_build_tool_registry(*, config, cwd):  # noqa: ARG001
         return ToolRegistry(), None
 
+    monkeypatch.setattr(sys, "stdin", _TtyStdin())
     monkeypatch.setattr("nexuscli.entrypoints.repl.build_tool_registry", fake_build_tool_registry)
     # **_kwargs: repl passes telemetry_enabled= config.telemetry.enabled (factory seam).
     monkeypatch.setattr(

@@ -571,6 +571,35 @@ def eval_run(
 # ---------------------------------------------------------------------------
 
 
+async def _ask_streaming(
+    engine: QueryEngine,
+    prompt: str,
+    *,
+    history: list | None,
+    stream_deltas: bool,
+):
+    """Run react mode over the engine's live event stream.
+
+    Text deltas are written straight to stdout (write + flush) as they arrive,
+    so the answer shows up while the model is still generating instead of a
+    long silent wait. With ``stream_deltas`` off (``--json`` reserves stdout
+    for the single payload) events are consumed silently. Aggregation is not
+    reimplemented: the ``QueryResult`` comes from the engine's existing event
+    aggregation helper, keeping text/turns/usage/cost plus warning/error
+    handling identical to the buffered ``ask_complete_async`` path.
+    """
+
+    async def _tee(events):
+        async for event in events:
+            if stream_deltas and event.get("type") == "text_delta":
+                delta = str(event.get("text") or "")
+                sys.stdout.write(delta)
+                sys.stdout.flush()
+            yield event
+
+    return await engine._complete_from_events(_tee(engine.ask(prompt, history)))
+
+
 async def _run_prompt(
     prompt: str,
     cwd: str,
@@ -608,7 +637,12 @@ async def _run_prompt(
         elif mode == "team":
             result = await engine.team_complete_async(prompt, worker_mode=worker_mode)
         else:
-            result = await engine.ask_complete_async(prompt, history=history)
+            result = await _ask_streaming(
+                engine,
+                prompt,
+                history=history,
+                stream_deltas=not json_output,
+            )
     except Exception as exc:  # noqa: BLE001 - CLI should report model/config errors cleanly
         typer.echo(f"Fatal error: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -628,6 +662,11 @@ async def _run_prompt(
                 ensure_ascii=False,
             )
         )
+    elif mode == "react":
+        # The answer text was already echoed incrementally; only the trailing
+        # newline that typer.echo(result.text) used to add is still missing.
+        sys.stdout.write("\n")
+        sys.stdout.flush()
     else:
         typer.echo(result.text)
 
