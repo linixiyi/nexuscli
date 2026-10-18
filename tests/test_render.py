@@ -494,3 +494,56 @@ def test_fenced_code_block_starts_on_the_marker_row():
     lines = [line for line in stream.getvalue().split("\n") if line]
     assert lines[0].startswith("⏺"), lines
     assert "x = 1" in lines[0]
+
+
+def test_toolbar_keeps_permission_mode_on_narrow_terminals():
+    # At 60 columns the fixed layout ran past the edge and the mode name —
+    # sitting last — was the first thing cut. Shift+Tab then changed state with
+    # zero visible feedback: the user could believe they were in read-only plan
+    # mode while auto-approve was active.
+    from nexuscli.entrypoints.repl import _bottom_toolbar
+
+    for width in (40, 60, 80, 120):
+        segments = _bottom_toolbar(
+            "/Users/linyixi/nexuscli",
+            "cbcn/glm-5.3-flash",
+            {"has_usage": True, "context_ratio": 0.42},
+            permission_mode="plan",
+            width=width,
+        )
+        text = "".join(part for _, part in segments)
+        assert "plan (read-only)" in text, f"mode lost at {width} columns: {text!r}"
+        assert len(text) <= width, f"toolbar overflows {width} columns: {text!r}"
+
+
+def test_toolbar_drops_cwd_before_mode_and_usage():
+    from nexuscli.entrypoints.repl import _bottom_toolbar
+
+    wide = "".join(
+        p
+        for _, p in _bottom_toolbar(
+            "/Users/linyixi/nexuscli",
+            "m",
+            {"has_usage": True, "context_ratio": 0.4},
+            permission_mode="auto",
+            width=120,
+        )
+    )
+    narrow = "".join(
+        p
+        for _, p in _bottom_toolbar(
+            "/Users/linyixi/nexuscli",
+            "m",
+            {"has_usage": True, "context_ratio": 0.4},
+            permission_mode="auto",
+            width=50,
+        )
+    )
+
+    # _shorten_home only rewrites paths under the user's real home, and this
+    # test's home is a tmp dir, so the path stays absolute; the point is that
+    # the cwd segment disappears first when space runs out.
+    assert "nexuscli" in wide
+    assert "nexuscli" not in narrow
+    assert "Auto (full access)" in narrow
+    assert "40%" in narrow

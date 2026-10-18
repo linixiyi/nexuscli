@@ -46,6 +46,11 @@ class RuntimeApiServer:
         )
         self.workers = workers
         self._stop = threading.Event()
+        # One turn at a time per thread: concurrent turns interleaved their
+        # event streams and interleaved the user/assistant rows in the
+        # messages table, so the next turn read a scrambled history.
+        self._thread_locks: dict[str, threading.Lock] = {}
+        self._thread_locks_guard = threading.Lock()
         self._ensure_schema()
 
     def serve_forever(self) -> None:
@@ -110,15 +115,24 @@ class RuntimeApiServer:
                 _send_json(request, 200, {"id": thread_id})
             elif method == "POST" and path.startswith("/v1/threads/") and path.endswith("/turns"):
                 thread_id = path.split("/")[3]
+                if not self._thread_exists(thread_id):
+                    _send_json(request, 404, {"error": f"thread not found: {thread_id}"})
+                    return
                 message = str(body.get("message") or body.get("prompt") or "")
                 if not message:
                     _send_json(request, 400, {"error": "message is required"})
                     return
                 mode = _mode_from_body(body)
-                result = asyncio.run(self._run_turn(thread_id, message, mode=mode))
+                # Serialized per thread: a second turn for the same thread
+                # waits instead of interleaving with the first one.
+                with self._thread_lock(thread_id):
+                    result = asyncio.run(self._run_turn(thread_id, message, mode=mode))
                 _send_json(request, 200, result)
             elif method == "GET" and path.startswith("/v1/threads/") and path.endswith("/events"):
                 thread_id = path.split("/")[3]
+                if not self._thread_exists(thread_id):
+                    _send_json(request, 404, {"error": f"thread not found: {thread_id}"})
+                    return
                 self._send_events(request, thread_id)
             elif method == "POST" and path == "/v1/tasks":
                 prompt = str(body.get("message") or body.get("prompt") or "")
@@ -291,6 +305,15 @@ class RuntimeApiServer:
             )
         self._append_event(thread_id, "thread.created", {"id": thread_id})
         return thread_id
+
+    def _thread_exists(self, thread_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute("select 1 from threads where id = ?", (thread_id,)).fetchone()
+        return row is not None
+
+    def _thread_lock(self, thread_id: str) -> threading.Lock:
+        with self._thread_locks_guard:
+            return self._thread_locks.setdefault(thread_id, threading.Lock())
 
     def _append_event(self, thread_id: str, event_type: str, payload: dict[str, Any]) -> None:
         with self._connect() as conn:

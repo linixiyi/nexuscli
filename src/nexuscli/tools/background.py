@@ -16,16 +16,24 @@ Trade-offs:
   on disk and can be inspected manually — the minimal alignment with
   ZCode's persisted background-task semantics without a cross-session
   registry.
-- ``stop`` escalates terminate -> kill on the direct child only. On Windows
-  the direct child is the shell (``cmd.exe``); its descendants may outlive
-  the stop and keep the log file open until they exit on their own. A tree
-  kill would need another subprocess and platform-specific failure modes
-  for little gain, so the log file is simply left to settle.
+- Each task leads its own process group (``start_new_session``), so one
+  signal reaches everything the shell forked. ``stop`` sends SIGTERM to the
+  group, escalates to SIGKILL, and only reports ``stopped`` once the group is
+  actually empty; members that outlive SIGKILL leave it at ``stopping``.
+- On Windows there is no process group to signal: ``stop`` degrades to
+  ``terminate``/``kill`` on the direct child, and that shell's descendants
+  outlive the stop and keep the log file open until they exit on their own.
+  A tree walk would need another subprocess and platform-specific failure
+  modes for little gain.
+- A task whose leader exited while its group still has members is a *leaked*
+  task: ``task_output`` renders it as ``orphaned`` and ``task_stop`` still
+  finds and reaps it instead of failing with an unknown id.
 """
 
 from __future__ import annotations
 
 import asyncio
+import atexit
 import time
 import uuid
 from collections.abc import Mapping
@@ -33,12 +41,24 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from nexuscli.tools.commands import (
+    kill_process_group,
+    process_group_alive,
+    process_group_of,
+    process_group_spawn_kwargs,
+    signal_process_group,
+)
+
 # Defaults shared by the registry and the task_output/task_stop handlers
 # (kept here so the byte budget has exactly one source of truth).
 DEFAULT_TAIL_BYTES = 8192
 _STOP_GRACE_SECONDS = 2.0
 
-TaskStatus = Literal["running", "completed", "failed", "stopped"]
+# "stopping" is the honest answer when the group outlived the kill ladder:
+# the log may still grow, so it must not be rendered as a finished stop.
+# "orphaned" marks a task whose leader exited while its group still had
+# members — leaked work that task_stop can still find and reap.
+TaskStatus = Literal["running", "completed", "failed", "stopped", "stopping", "orphaned"]
 
 
 @dataclass(slots=True)
@@ -48,6 +68,9 @@ class BackgroundTask:
     process: asyncio.subprocess.Process
     output_path: Path
     started_at: float
+    # Captured at spawn: once the leader is reaped getpgid() answers for a
+    # dead pid, and the group is exactly what a stop has to reach.
+    pgid: int | None = None
 
 
 class BackgroundTaskRegistry:
@@ -89,6 +112,7 @@ class BackgroundTaskRegistry:
                 stdout=sink,
                 stderr=sink,
                 env=env,
+                **process_group_spawn_kwargs(),
             )
         task = BackgroundTask(
             task_id=task_id,
@@ -96,12 +120,37 @@ class BackgroundTaskRegistry:
             process=process,
             output_path=output_path,
             started_at=time.time(),
+            pgid=process_group_of(process.pid),
         )
         self._tasks[task_id] = task
         return task
 
     def get(self, task_id: str) -> BackgroundTask | None:
         return self._tasks.get(task_id)
+
+    def live_task_ids(self) -> list[str]:
+        """Ids whose process group still has members (running or leaked)."""
+        return [
+            task_id
+            for task_id, task in self._tasks.items()
+            if process_group_alive(task.pgid) or task.process.returncode is None
+        ]
+
+    def kill_live_tasks(self) -> list[str]:
+        """SIGKILL every live group without waiting — the exit-time sweep.
+
+        Called when the process is going away: nobody is left to poll the
+        ladder, so the kill is unconditional. The registry cannot outlive the
+        process that owns it, which is exactly why leaving the groups behind
+        turns them into PPID=1 orphans.
+        """
+        killed: list[str] = []
+        for task_id in self.live_task_ids():
+            task = self._tasks[task_id]
+            signal_process_group(task.pgid, hard=True)
+            self._stopped.add(task_id)
+            killed.append(task_id)
+        return killed
 
     def read_tail(self, task_id: str, max_bytes: int = DEFAULT_TAIL_BYTES) -> str:
         """Return the last *max_bytes* of the merged log, decoded leniently.
@@ -120,19 +169,22 @@ class BackgroundTaskRegistry:
             return handle.read().decode("utf-8", errors="replace")
 
     async def stop(self, task_id: str) -> TaskStatus:
-        """Terminate the task's process, escalating to kill after a grace period."""
+        """Kill the task's whole process group; report what actually happened.
+
+        The leader exiting is not the end of a background task: a shell that
+        forked a worker leaves the worker holding the log file. So the group
+        is what gets signalled and the group is what gets verified. An
+        already-finished task is left untouched and keeps its own status.
+        """
         task = self._get_or_raise(task_id)
-        process = task.process
-        if process.returncode is None:
-            self._stopped.add(task_id)
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=_STOP_GRACE_SECONDS)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
-        # An already-exited process keeps its own status (completed/failed);
-        # only tasks this registry stopped are reported as "stopped".
+        if task.process.returncode is not None and not process_group_alive(task.pgid):
+            # Nothing left to stop: reporting "stopped" would imply this call
+            # did something, so the task keeps its completed/failed status.
+            return self.status(task_id)
+        self._stopped.add(task_id)
+        await kill_process_group(task.pgid, task.process, _STOP_GRACE_SECONDS)
+        # status() re-probes the group, so "stopping" here means members
+        # survived SIGKILL and the log may still grow.
         return self.status(task_id)
 
     def status(self, task_id: str) -> TaskStatus | None:
@@ -142,7 +194,12 @@ class BackgroundTaskRegistry:
         if task.process.returncode is None:
             return "running"
         if task_id in self._stopped:
-            return "stopped"
+            # The leader is gone; the group decides whether the stop finished.
+            return "stopping" if process_group_alive(task.pgid) else "stopped"
+        if process_group_alive(task.pgid):
+            # Leader exited but work it forked still runs: that is the orphan
+            # case, not a completion. task_stop still finds it by id.
+            return "orphaned"
         return "completed" if task.process.returncode == 0 else "failed"
 
     def _get_or_raise(self, task_id: str) -> BackgroundTask:
@@ -160,3 +217,15 @@ class BackgroundTaskRegistry:
 # Process-wide singleton: the REPL runs one registry per process, shared by
 # the bash/task_output/task_stop handlers.
 background_registry = BackgroundTaskRegistry()
+
+
+def _sweep_background_tasks() -> None:
+    # Registered at import: every exit path (normal return, sys.exit from a
+    # slash command, an unhandled exception) funnels through atexit, while a
+    # shutdown hook would only cover a clean loop shutdown. Without the sweep
+    # the groups reparent to init and keep writing to their logs with nobody
+    # holding their ids.
+    background_registry.kill_live_tasks()
+
+
+atexit.register(_sweep_background_tasks)

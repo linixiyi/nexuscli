@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,28 @@ if TYPE_CHECKING:
     # strings (PEP 563), so this is a typing-only edge.
     from nexuscli.entrypoints.repl import PermissionModeController
 
+# Tool arguments are summarized on one line: a full payload (file bodies,
+# long command lines) buried the decision and scrolled the conversation away.
+_SUMMARY_CHARS = 120
+
+
+def _summarize_input(payload: dict[str, Any]) -> str:
+    """One-line preview of the call's arguments."""
+    parts: list[str] = []
+    for key, value in payload.items():
+        if isinstance(value, str):
+            text = value.replace(chr(10), " ")
+            if len(text) > _SUMMARY_CHARS:
+                text = text[:_SUMMARY_CHARS] + f"…(+{len(value) - _SUMMARY_CHARS} chars)"
+        elif isinstance(value, (dict, list)):
+            text = json.dumps(value, ensure_ascii=False)
+            if len(text) > _SUMMARY_CHARS:
+                text = text[:_SUMMARY_CHARS] + "…"
+        else:
+            text = str(value)
+        parts.append(f"{key}={text}")
+    return " ".join(parts)
+
 
 def _approval_prompt(
     request: dict[str, Any],
@@ -26,7 +49,7 @@ def _approval_prompt(
         return "deny"
     console.print(
         f"[yellow]Approval required[/yellow] {request['tool_name']} "
-        f"({request['danger_level']})\n{request['input']}"
+        f"({request['danger_level']}) {_summarize_input(request.get('input') or {})}"
     )
     console.print(f"[dim]{APPROVAL_HELP}[/dim]")
     # rich.prompt.Prompt re-asks forever on unknown input and ignores Esc, so a

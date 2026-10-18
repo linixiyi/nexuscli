@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
+import signal
+import time
 from dataclasses import dataclass
 
 from nexuscli.policy import CommandGuard
@@ -87,6 +90,170 @@ def classify_command(command: str) -> str:
             return "medium"
 
     return "safe"
+
+
+# ---------------------------------------------------------------------------
+# Process groups
+# ---------------------------------------------------------------------------
+
+# A killed command sits on the caller's critical path, so the wait below is a
+# poll: SIGTERM is honoured immediately by well-behaved children (sleep, sh),
+# and polling returns the moment the group empties instead of sleeping out the
+# whole grace period. The full grace is only paid when a child ignores SIGTERM
+# — exactly the case where the escalation is needed anyway.
+_KILL_GRACE_SECONDS = 2.0
+_GROUP_POLL_SECONDS = 0.05
+
+
+def process_group_spawn_kwargs() -> dict[str, bool]:
+    """Subprocess keyword arguments that give the child its own process group.
+
+    POSIX: ``start_new_session`` runs setsid(), so the child leads a fresh
+    session and one killpg reaches everything it forked. Without it a
+    ``sh -c '... & ...'`` grandchild stays in *our* group — terminating the
+    shell leaves the grandchild running, and signalling our own group would
+    take the CLI down with it.
+
+    Windows: ``start_new_session`` is documented POSIX-only and CPython
+    ignores it there, so passing it would advertise a group that does not
+    exist. Windows therefore gets no group at spawn, and termination degrades
+    to terminate/kill on the direct child — see :func:`kill_process_group`.
+    """
+    if os.name != "posix":
+        return {}
+    return {"start_new_session": True}
+
+
+def process_group_of(pid: int | None) -> int | None:
+    """Return the group id of *pid*, or None when the platform or pid cannot tell."""
+    if pid is None or os.name != "posix":
+        return None
+    try:
+        return os.getpgid(pid)
+    except (ProcessLookupError, PermissionError):
+        return None
+
+
+def process_group_alive(pgid: int | None) -> bool:
+    """True while any member of *pgid* still exists (signal-0 probe)."""
+    if pgid is None or os.name != "posix":
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Present but not ours to signal: report it alive rather than claim a
+        # kill that did not happen.
+        return True
+    return True
+
+
+def signal_process_group(pgid: int | None, *, hard: bool = False) -> None:
+    """Signal every member of *pgid*: SIGTERM by default, SIGKILL when *hard*."""
+    if pgid is None or os.name != "posix":
+        return
+    # An empty group is the expected outcome when the leader exited first.
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(pgid, signal.SIGKILL if hard else signal.SIGTERM)
+
+
+async def kill_process_group(
+    pgid: int | None,
+    process: object,
+    grace: float = _KILL_GRACE_SECONDS,
+) -> bool:
+    """Terminate *process* and everything it forked; True when the group is gone.
+
+    False is returned only when members outlived SIGKILL, and callers must
+    report that honestly instead of rendering it as a completed stop.
+    """
+    if pgid is None:
+        return await _stop_direct_child(process, grace)
+    signal_process_group(pgid)
+    gone = await _wait_group_gone(pgid, grace)
+    if not gone:
+        signal_process_group(pgid, hard=True)
+        gone = await _wait_group_gone(pgid, grace)
+    # Reap even when the group survived: a stale returncode would make the
+    # leader look alive and hide that the stop did reach it.
+    await _reap(process, grace)
+    return gone
+
+
+async def _stop_direct_child(process: object, grace: float) -> bool:
+    """Degraded ladder for platforms without process groups (Windows).
+
+    ``terminate`` on the leader is all that is available: a ``cmd /c`` shell's
+    grandchildren outlive it. That boundary is deliberate — the alternative
+    is a platform-specific tree walk whose failure modes cost more than the
+    leaked process.
+    """
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=grace)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+    return True
+
+
+async def _wait_group_gone(pgid: int, grace: float) -> bool:
+    deadline = time.monotonic() + grace
+    while process_group_alive(pgid):
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(_GROUP_POLL_SECONDS)
+    return True
+
+
+async def _reap(process: object, grace: float) -> None:
+    """Collect the group leader's exit status; bounded so a stop never hangs."""
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(process.wait(), timeout=grace)
+
+
+async def _drain_reader(
+    reader: asyncio.Future[tuple[bytes, bytes]],
+    grace: float,
+) -> tuple[bytes, bytes]:
+    """Collect what the pipes still hold after the group was killed.
+
+    Bounded by *grace*: a writer that escaped the group (it called setsid
+    itself) would otherwise hold the pipe open forever and reintroduce the
+    very hang the group kill removed.
+    """
+    try:
+        stdout, stderr = await asyncio.wait_for(reader, timeout=grace)
+    except TimeoutError:
+        reader.cancel()
+        return b"", b""
+    return stdout or b"", stderr or b""
+
+
+async def communicate_or_kill_group(
+    process: asyncio.subprocess.Process,
+    timeout: float,
+    grace: float = _KILL_GRACE_SECONDS,
+) -> tuple[bytes, bytes, bool]:
+    """Await *process* output, killing its whole group when *timeout* expires.
+
+    Returns ``(stdout, stderr, timed_out)``. A bare ``communicate()`` is not
+    enough: it only returns once both pipes hit EOF, and a grandchild that
+    inherited them keeps them open after the shell is gone — the call would
+    hang for as long as the grandchild lives. Killing the group first makes
+    the pipes reach EOF, so the drain returns right after the timeout.
+    """
+    reader = asyncio.ensure_future(process.communicate())
+    try:
+        stdout, stderr = await asyncio.wait_for(asyncio.shield(reader), timeout=timeout)
+    except TimeoutError:
+        # SIGTERM the group first so children can flush and exit, then
+        # escalate; only then does the pipe reach EOF and the drain return.
+        await kill_process_group(process_group_of(process.pid), process, grace)
+        stdout, stderr = await _drain_reader(reader, grace)
+        return stdout, stderr, True
+    return stdout or b"", stderr or b"", False
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +379,7 @@ class CommandExecutor:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            **process_group_spawn_kwargs(),
         )
         return await self._handle_process(proc, command, timeout, max_output_chars)
 
@@ -222,14 +390,7 @@ class CommandExecutor:
         timeout: float,
         max_output_chars: int,
     ) -> CommandResult:
-        timed_out = False
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            timed_out = True
-            stdout, stderr = b"", b""
+        stdout, stderr, timed_out = await communicate_or_kill_group(proc, timeout)
 
         stdout_str = _decode(stdout)
         stderr_str = _decode(stderr)

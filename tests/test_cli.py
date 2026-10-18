@@ -123,7 +123,16 @@ def test_continue_loads_latest_session_into_single_prompt(tmp_path, monkeypatch)
     captured = {}
 
     async def fake_run_prompt(
-        prompt, cwd, config_arg, *, mode, worker_mode, json_output, history, usage_baseline=None
+        prompt,
+        cwd,
+        config_arg,
+        *,
+        mode,
+        worker_mode,
+        json_output,
+        history,
+        usage_baseline=None,
+        approve_all=False,
     ):
         captured["history"] = history
         captured["cwd"] = cwd
@@ -148,7 +157,16 @@ def test_resume_rejected_for_non_react_single_prompt_modes(tmp_path, monkeypatch
     captured = {}
 
     async def fake_run_prompt(
-        prompt, cwd, config_arg, *, mode, worker_mode, json_output, history, usage_baseline=None
+        prompt,
+        cwd,
+        config_arg,
+        *,
+        mode,
+        worker_mode,
+        json_output,
+        history,
+        usage_baseline=None,
+        approve_all=False,
     ):
         captured["history"] = history
         captured["usage_baseline"] = usage_baseline

@@ -154,10 +154,11 @@ canned result <code>"deployed"</code> never appears — the deny rule intercepts
 (no usage recording), audit log disabled, no context compression or skill
 prefixes. The report itself is written under the project's own
 <code>.nexuscli/evals/</code>.</p>
-<p>One known side effect, disclosed rather than hidden: scenarios run the real
-<code>Agent.run</code>, whose pre/post-turn snapshot step still executes — each turn
-copies the project tree to <code>~/.nexuscli/snapshots/&lt;digest&gt;</code> (twice per turn,
-like any other agent run). Nothing else escapes the project or the user home.</p>
+<p>One side effect worth naming: scenarios run the real <code>Agent.run</code>. Automatic
+pre/post-turn snapshots are opt-in (<code>features.auto_snapshot</code>, default off), so
+under the default configuration nothing is copied; with the switch on, each
+turn copies the project tree to <code>~/.nexuscli/snapshots/&lt;digest&gt;</code> twice, like
+any other agent run. Nothing else escapes the project or the user home.</p>
 <h2 id="regression-comparison"><a class="toclink" href="#regression-comparison">Regression comparison</a></h2>
 <p>Every run writes <code>.nexuscli/evals/last-report.json</code>. On the next run the
 previous report is read back and each scenario is marked:</p>

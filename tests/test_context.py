@@ -280,3 +280,45 @@ def test_compact_now_truncates_oversized_tool_payload():
 
 def test_mixed_language_token_estimator_is_nonzero_and_conservative():
     assert estimate_text_tokens("你好 world()") >= 5
+
+
+def test_compact_refuses_to_inflate_a_short_history():
+    # The summary block has a fixed header plus one line per summarized
+    # message, so on a short history it can cost more than it saves. Measured
+    # through the REPL: 24 -> 101 -> 180 -> 258 tokens over four /compact runs,
+    # each printed as a success. compact_now must return the original history
+    # with compressed=False instead.
+    from nexuscli.context.manager import ContextWindowManager
+    from nexuscli.types import Message
+
+    messages = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content="hello"),
+    ]
+    manager = ContextWindowManager(ContextBudget(100_000, 1_000), min_recent_messages=1)
+
+    result = manager.compact_now(messages)
+
+    assert result.compressed is False
+    assert result.messages == messages
+    assert result.estimated_tokens_after <= result.estimated_tokens_before
+
+
+def test_compact_still_compresses_a_long_history():
+    from nexuscli.context.manager import ContextWindowManager
+    from nexuscli.types import Message
+
+    messages = []
+    for index in range(40):
+        messages.append(Message(role="user", content=f"question {index} " + "x" * 400))
+        messages.append(Message(role="assistant", content=f"answer {index} " + "y" * 400))
+    manager = ContextWindowManager(
+        ContextBudget(100_000, 1_000),
+        min_recent_messages=4,
+        summary_max_chars=2_000,
+    )
+
+    result = manager.compact_now(messages)
+
+    assert result.compressed is True
+    assert result.estimated_tokens_after < result.estimated_tokens_before

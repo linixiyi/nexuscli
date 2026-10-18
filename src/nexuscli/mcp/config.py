@@ -46,6 +46,15 @@ class McpServerSpec:
     blocked_tools: list[str] = field(default_factory=list)
 
 
+class McpConfigError(ValueError):
+    """A readable ``mcp.json`` that cannot be parsed or has the wrong shape.
+
+    Silent tolerance here was actively misleading: a typo in the JSON made
+    ``mcp list`` print "No MCP servers configured.", so the user went looking
+    for a missing file or the wrong scope instead of the broken one.
+    """
+
+
 def load_mcp_server_specs(project_root: str | Path) -> dict[str, McpServerSpec]:
     root = Path(project_root).resolve()
     merged: dict[str, Any] = {}
@@ -61,6 +70,36 @@ def load_mcp_server_specs(project_root: str | Path) -> dict[str, McpServerSpec]:
         for name, raw in merged.items()
         if isinstance(raw, dict)
     }
+
+
+def read_mcp_config_entries(
+    project_root: str | Path,
+) -> tuple[dict[str, McpServerSpec], list[str]]:
+    """Like :func:`load_mcp_server_specs`, but report broken config files.
+
+    Returns ``(specs, skipped)``. Raises :class:`McpConfigError` naming the
+    offending path when an existing ``mcp.json`` is unparseable or not a JSON
+    object — a missing file stays a normal "no configuration" case. Entries
+    that are not objects are listed in ``skipped`` so ``mcp list`` can say
+    which name was dropped instead of silently narrowing the table.
+    """
+    root = Path(project_root).resolve()
+    merged: dict[str, Any] = {}
+    skipped: list[str] = []
+    for path in [Path.home() / ".nexuscli" / "mcp.json", root / ".nexuscli" / "mcp.json"]:
+        data = _read_json(path, strict=True)
+        if not data:
+            continue
+        servers = data.get("mcpServers", data)
+        if not isinstance(servers, dict):
+            raise McpConfigError(f'{path}: "mcpServers" must be a JSON object')
+        for name, raw in servers.items():
+            if isinstance(raw, dict):
+                merged[name] = raw
+            else:
+                skipped.append(f"{name}: not an object")
+    specs = {name: _spec_from_raw(name, raw, root) for name, raw in merged.items()}
+    return specs, skipped
 
 
 def write_chrome_devtools_config(
@@ -95,14 +134,32 @@ def write_chrome_devtools_config(
     return path
 
 
-def _read_json(path: Path) -> dict[str, Any] | None:
+def _read_json(path: Path, *, strict: bool = False) -> dict[str, Any] | None:
+    """Read a JSON object; ``None`` when the file is absent or unusable.
+
+    ``strict`` turns the two "file exists but is broken" cases into
+    :class:`McpConfigError` naming the path, which is what the CLI needs to
+    stop pretending a corrupt config means "nothing configured".
+    """
     if not path.exists():
         return None
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        if strict:
+            raise McpConfigError(f"{path}: cannot read config: {exc}") from exc
         return None
-    return value if isinstance(value, dict) else None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        if strict:
+            raise McpConfigError(f"{path}: invalid JSON: {exc}") from exc
+        return None
+    if not isinstance(value, dict):
+        if strict:
+            raise McpConfigError(f"{path}: config must be a JSON object")
+        return None
+    return value
 
 
 def _spec_from_raw(name: str, raw: dict[str, Any], project_root: Path) -> McpServerSpec:

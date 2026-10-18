@@ -13,6 +13,7 @@ from nexuscli.entrypoints.model_selector import ModelSelectorState, run_model_se
 from nexuscli.llm import create_llm_client
 from nexuscli.llm.model_profiles import (
     DEFAULT_MODEL_PROFILES,
+    PROVIDER_API_KEY_ENVS,
     PROVIDER_DEFAULTS,
     CustomModelStore,
     ModelProfile,
@@ -268,6 +269,19 @@ def _activate_model(
         current_provider=old_provider,
         current_api_key=old_api_key,
     )
+    if not config.llm.api_key:
+        # Name the variable this provider actually reads. The generic
+        # NEXUSCLI_API_KEY hint was wrong for every provider that has its own
+        # env var, so the user set the variable the message named and the
+        # switch kept failing.
+        candidates = list(PROVIDER_API_KEY_ENVS.get(profile.provider.lower(), ()))
+        candidates.append(profile.api_key_env or _provider_api_key_env(profile.provider))
+        candidates.append("NEXUSCLI_API_KEY")
+        names = ", ".join(dict.fromkeys(name for name in candidates if name))
+        renderer.console.print(
+            f"[yellow]Switched to {profile.model}, but no API key is configured for "
+            f"provider {profile.provider}. Set one of: {names}[/yellow]"
+        )
     client = create_llm_client(config.llm, telemetry_enabled=config.telemetry.enabled)
     agent.llm_client = client
     agent.system_prompt = PromptAssembler(

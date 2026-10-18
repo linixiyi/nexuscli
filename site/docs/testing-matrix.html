@@ -1,0 +1,1538 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>功能测试矩阵：要测什么，谁来测，测过没有 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：147 个用户表面的测试状态：测过什么、没测过什么。">
+  <meta property="og:title" content="功能测试矩阵：要测什么，谁来测，测过没有 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/testing-matrix.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#图例">图例</a></li>
+<li><a href="#一启动与入口">一、启动与入口</a></li>
+<li><a href="#二agent-运行模式">二、Agent 运行模式</a></li>
+<li><a href="#三repl-交互表面">三、REPL 交互表面</a></li>
+<li><a href="#四斜杠命令31-个">四、斜杠命令（31 个）</a></li>
+<li><a href="#五内置工具25-个--2-个-vfs-视图">五、内置工具（25 个 + 2 个 vfs 视图）</a></li>
+<li><a href="#六权限与安全">六、权限与安全</a></li>
+<li><a href="#七记忆与上下文">七、记忆与上下文</a></li>
+<li><a href="#八会话与持久化">八、会话与持久化</a></li>
+<li><a href="#九联网">九、联网</a></li>
+<li><a href="#十mcp">十、MCP</a></li>
+<li><a href="#十一runtime-api--cron--eval--sdk">十一、Runtime API / cron / eval / SDK</a></li>
+<li><a href="#十二扩展机制">十二、扩展机制</a></li>
+<li><a href="#十三可观测性">十三、可观测性</a></li>
+<li><a href="#十四图片与-pdf">十四、图片与 PDF</a></li>
+<li><a href="#十五汇总">十五、汇总</a><ul>
+<li><a href="#这一轮fix-audit-residual补上的验证">这一轮（fix-audit-residual）补上的验证</a></li>
+<li><a href="#仍然没测的下一轮优先">仍然没测的（下一轮优先）</a></li>
+</ul>
+</li>
+<li><a href="#附怎么复现这张表">附：怎么复现这张表</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧭 147 个用户表面的测试状态：测过什么、没测过什么</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/testing-matrix.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="功能测试矩阵要测什么谁来测测过没有"><a class="toclink" href="#功能测试矩阵要测什么谁来测测过没有">功能测试矩阵：要测什么，谁来测，测过没有</a></h1>
+<blockquote>
+<p>这份文档回答三个问题：<strong>产品有哪些面向用户的表面</strong>、<strong>每个表面一个真人会怎么用</strong>、<strong>这个表面到 2026-10-18 为止有没有被真实跑过</strong>。</p>
+<p>判定口径只有两种：
+- <strong>机器验证</strong>：<code>tests/</code> 里的自动化断言（可重复、进 CI）
+- <strong>真人模拟</strong>：用真实 pty / 真实网关 / 真实外部服务跑一遍用户会做的事（一次性、靠证据留痕）</p>
+<p>只有机器验证不算"测过"——断言能证明代码路径通，不能证明用户拿到的观感、文案、错误提示是对的。</p>
+</blockquote>
+<h2 id="图例"><a class="toclink" href="#图例">图例</a></h2>
+<table>
+<thead>
+<tr>
+<th>标记</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>✅ 已测</td>
+<td>有机器验证，且至少一次真实运行留痕</td>
+</tr>
+<tr>
+<td>🟡 仅机器</td>
+<td>有自动化断言，没有真实运行记录</td>
+</tr>
+<tr>
+<td>🟠 仅真人</td>
+<td>真实跑过，没有自动化断言（回归会静默退化）</td>
+</tr>
+<tr>
+<td>⬜ 未测</td>
+<td>两条都没有</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>2026-10-18 第二轮（<code>fix-audit-residual</code>）之后，表中带 【本轮】 的行是这一轮补的真实运行/机器验证；带 【已修】 的缺陷行是本轮修掉并复测过的。</p>
+</blockquote>
+<hr>
+<h2 id="一启动与入口"><a class="toclink" href="#一启动与入口">一、启动与入口</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.1</td>
+<td><code>nexuscli</code> 交互 REPL 冷启动</td>
+<td>打开终端直接敲命令，看首帧多久出来、有没有闪烁</td>
+<td><code>test_repl.py</code></td>
+<td>pty 实测首字节 0.377s，banner 两行各绘制 1 次</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>1.2</td>
+<td><code>nexuscli -p "..."</code> 单次模式</td>
+<td>脚本里跑一句话，要能拿到干净 stdout</td>
+<td><code>test_cli.py</code>、<code>test_cli_single_prompt.py</code></td>
+<td>真实网关多轮实测</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>1.3</td>
+<td><code>--json</code> 机器可读输出</td>
+<td>CI 里 <code>jq</code> 取 usage/cost</td>
+<td><code>test_cli.py</code></td>
+<td><code>json.loads</code> 全量校验通过</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>1.4</td>
+<td><code>--plain</code> 无 ANSI 输出</td>
+<td>管道给文件或别的工具</td>
+<td><code>test_render.py</code></td>
+<td><code>od -c</code> 确认无转义序列</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>1.5</td>
+<td>非 TTY stdin</td>
+<td><code>echo hi \| nexuscli</code>，期望友好提示 + exit 1</td>
+<td><code>test_repl_non_tty.py</code></td>
+<td>实测 exit=1 且提示指向 <code>-p</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>1.6</td>
+<td><code>--resume &lt;id&gt;</code> / <code>-c</code> 跨进程恢复</td>
+<td>昨天聊到一半，今天接着聊</td>
+<td><code>test_session_store.py</code></td>
+<td>真实网关：能答出上一会话的 codeword</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>1.7</td>
+<td><code>doctor</code> 环境自检</td>
+<td>装完第一件事就是跑它看缺什么</td>
+<td>无</td>
+<td>实测输出 Python/uv/Node/rg/key 五项</td>
+<td>🟠</td>
+</tr>
+<tr>
+<td>1.8</td>
+<td><code>sessions</code> 列表</td>
+<td>找回上周那个会话</td>
+<td><code>test_session_store.py</code></td>
+<td>实测列出会话</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>1.9</td>
+<td><code>--version</code></td>
+<td>报 bug 时贴版本</td>
+<td>无</td>
+<td>实测 <code>nexuscli 0.1.0</code></td>
+<td>🟠</td>
+</tr>
+<tr>
+<td>1.10</td>
+<td>【本轮】<code>-p --yes</code> 非交互放行</td>
+<td>CI 里让它真的跑命令</td>
+<td><code>test_cli_single_prompt.py</code></td>
+<td>实测 <code>touch made.txt</code> 真的落盘；不带 <code>--yes</code> 仍被拒</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>1.11</td>
+<td>【本轮】<code>-p</code> 端口占用/启动错误</td>
+<td>端口撞了要知道换哪个</td>
+<td><code>test_cli.py</code></td>
+<td>实测 <code>Port 63644 is already in use. Try --port &lt;other&gt;.</code>，无 traceback</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<h2 id="二agent-运行模式"><a class="toclink" href="#二agent-运行模式">二、Agent 运行模式</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2.1</td>
+<td>ReAct 循环 + 工具调用</td>
+<td>"帮我看看这个仓库用了什么依赖"</td>
+<td><code>test_agent_turns.py</code></td>
+<td>真实网关多轮、工具返回事实正确</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>2.2</td>
+<td>thinking 流式展示</td>
+<td>复杂任务时看模型在想什么</td>
+<td><code>test_render.py</code></td>
+<td>真实网关可见 <code>thinking…</code> 增量</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>2.3</td>
+<td>Plan-and-Execute（<code>--mode plan</code> / <code>/plan</code>）</td>
+<td>让它先规划再动手</td>
+<td><code>test_plan.py</code>、<code>test_plan_checkpoint.py</code></td>
+<td>实测 DAG 跑通，checkpoint 落盘</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>2.4</td>
+<td>plan 只读闸门（<code>Shift+Tab</code> → plan）</td>
+<td>只读调研，确认方案再执行</td>
+<td><code>test_plan_mode.py</code></td>
+<td>pty 实测写工具被硬拒、不写审计</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>2.5</td>
+<td><code>--mode plan</code> 的只读语义</td>
+<td>同上，但走单次模式</td>
+<td><code>test_cli.py</code></td>
+<td>本轮修复后实测写入被拒</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>2.6</td>
+<td>Multi-Agent team 模式</td>
+<td>"并行审计这几个模块"</td>
+<td><code>test_multi_agent.py</code></td>
+<td>真实网关跑通，Phase 1/2 结构正确</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>2.7</td>
+<td>team 的 worker-mode=plan</td>
+<td>worker 内部再走 plan</td>
+<td>无</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td>2.8</td>
+<td>工具循环检测</td>
+<td>模型卡在同一个调用上要能止损</td>
+<td><code>test_loop_detection.py</code></td>
+<td>未跑（需要构造真实重复调用）</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>2.9</td>
+<td>provider 超限自动压缩重试</td>
+<td>长会话撞 context 上限</td>
+<td><code>test_overflow_retry.py</code></td>
+<td>未跑（需要构造真实超限）</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>2.10</td>
+<td>中断后续跑（<code>/plan --resume</code>）</td>
+<td>计划跑到一半 Ctrl+C，第二天续</td>
+<td><code>test_plan_checkpoint.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+</tbody>
+</table>
+<h2 id="三repl-交互表面"><a class="toclink" href="#三repl-交互表面">三、REPL 交互表面</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3.1</td>
+<td>底部状态栏（模型 · effort · 上下文条 · cwd · 权限）</td>
+<td>随时知道自己在什么状态</td>
+<td><code>test_render.py</code></td>
+<td>pty 实测 120/60/48 列三档</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>3.2</td>
+<td><code>Shift+Tab</code> 三态循环</td>
+<td>临时切 auto 放行、切 plan 只读</td>
+<td><code>test_permission_mode.py</code></td>
+<td>pty 实测 Default→Auto→plan→Default</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>3.3</td>
+<td>【已修】窄终端下的状态栏（≤60 列）</td>
+<td>分屏或小窗口里用</td>
+<td><code>test_render.py</code></td>
+<td>48 列 pty 实测模式名保留：<code>cbcn/glm-5.3-flash  Default  ⇧Tab</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>3.4</td>
+<td>回合中途 Ctrl+C</td>
+<td>发现方向错了立刻打断</td>
+<td>无（上一轮补的 pty 验证）</td>
+<td>pty 实测：修复前杀进程，修复后中止回合且 <code>/exit</code> 正常</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>3.5</td>
+<td>空 prompt 上 Ctrl+C</td>
+<td>想清屏/退出</td>
+<td>无</td>
+<td>pty 实测 exit=0</td>
+<td>🟠</td>
+</tr>
+<tr>
+<td>3.6</td>
+<td>Ctrl+D 退出</td>
+<td>惯用退出键</td>
+<td>无</td>
+<td>pty 实测 exit=0</td>
+<td>🟠</td>
+</tr>
+<tr>
+<td>3.7</td>
+<td>【已修】斜杠命令 Tab 补全</td>
+<td>打 <code>/sk</code> 按 Tab 补成 <code>/skill</code></td>
+<td><code>test_slash_completion.py</code></td>
+<td>pty 实测 <code>/sk&lt;Tab&gt;</code> → <code>/skill</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>3.8</td>
+<td>【已修】placeholder 文案</td>
+<td>照着提示敲图片路径</td>
+<td><code>test_repl.py</code></td>
+<td>pty 实测 <code>Type your message or @image:path/to/file</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>3.9</td>
+<td>中文输入输出</td>
+<td>全程中文对话</td>
+<td><code>test_render.py</code></td>
+<td>pty 实测 60 列无超宽</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>3.10</td>
+<td>bracketed paste</td>
+<td>粘贴多行代码</td>
+<td>无</td>
+<td>pty 实测换行保留</td>
+<td>🟠</td>
+</tr>
+<tr>
+<td>3.11</td>
+<td>长回答（&gt;200 行）</td>
+<td>让它输出一份清单</td>
+<td><code>test_render.py</code></td>
+<td>实测换行曾折叠成一段（上一轮修复）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>3.12</td>
+<td>【本轮】<code>/clear</code> 重绘</td>
+<td>换话题，清上下文</td>
+<td><code>test_repl_ux.py</code></td>
+<td>pty 实测重绘 banner（35 行输出）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>3.13</td>
+<td>【本轮】<code>/compact</code> 压缩预算</td>
+<td>主动瘦身</td>
+<td><code>test_context.py</code></td>
+<td>pty 实测空历史回 <code>(no conversation history to compact)</code>；有历史时压缩后必须变小，否则如实报</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<h2 id="四斜杠命令31-个"><a class="toclink" href="#四斜杠命令31-个">四、斜杠命令（31 个）</a></h2>
+<table>
+<thead>
+<tr>
+<th>命令</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/help</code></td>
+<td>忘了命令名</td>
+<td>1</td>
+<td>pty 实测列出全部命令</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>/exit</code></td>
+<td>收工</td>
+<td>1</td>
+<td>pty 实测 exit=0</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>/clear</code></td>
+<td>换话题，清上下文</td>
+<td>2</td>
+<td>【本轮】pty 实测重绘 banner</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>/resume</code></td>
+<td>切回某个历史会话</td>
+<td>3</td>
+<td>未在 REPL 内跑（<code>-c</code> 跑过）</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>/history</code></td>
+<td>找上周问过的问题</td>
+<td>1</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>/context</code></td>
+<td>看当前上下文占了多少</td>
+<td>0</td>
+<td>pty 实测表格正确</td>
+<td>🟠</td>
+</tr>
+<tr>
+<td><code>/compact</code></td>
+<td>手动压一次上下文</td>
+<td>1</td>
+<td>【本轮】pty 实测空历史如实回报</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>/memory</code></td>
+<td>看记住了什么</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>/save</code></td>
+<td>存当前会话</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>/config</code></td>
+<td>核对生效配置</td>
+<td>0</td>
+<td>【本轮】pty 实测摘要 43 行、无 JSON dump</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>/tools</code></td>
+<td>看有哪些工具</td>
+<td>0</td>
+<td>pty 实测列出 27 个</td>
+<td>🟠</td>
+</tr>
+<tr>
+<td><code>/hitl</code></td>
+<td>切审批档位</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>/policy</code></td>
+<td>核对安全策略</td>
+<td>0</td>
+<td>pty 实测摘要（同 /config）</td>
+<td>🟠</td>
+</tr>
+<tr>
+<td><code>/audit</code></td>
+<td>查刚才那条为什么被拒</td>
+<td>0</td>
+<td>【本轮】pty 实测输出 4 列摘要表</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>/index</code></td>
+<td>建代码索引</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>/search</code></td>
+<td>语义搜代码</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>/init</code></td>
+<td>生成 AGENTS.md</td>
+<td>1</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>/plan</code></td>
+<td>进入 Plan-and-Execute</td>
+<td>1</td>
+<td>真实网关跑通</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>/team</code></td>
+<td>进入多代理</td>
+<td>0</td>
+<td>未跑（<code>--mode team</code> 跑过）</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>/model</code></td>
+<td>切模型</td>
+<td><code>test_model_selector.py</code></td>
+<td>未跑（TUI 选择器）</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>/usage</code></td>
+<td>看这轮烧了多少 token</td>
+<td>2</td>
+<td>pty 实测四行状态表</td>
+<td>🟠</td>
+</tr>
+<tr>
+<td><code>/skill</code></td>
+<td>加载技能</td>
+<td>2</td>
+<td>【已修】pty 实测 <code>Unknown skill: "nosuchskill". Available: web-access</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>/mcp</code></td>
+<td>看接了哪些 MCP</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>/task</code></td>
+<td>派子代理</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>/workflow</code></td>
+<td>跑 JSON 步骤图</td>
+<td>1</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>/expert</code></td>
+<td>内置三步专家流程</td>
+<td>2</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>/fork</code></td>
+<td>分叉会话试另一个方向</td>
+<td>2</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>/goal</code></td>
+<td>设跨回合长程目标</td>
+<td>1</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>/effort</code></td>
+<td>调推理力度</td>
+<td>1</td>
+<td>pty 实测八次循环顺序正确；【本轮】<code>off</code> 在状态栏可见</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>/snapshot</code></td>
+<td>手动存快照</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>/restore</code></td>
+<td>回滚到某个快照</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+</tbody>
+</table>
+<h2 id="五内置工具25-个--2-个-vfs-视图"><a class="toclink" href="#五内置工具25-个--2-个-vfs-视图">五、内置工具（25 个 + 2 个 vfs 视图）</a></h2>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_file</code></td>
+<td>"读一下这个文件"</td>
+<td>18</td>
+<td>真实网关跑过；越界被拒</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>write_file</code></td>
+<td>"把这个写进去"</td>
+<td>9</td>
+<td>真实网关跑过（补了审批）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>edit_file</code></td>
+<td>"把这行改掉"</td>
+<td>4</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>list_dir</code></td>
+<td>"这个目录有啥"</td>
+<td>4</td>
+<td>真实网关跑过</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>glob</code> / <code>glob_files</code></td>
+<td>"找出所有测试文件"</td>
+<td>3</td>
+<td>真实网关跑过</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>grep</code> / <code>grep_code</code></td>
+<td>"哪里用了这个函数"</td>
+<td>6</td>
+<td>真实网关跑过</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>directory_tree</code></td>
+<td>"给我看目录树"</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>get_file_info</code></td>
+<td>"这个文件多大"</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>bash</code> / <code>execute_command</code></td>
+<td>"跑一下测试"</td>
+<td>17 / 6</td>
+<td>真实网关跑过（含拒绝路径）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>web_search</code></td>
+<td>"搜一下这个报错"</td>
+<td>1</td>
+<td>【已修】真实检索返回 5 条；失败时报 <code>DuckDuckGo request failed (ConnectError) for query 'anything': All connection attempts failed</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>web_fetch</code></td>
+<td>"看看这个链接"</td>
+<td>2</td>
+<td>真实跑过（修了 fake-IP 误杀）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>save_memory</code> / <code>search_memory</code></td>
+<td>"记住这个偏好"</td>
+<td>2 / 1</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>load_skill</code> / <code>save_skill</code></td>
+<td>加载/沉淀技能</td>
+<td>1 / 3</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>search_code</code></td>
+<td>语义搜代码</td>
+<td>0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>task_output</code> / <code>task_stop</code></td>
+<td>看/停后台任务</td>
+<td>2 / 2</td>
+<td>【已修】实测 <code>sh -c 'sleep 30 &amp; sleep 30'</code> 停止后进程组为空</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>revert_turn</code></td>
+<td>撤销上一轮改动</td>
+<td>2</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>todo_write</code> / <code>todo_read</code></td>
+<td>任务清单</td>
+<td>0 / 0</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td><code>task</code>（子代理）</td>
+<td>"派个子代理去查"</td>
+<td>3</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td><code>vfs_ls</code> / <code>vfs_read</code></td>
+<td>只读看历史快照</td>
+<td>13</td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+</tbody>
+</table>
+<h2 id="六权限与安全"><a class="toclink" href="#六权限与安全">六、权限与安全</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>6.1</td>
+<td>审批四档 y/r/a/s/n</td>
+<td>逐条决定放不放</td>
+<td><code>test_permissions.py</code></td>
+<td>pty 实测 r 档 run 级授权生效</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.2</td>
+<td>审批提示可退出（Esc/Ctrl+C）</td>
+<td>反悔，不想批了</td>
+<td><code>test_approval_keys.py</code></td>
+<td>pty 实测修复前卡死、修复后 deny</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.3</td>
+<td><code>permissions.allow/deny/ask</code></td>
+<td>把 <code>npm test</code> 设成免问</td>
+<td><code>test_permissions.py</code></td>
+<td>真实 <code>-p</code> 实测 allow 放行</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.4</td>
+<td>只读 bash 直通</td>
+<td><code>git status</code> 不该弹窗</td>
+<td><code>test_bash_readonly.py</code></td>
+<td>实测工作区内 <code>cat</code> 直通、凭证文件被拦</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.5</td>
+<td>路径守卫</td>
+<td>别让它写到项目外</td>
+<td><code>test_fs_scope.py</code></td>
+<td>实测 <code>..</code> 与 symlink 均被拒</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.6</td>
+<td>环境变量清洗</td>
+<td>别把 API key 漏给子进程</td>
+<td><code>test_sandbox_guard.py</code></td>
+<td>实测子进程看不到 KEY/TOKEN</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.7</td>
+<td>【已修】审计日志</td>
+<td>事后查谁批了什么</td>
+<td><code>test_audit_redaction.py</code></td>
+<td>实测文件 <code>0o600</code>、正文截断 500 字符、<code>sk-</code> 形态掩码</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.8</td>
+<td>Hooks 七事件</td>
+<td>在工具调用前跑自己的检查</td>
+<td><code>test_hooks.py</code></td>
+<td>未跑真实 hook</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>6.9</td>
+<td>工作区 hooks 信任门禁</td>
+<td>clone 别人的仓库先审 hooks</td>
+<td><code>test_hooks_trust.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>6.10</td>
+<td>plan 态只读</td>
+<td>见 2.4</td>
+<td><code>test_plan_mode.py</code></td>
+<td>pty 实测</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.11</td>
+<td><code>-p</code> 审批默认拒绝 + <code>--yes</code> 显式放行</td>
+<td>脚本里跑要写文件</td>
+<td><code>test_cli_single_prompt.py</code></td>
+<td>实测默认被拒、<code>--yes</code> 放行</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.12</td>
+<td>【已修】Runtime API 审批通道</td>
+<td>机器人接进来跑任务</td>
+<td><code>test_runtime.py</code></td>
+<td>实测 <code>write_file</code> 被拒且文件未落盘</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.13</td>
+<td>【已修】MCP server 浏览器安全</td>
+<td>本机跑着别被网页打</td>
+<td><code>test_mcp_http_security.py</code></td>
+<td>实测 GET 405 / 错路径 404 / text/plain 415 / 跨源 403 / 同源 200</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<h2 id="七记忆与上下文"><a class="toclink" href="#七记忆与上下文">七、记忆与上下文</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7.1</td>
+<td>静态记忆（AGENTS.md/NEXUS.md）</td>
+<td>项目约定写进文件</td>
+<td><code>test_prompt.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>7.2</td>
+<td>动态长期记忆（SQLite）</td>
+<td>"记住我用 uv 不用 pip"</td>
+<td><code>test_memory.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>7.3</td>
+<td>相关性召回 Top-K</td>
+<td>不问也能想起相关约束</td>
+<td><code>test_memory.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>7.4</td>
+<td>自动压缩（80% 触发）</td>
+<td>长会话不炸</td>
+<td><code>test_context.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>7.5</td>
+<td>【已修】<code>/compact</code> 手动压缩</td>
+<td>主动瘦身</td>
+<td><code>test_context.py</code></td>
+<td>pty 实测空历史如实回报；压缩必须变小</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>7.6</td>
+<td>代码索引与检索</td>
+<td>"搜一下这个函数在哪"</td>
+<td><code>test_search_rank.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+</tbody>
+</table>
+<h2 id="八会话与持久化"><a class="toclink" href="#八会话与持久化">八、会话与持久化</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8.1</td>
+<td>会话转录 JSONL</td>
+<td>关掉再开还在</td>
+<td><code>test_session_store.py</code></td>
+<td>实测落盘</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>8.2</td>
+<td>usage 随转录持久化</td>
+<td>恢复后 token 接着算</td>
+<td><code>test_session_usage.py</code></td>
+<td>实测双口径正确</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>8.3</td>
+<td><code>/fork</code> 分叉</td>
+<td>试另一个方向不污染主线</td>
+<td>无</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td>8.4</td>
+<td>快照 / <code>/snapshot</code> / <code>/restore</code></td>
+<td>改坏了回滚</td>
+<td><code>test_snapshot.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>8.5</td>
+<td>vfs 只读视图</td>
+<td>对比改前改后</td>
+<td><code>test_vfs.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>8.6</td>
+<td>【已修】自动快照（pre/post turn）</td>
+<td>想要每回合回滚点</td>
+<td><code>test_config.py</code></td>
+<td>实测默认关；README 已写明开关与默认值</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<h2 id="九联网"><a class="toclink" href="#九联网">九、联网</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9.1</td>
+<td><code>web_fetch</code> 抓正文</td>
+<td>"看看这个链接讲了啥"</td>
+<td><code>test_web_fetch_policy.py</code></td>
+<td>实测 GitHub/python.org 取回正文</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>9.2</td>
+<td>SSRF 守卫</td>
+<td>别让它抓内网</td>
+<td><code>test_web_fetch_policy.py</code></td>
+<td>实测 loopback/RFC1918/metadata 被拒</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>9.3</td>
+<td>【已修】<code>web_search</code></td>
+<td>搜最新报错</td>
+<td><code>test_web_fetch_policy.py</code></td>
+<td>真实检索 5 条；失败时给出类型与原因</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>9.4</td>
+<td>系统代理环境</td>
+<td>公司网/梯子下能用</td>
+<td><code>test_proxy_bypass.py</code></td>
+<td>实测回环旁路正确</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<h2 id="十mcp"><a class="toclink" href="#十mcp">十、MCP</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10.1</td>
+<td>MCP client（stdio / HTTP）</td>
+<td>接 filesystem server</td>
+<td><code>test_mcp.py</code></td>
+<td>实测 npx server 可接入</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>10.2</td>
+<td>工具级过滤 allowed/blocked</td>
+<td>只放几个工具进来</td>
+<td><code>test_mcp_filter.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>10.3</td>
+<td>OAuth 令牌落盘 0600</td>
+<td>接需要授权的 server</td>
+<td><code>test_mcp_oauth.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>10.4</td>
+<td>自身作为 MCP server</td>
+<td>让别的客户端用 NexusCLI</td>
+<td><code>test_mcp_server_protocol.py</code></td>
+<td>官方 SDK 握手通过</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>10.5</td>
+<td>【已修】MCP server 浏览器安全</td>
+<td>本机跑着别被网页打</td>
+<td><code>test_mcp_http_security.py</code></td>
+<td>实测 405/404/415/403 全部生效</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>10.6</td>
+<td>【已修】MCP client 连接复用</td>
+<td>有状态 server 要保活</td>
+<td><code>test_mcp.py</code></td>
+<td>实测三次调用同一 pid，count 1→2→3</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>10.7</td>
+<td><code>mcp list</code> / <code>init-chrome</code></td>
+<td>看配了啥</td>
+<td><code>test_mcp_filter.py</code></td>
+<td>【已修】实测展示 disabled；配置损坏报 <code>Invalid MCP config</code> + exit 1</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>10.8</td>
+<td>【已修】MCP 工具入参本地校验</td>
+<td>缺必填参数别发出去</td>
+<td><code>test_mcp_filter.py</code></td>
+<td>实测 <code>missing required input: name. Not sent.</code></td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<h2 id="十一runtime-api--cron--eval--sdk"><a class="toclink" href="#十一runtime-api--cron--eval--sdk">十一、Runtime API / cron / eval / SDK</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>11.1</td>
+<td><code>serve --http</code> + API key</td>
+<td>机器人接进来</td>
+<td><code>test_runtime.py</code></td>
+<td>实测 200/401 正确</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>11.2</td>
+<td><code>worker</code> 消费任务</td>
+<td>后台跑长任务</td>
+<td><code>test_runtime.py</code></td>
+<td>实测同项目完成</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>11.3</td>
+<td>任务租约与取消</td>
+<td>崩溃后自动重排</td>
+<td><code>test_runtime.py</code></td>
+<td>实测过期租约重排成功</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>11.4</td>
+<td>【已修】Runtime 并发 turn</td>
+<td>同时发两个请求</td>
+<td><code>test_runtime.py</code></td>
+<td>线程锁串行化</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>11.5</td>
+<td>【已修】不存在的 thread</td>
+<td>请求打错 id</td>
+<td><code>test_runtime.py</code></td>
+<td>实测 404 <code>thread not found</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>11.6</td>
+<td>【已修】<code>cron list/next/run</code></td>
+<td>定时跑日报</td>
+<td><code>test_cron.py</code></td>
+<td>实测 <code>[disabled] dead</code>；<code>cron run</code> 单行可直接 <code>$(...)</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>11.7</td>
+<td><code>eval list/run</code></td>
+<td>改坏了看回归</td>
+<td><code>test_eval.py</code></td>
+<td>实测 3/3 通过</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>11.8</td>
+<td>【已修】eval 在 wheel 形态</td>
+<td><code>pip install</code> 后跑 eval</td>
+<td><code>test_eval.py</code></td>
+<td>内置场景随包分发</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>11.9</td>
+<td>SDK <code>create_default_engine</code></td>
+<td>在 Python 里调</td>
+<td>无</td>
+<td>未跑</td>
+<td>⬜</td>
+</tr>
+</tbody>
+</table>
+<h2 id="十二扩展机制"><a class="toclink" href="#十二扩展机制">十二、扩展机制</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>12.1</td>
+<td>Skill 系统（builtin/user/project）</td>
+<td>装个团队规范</td>
+<td><code>test_skill.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>12.2</td>
+<td>Agent Skills 规范兼容</td>
+<td>直接用社区 skill</td>
+<td><code>test_skill_spec_compat.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>12.3</td>
+<td>自定义斜杠命令</td>
+<td>把常用提示词存起来</td>
+<td><code>test_slash_commands.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>12.4</td>
+<td>插件（<code>.nexuscli/plugins/</code>）</td>
+<td>打包一组 agents+skills+commands</td>
+<td><code>test_plugins.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>12.5</td>
+<td>自定义子代理（<code>.nexuscli/agents/*.md</code>）</td>
+<td>定义专属 reviewer</td>
+<td><code>test_subagent.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>12.6</td>
+<td>动态工作流（JSON DAG）</td>
+<td>把固定流程存成文件</td>
+<td><code>test_workflow.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>12.7</td>
+<td>子代理文件邮箱</td>
+<td>两个子代理协作</td>
+<td><code>test_subagent_mailbox.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>12.8</td>
+<td>后台子代理 + 完成播报</td>
+<td>派出去就不管了</td>
+<td><code>test_bg_subagent.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+</tbody>
+</table>
+<h2 id="十三可观测性"><a class="toclink" href="#十三可观测性">十三、可观测性</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>13.1</td>
+<td><code>trace_id</code> 关联</td>
+<td>把一次请求的所有日志串起来</td>
+<td><code>test_trace_id.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>13.2</td>
+<td>OTel span</td>
+<td>接自己的 collector</td>
+<td><code>test_telemetry.py</code></td>
+<td>未跑（无 exporter，如实边界）</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>13.3</td>
+<td><code>llm.debug_dump</code></td>
+<td>排查请求长什么样</td>
+<td><code>test_llm_io_dump.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>13.4</td>
+<td><code>/usage stats</code> 落库</td>
+<td>看这周花了多少</td>
+<td><code>test_usage_coverage.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+</tbody>
+</table>
+<h2 id="十四图片与-pdf"><a class="toclink" href="#十四图片与-pdf">十四、图片与 PDF</a></h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>功能</th>
+<th>真人会怎么用</th>
+<th>机器验证</th>
+<th>真实运行</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>14.1</td>
+<td><code>@image:</code> 本地图片</td>
+<td>贴截图让它看</td>
+<td><code>test_image.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>14.2</td>
+<td>远程图片</td>
+<td>贴 URL</td>
+<td><code>test_image.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>14.3</td>
+<td>非多模态模型降级</td>
+<td>用 deepseek 时别报错</td>
+<td><code>test_image.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>14.4</td>
+<td>PDF 读取</td>
+<td>让它读需求文档</td>
+<td><code>test_file_read_pdf.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+<tr>
+<td>14.5</td>
+<td>Python 语法诊断</td>
+<td>写完自动查错</td>
+<td><code>test_lsp.py</code></td>
+<td>未跑</td>
+<td>🟡</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="十五汇总"><a class="toclink" href="#十五汇总">十五、汇总</a></h2>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>数量</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>✅ 已测</td>
+<td>76</td>
+<td>机器验证 + 真实运行都有</td>
+</tr>
+<tr>
+<td>🟠 仅真人</td>
+<td>9</td>
+<td>真实跑过，但没有自动化断言护着</td>
+</tr>
+<tr>
+<td>🟡 仅机器</td>
+<td>45</td>
+<td>有断言，从没在真实场景里跑过</td>
+</tr>
+<tr>
+<td>⬜ 未测</td>
+<td>17</td>
+<td>两条都没有</td>
+</tr>
+<tr>
+<td><strong>合计</strong></td>
+<td><strong>147</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="这一轮fix-audit-residual补上的验证"><a class="toclink" href="#这一轮fix-audit-residual补上的验证">这一轮（<code>fix-audit-residual</code>）补上的验证</a></h3>
+<ul>
+<li><strong>安全与审批</strong>：<code>-p --yes</code> 真跑、审计日志 0600 + 脱敏、MCP HTTP 6 条安全检查、Runtime 审批通道——全部真实进程实测。</li>
+<li><strong>进程</strong>：背景任务进程组停止后实测 group empty；bash 超时 2s 实测 2.06s 返回（此前孙进程持管道会拖到 12s）。</li>
+<li><strong>REPL</strong>：48 列窄终端保留模式名、<code>/sk&lt;Tab&gt;</code> 补全、<code>@image:</code> 占位符、<code>/clear</code> 重绘、<code>/config</code> 摘要、<code>/skill</code> 未知报错、<code>/effort off</code> 可见。</li>
+<li><strong>平台</strong>：MCP 三次调用同一 pid 且状态累计、缺参数本地拒发、<code>mcp list</code> 展示 disabled 与损坏配置报错、<code>cron</code> disabled 与单行输出、端口占用可读提示、<code>web_search</code> 失败带原因。</li>
+</ul>
+<h3 id="仍然没测的下一轮优先"><a class="toclink" href="#仍然没测的下一轮优先">仍然没测的（下一轮优先）</a></h3>
+<ol>
+<li><strong>⬜ 17 项</strong>里最该补的是 <code>/model</code> 选择器、<code>/task</code> 子代理、<code>/snapshot</code>+<code>/restore</code>、<code>/fork</code>、<code>/mcp</code>、<code>/memory</code>、<code>/index</code>+<code>/search</code>、<code>/hitl</code>、<code>/save</code>。</li>
+<li><strong>🟡 45 项</strong>里优先补真实运行：<code>/team</code>（REPL 内）、<code>/workflow</code>、<code>/expert</code>、插件、自定义命令、hooks、<code>@image:</code>、PDF。</li>
+<li><strong>🟠 9 项</strong>需要补断言：<code>doctor</code>、<code>--version</code>、<code>/context</code>、<code>/tools</code>、<code>/policy</code>、<code>/usage</code>、空 prompt Ctrl+C、Ctrl+D、bracketed paste。</li>
+</ol>
+<hr>
+<h2 id="附怎么复现这张表"><a class="toclink" href="#附怎么复现这张表">附：怎么复现这张表</a></h2>
+<pre><code class="language-bash"># 机器验证：全量
+uv run python -m pytest
+
+# 机器验证：单个表面
+uv run python -m pytest tests/test_repl.py tests/test_render.py
+
+# 真实运行：单次模式（需要已配置 API key）
+uv run nexuscli -p &quot;列出 tests 目录下两个测试文件名&quot; --json
+
+# 真实运行：交互模式（需要真终端，不能用管道）
+uv run nexuscli
+</code></pre>
+<p>真实运行没有脚本化入口是刻意的：pty 驱动只能验证渲染与按键，验证不了"这个错误提示读起来是否讲得通"。那一层只能人看。</p><div class="pager"><a href="spec-skill.html" class="prev"><span class="dir">← 上一篇</span><span class="name">📐 Spec 任务包工作流（spec 技能详解）</span></a><a href="../tutorial.html" class="next"><span class="dir">最后一篇 →</span><span class="name">🚀 运行教程</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/testing-matrix.md" target="_blank" rel="noopener">docs/testing-matrix.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer><script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        var light = document.documentElement.getAttribute("data-theme") === "light";
+        link.href = light ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try {
+        new MutationObserver(apply).observe(
+          document.documentElement,
+          { attributes: true, attributeFilter: ["data-theme"] }
+        );
+      } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

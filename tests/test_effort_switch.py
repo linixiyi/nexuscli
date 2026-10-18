@@ -215,3 +215,25 @@ def test_effort_command_stays_quiet_when_the_field_reaches_the_wire(tmp_path: Pa
     assert "set to high" in out
     assert "Not sent:" not in out
     assert _payload(client)["reasoning_effort"] == "high"
+
+
+def test_off_shows_in_the_status_bar_but_unset_stays_silent(tmp_path: Path) -> None:
+    # "I turned it off" and "never touched it" put the same (empty) field on
+    # the wire, but the status bar should confirm the command the user typed.
+    from nexuscli.entrypoints.repl import _effort_label
+
+    config = _test_config(tmp_path)
+    console = _console()
+    client = _client("openai-compatible")
+    agent = SimpleNamespace(llm_client=client)
+
+    assert _effort_label(agent) == ""
+
+    _run_slash("/effort off", console, tmp_path, config, agent)
+    assert _effort_label(agent) == ":off"
+
+    _run_slash("/effort high", console, tmp_path, config, agent)
+    assert _effort_label(agent) == ":high"
+
+    _run_slash("/effort off", console, tmp_path, config, agent)
+    assert _effort_label(agent) == ":off"

@@ -76,7 +76,7 @@
 uv run nexuscli cron next          # 每行：id  YYYY-MM-DD HH:MM（本地时间）；解析失败的任务标 [warn] 不中断整表
 uv run nexuscli cron run &lt;id&gt;      # 原样打印该任务的 prompt 后退出——不执行任何东西
 </code></pre>
-<p><code>cron run</code> 的行为：任务不存在或已 <code>enabled: false</code> 时报错退出码 1；否则把 prompt 原样输出到 stdout。这是刻意的离线设计：执行交给外部调度器串联。</p>
+<p><code>cron run</code> 的行为：任务不存在或已 <code>enabled: false</code> 时报错退出码 1；否则把 prompt 输出到 stdout。<strong>输出是单行的</strong>——prompt 内部的换行会被折叠成空格，因为多行输出在 <code>$(...)</code> 里会被 shell 拆成多个参数，<code>nexuscli -p "$(...)"</code> 就会失败。这是刻意的离线设计：执行交给外部调度器串联。</p>
 <h2 id="外部调度器触发模式"><a class="toclink" href="#外部调度器触发模式">外部调度器触发模式</a></h2>
 <p>让系统 cron / Windows 任务计划程序在计划时刻运行：</p>
 <pre><code class="language-bash"># bash / Git Bash 示例：把打印出的 prompt 喂给单次执行

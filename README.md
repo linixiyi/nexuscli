@@ -11,7 +11,7 @@
 
 [架构总览](#-架构总览) · [文档站点](https://linixiyi.github.io/nexuscli/) · [运行教程](TUTORIAL.md) · [快速开始](#-快速开始)
 
-> 🖥️ **文档站点**：[linixiyi.github.io/nexuscli](https://linixiyi.github.io/nexuscli/) —— 带导航与侧边目录的文档中心，收录本仓库全部 12 篇深度文档与运行教程；还有[交互式架构图](https://linixiyi.github.io/nexuscli/architecture.html)（节点搜索、路径追踪、深浅色主题）。站点页面由 `docs/*.md` 与 `TUTORIAL.md` 经 `site/build.py` 构建生成，内容与源文件同步。
+> 🖥️ **文档站点**：[linixiyi.github.io/nexuscli](https://linixiyi.github.io/nexuscli/) —— 带导航与侧边目录的文档中心，收录本仓库全部 13 篇深度文档与运行教程；还有[交互式架构图](https://linixiyi.github.io/nexuscli/architecture.html)（节点搜索、路径追踪、深浅色主题）。站点页面由 `docs/*.md` 与 `TUTORIAL.md` 经 `site/build.py` 构建生成，内容与源文件同步。
 
 ---
 
@@ -94,7 +94,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 ### 记忆与持久化
 
 - 静态项目记忆 + SQLite 动态长期记忆：元数据、去重、TTL、容量治理和相关性召回
-- Agent run 前后自动创建快照，支持恢复现场
+- 快照与恢复现场（`/snapshot` / `/restore` 始终可用；每回合自动快照由 `features.auto_snapshot` 控制，默认关闭）
 - REPL 会话自动持久化为 JSONL 转录，支持 `sessions` 列表、`-c` / `--resume` 跨进程恢复，以及 `/resume` 在会话内切换历史
 - 跨会话历史搜索：`/history <query> [--all]` 在会话转录正文里做大小写不敏感关键词检索（每会话一条命中、按更新时间倒序），可直接 `/resume <id>` 跳回
 - 会话用量随转录持久化：每个完成的普通回合把一条 `type: usage` 记录写进会话 JSONL，`/resume` / `-c` / `--resume` 会把它累计为历史基线，恢复后 usage 继续计数而不是从零开始（`/usage` 与单次 `--json` 均给出「历史累计 + 当前进程」双口径）
@@ -548,12 +548,16 @@ NexusCLI 支持在 prompt 里引用图片：
 
 ## 📸 快照
 
-每次 Agent run 都会尽力创建项目快照：
+快照是**按需**的：`features.auto_snapshot` 默认关闭，因为每回合两次全量复制在工作区大时能吃掉十几秒。打开后每次 Agent run 会尽力创建：
 
 - `pre-turn`
 - `post-turn`
 
-快照保存在 `~/.nexuscli/snapshots/`，不会写入项目 `.git`。
+```json
+{ "features": { "auto_snapshot": true } }
+```
+
+快照保存在 `~/.nexuscli/snapshots/`，不会写入项目 `.git`。无论开关如何，手动的 `/snapshot` 与 `/restore` 始终可用。
 
 REPL 中可以使用：
 

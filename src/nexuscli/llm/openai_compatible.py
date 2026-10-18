@@ -205,6 +205,9 @@ class OpenAICompatibleClient:
     # never sent. Applied only for whitelisted providers — see
     # _REASONING_EFFORT_PROVIDERS below.
     reasoning_effort: str | None = None
+    # True when the user explicitly chose "off", so the status bar can tell a
+    # decision from a default. Wire behaviour is identical (no field either way).
+    reasoning_effort_explicit_off: bool = False
 
     @property
     def model_name(self) -> str:

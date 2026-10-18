@@ -18,7 +18,7 @@ NexusCLI 是运行在终端里的 AI Agent CLI：ReAct / Plan / Multi-Agent 三�
 
 ## Positioning
 
-单仓库、Python 实现的完整 agent CLI（非空壳 demo）：核心路径有测试覆盖（72 个 `tests/test_*.py` / 705 个测试函数，CI 在 Linux 3.11+3.12 与 Windows 3.12 跑 ruff + pytest），功能面（skills/MCP/cron/workflow/SDK/Runtime API）显著大于同类 minimal agent。
+单仓库、Python 实现的完整 agent CLI（非空壳 demo）：核心路径有测试覆盖（82 个 `tests/test_*.py` / 951 个测试函数，CI 在 Linux 3.11+3.12 与 Windows 3.12 跑 ruff + pytest），功能面（skills/MCP/cron/workflow/SDK/Runtime API）显著大于同类 minimal agent。
 
 ## Operating Context
 

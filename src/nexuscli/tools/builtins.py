@@ -13,6 +13,7 @@ from nexuscli.snapshot import SnapshotService
 from nexuscli.tools import file_ops as fops
 from nexuscli.tools.background import DEFAULT_TAIL_BYTES, background_registry
 from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
+from nexuscli.tools.commands import communicate_or_kill_group, process_group_spawn_kwargs
 from nexuscli.tools.file_ops import FileOpResult
 from nexuscli.tools.todo_store import TodoStore, format_todos
 from nexuscli.web import fetch_url, search_web
@@ -699,12 +700,10 @@ async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=child_env,
+        **process_group_spawn_kwargs(),
     )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
+    stdout, stderr, timed_out = await communicate_or_kill_group(proc, timeout)
+    if timed_out:
         return ToolResult(f"Command timed out after {timeout:.0f}s", is_error=True)
     output = (stdout + stderr).decode("utf-8", errors="replace")
     if len(output) > 20_000:
@@ -768,6 +767,15 @@ async def _task_stop(payload: dict[str, Any], _context: ToolContext) -> ToolResu
             display_summary=f"Stopped subagent task {task_id}",
         )
     status = await background_registry.stop(task_id)
+    if status == "stopping":
+        # Members survived SIGKILL: the log can still grow, so the message
+        # must not read as a finished stop.
+        return ToolResult(
+            f"Background task {task_id} is still stopping (status: {status}): "
+            "processes in its group survived SIGKILL. Its output may still grow; "
+            "poll task_output before assuming it is gone.",
+            display_summary=f"Stopping task {task_id}",
+        )
     return ToolResult(
         f"Background task {task_id} stopped (status: {status}).",
         display_summary=f"Stopped task {task_id}",
