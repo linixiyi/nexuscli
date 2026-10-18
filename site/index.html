@@ -40,7 +40,7 @@
   <header class="hero">
     <div class="hero-grid">
       <div>
-        <div class="hero-badge"><span class="dot"></span>v1.x · Python 3.11+ · MIT License</div>
+        <div class="hero-badge"><span class="dot"></span>v0.1.0 · Python 3.11+ · MIT License</div>
         <h1>把一个<span class="grad">真正的 AI Agent</span>装进你的终端</h1>
         <p class="hero-sub">NexusCLI 是一个面向真实项目开发场景的终端 Agent CLI：读写文件、执行命令、联网检索、MCP 工具、记忆与快照，按 Claude Code 的工作方式设计，以 Python 实现。</p>
         <div class="hero-tags">
@@ -57,17 +57,13 @@
         <div class="term-bar"><i></i><i></i><i></i><em>nexuscli — 交互 REPL</em></div>
         <div class="term-body"><span class="t-dim">$</span> <span class="t-a">uv run nexuscli</span>
 
-<span class="t-dim">╭─</span> <span class="t-p">NexusCLI</span> <span class="t-dim">──────────────────────────╮</span>
-<span class="t-dim">│</span> 终端里的 AI Agent，已就绪。           <span class="t-dim">│</span>
-<span class="t-dim">╰──────────────────────────────────────╯</span>
+<span class="t-p">NexusCLI</span>  <span class="t-dim">v0.1.0</span>   <span class="t-ok">⏺</span> <span class="t-dim">api key ok</span>
+<span class="t-dim">/help commands · Shift+Tab permission mode</span>
 
-<span class="t-p">›</span> /mode plan 先梳理这个仓库再修 lint 告警
-
-<span class="t-c">plan:</span> 已生成 4 项任务（2 批并行）
-  <span class="t-w">◆</span> 扫描 src/ 的 lint 告警      <span class="t-dim">→ done</span>
-  <span class="t-w">◆</span> 归纳重复模式                <span class="t-dim">→ done</span>
-  <span class="t-w">◇</span> 修复 ruff 告警              <span class="t-dim">→ running</span>
-  <span class="t-w">◇</span> 重跑 CI 校验                <span class="t-dim">→ pending</span>
+<span class="t-ok">⏺</span> 先梳理 src/ 的 ruff 告警再动手修。
+<span class="t-tool">⏺</span> <b>grep</b><span class="t-dim">(pattern=E501, path=src/)</span>
+  <span class="t-dim">⎿ grep: src/a.py:12: long line  (2 lines)</span>
+<span class="t-ok">⏺</span> 共 2 处行宽超限，都在 <span class="t-code">src/</span> 下的长函数签名里。
 
 <span class="t-dim">›</span> <span class="term-cursor"></span></div>
       </div>
@@ -75,9 +71,9 @@
   </header>
 
   <div class="stats rv">
-    <div class="stat"><b class="accent">665</b><span>自动化测试（pytest）</span></div>
-    <div class="stat"><b>21,400+</b><span>核心源码行数（Python）</span></div>
-    <div class="stat"><b>20+</b><span>内置 Agent 工具</span></div>
+    <div class="stat"><b class="accent">826</b><span>自动化测试（pytest）</span></div>
+    <div class="stat"><b>22,200+</b><span>核心源码行数（Python）</span></div>
+    <div class="stat"><b>27</b><span>内置 Agent 工具</span></div>
     <div class="stat"><b>12</b><span>篇深度文档（本站）</span></div>
   </div>
 
@@ -162,7 +158,7 @@
     <div class="section-head rv">
       <div class="kicker">Documentation</div>
       <h2>文档中心</h2>
-      <p>以下 12 篇文档由仓库 <code>docs/*.md</code> 构建生成，内容与源文件同步；每页带侧边目录与滚动高亮。</p>
+      <p>以下 12 篇文档与运行教程由仓库 <code>docs/*.md</code> 和 <code>TUTORIAL.md</code> 构建生成，内容与源文件同步；每页带侧边目录与滚动高亮。</p>
     </div>
     <div class="docs-grid">
       <a class="doc-card rv" href="tutorial.html"><div class="ico">🚀</div><div><h3>运行教程</h3><p>从安装依赖、配置模型 API 到第一次跑通 Agent 任务。</p></div></a>

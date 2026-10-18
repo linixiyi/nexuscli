@@ -26,8 +26,12 @@
   }
 
   // ----- Scroll reveal -----
+  // The hidden state lives behind .js-reveal on <html>, applied only when we
+  // know the observer will run. If this file never executes, the CSS leaves
+  // every section visible instead of blanking the page.
   var reveals = document.querySelectorAll(".rv");
   if ("IntersectionObserver" in window && reveals.length) {
+    document.documentElement.classList.add("js-reveal");
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (en) {
         if (en.isIntersecting) {

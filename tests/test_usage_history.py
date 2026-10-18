@@ -174,8 +174,11 @@ def test_usage_slash_keeps_turn_display_and_adds_stats(tmp_path, monkeypatch):
     turn_console = _console()
     _run_slash("/usage", turn_console, tmp_path, config, agent)
     turn_text = _console_text(turn_console)
-    assert "usage" in turn_text
-    assert "pricing_note" in turn_text
+    # Compact status lines replaced the JSON dump; the content contract holds.
+    assert "turn" in turn_text
+    assert "session" in turn_text
+    assert "1 in / 2 out" in turn_text
+    assert "built-in prices" in turn_text
 
     stats_console = _console()
     _run_slash("/usage stats 7", stats_console, tmp_path, config, agent)

@@ -334,17 +334,22 @@ async def run_model_selector(state: ModelSelectorState) -> ModelSelectorAction |
         key_bindings=bindings,
         style=Style.from_dict(
             {
-                "command": "#c084fc",
-                "title": "bold #ffffff",
-                "heading": "bold #ffffff",
-                "line": "#555555",
-                "tab": "#9a9a9a",
-                "tab.active": "bold #22c55e bg:#12351f",
-                "model": "#f3f4f6",
-                "selected": "bold #22c55e",
-                "muted": "#9a9a9a",
-                "footer": "italic #9a9a9a",
-                "error": "bold #ef4444",
+                # Foreground-only palette drawn from the terminal's own ANSI
+                # slots, so contrast is guaranteed on light and dark themes.
+                # Literal greys measured 3.9–4.4:1 against a light terminal
+                # and would vanish; ansibrightblack is the theme's own muted
+                # tone and the terminal keeps it legible either way.
+                "command": "ansimagenta",
+                "title": "bold",
+                "heading": "bold",
+                "line": "ansibrightblack",
+                "tab": "ansibrightblack",
+                "tab.active": "bold ansigreen",
+                "model": "",
+                "selected": "bold ansigreen",
+                "muted": "ansibrightblack",
+                "footer": "italic ansibrightblack",
+                "error": "bold ansired",
             }
         ),
         full_screen=False,

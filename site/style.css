@@ -289,6 +289,12 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .term-body .t-a { color: var(--accent-2); }
 .term-body .t-w { color: #f5c26b; }
 .term-body .t-dim { color: var(--faint); }
+/* Mirrors the real renderer: green speech marker, yellow tool marker, cyan
+   inline code. Keep these in step with rich_renderer's role colours. */
+.term-body .t-ok { color: var(--green); }
+.term-body .t-tool { color: #f5c26b; }
+.term-body .t-code { color: var(--accent-2); }
+.term-body b { font-weight: 700; color: var(--text); }
 .term-cursor {
   display: inline-block;
   width: 8px;
@@ -646,10 +652,15 @@ footer a { color: var(--muted); }
 .edit-link { text-align: center; margin-top: 26px; font-size: 13.5px; color: var(--faint); }
 
 /* ---------- Reveal animation ---------- */
-.rv { opacity: 0; transform: translateY(16px); transition: opacity 0.55s ease, transform 0.55s ease; }
+/* Progressive enhancement: content is visible by default and only hidden
+   once JS proves it is running (site.js adds .js-reveal to <html>). Before,
+   .rv carried opacity:0 unconditionally, so a failed or blocked script left
+   every section below the hero permanently blank. */
 .rv.in { opacity: 1; transform: none; }
+.js-reveal .rv { opacity: 0; transform: translateY(16px); transition: opacity 0.55s ease, transform 0.55s ease; }
+.js-reveal .rv.in { opacity: 1; transform: none; }
 @media (prefers-reduced-motion: reduce) {
-  .rv { opacity: 1; transform: none; transition: none; }
+  .rv, .js-reveal .rv { opacity: 1; transform: none; transition: none; }
   html { scroll-behavior: auto; }
 }
 

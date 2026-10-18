@@ -262,6 +262,7 @@ async def start_repl(
             skills=skill_count,
             stats=renderer.toolbar_status(),
             permission_mode=permission_mode.mode,
+            agent=agent,
         ),
         history=FileHistory(str(history_path)),
         completer=WordCompleter(
@@ -269,23 +270,30 @@ async def start_repl(
             ignore_case=True,
         ),
         placeholder=[("class:placeholder", "Type your message or @path/to/file")],
+        # Foreground-only palette drawn from the terminal's own ANSI slots.
+        # No backgrounds, so the prompt rides the user's theme instead of
+        # painting black strips over it. Named ANSI colours (never literals
+        # like #c084fc or #d7ba7d) because the terminal guarantees those are
+        # legible against its own background: the literal palette measured
+        # 1.9–2.6:1 on a white terminal, far under the 4.5:1 floor.
         style=Style.from_dict(
             {
-                "prompt": "bold #ffffff bg:#262626",
-                "placeholder": "#9a9a9a bg:#262626",
-                "prompt.dim": "#a3a3a3 bg:#000000",
-                "prompt.count.agents": "bold #22d3ee bg:#000000",
-                "prompt.count.mcp": "bold #c084fc bg:#000000",
-                "prompt.count.skills": "bold #facc15 bg:#000000",
-                "prompt.tools": "bold #22d3ee bg:#000000",
-                "toolbar.model": "noreverse bold #ffffff bg:#000000",
-                "toolbar.ctx.bar": "noreverse #22c55e bg:#000000",
-                "toolbar.ctx.value": "noreverse #ffffff bg:#000000",
-                "toolbar.cwd.value": "noreverse #c084fc bg:#000000",
-                "toolbar.mode.default": "noreverse bold #22c55e bg:#000000",
-                "toolbar.mode.auto": "noreverse bold #f59e0b bg:#000000",
-                "toolbar.mode.plan": "noreverse bold #38bdf8 bg:#000000",
-                "toolbar.gap": "noreverse #ffffff bg:#000000",
+                "prompt": "bold ansicyan",
+                "placeholder": "ansibrightblack",
+                "prompt.dim": "ansibrightblack",
+                "prompt.count.agents": "bold ansicyan",
+                "prompt.count.mcp": "bold ansimagenta",
+                "prompt.count.skills": "bold ansiyellow",
+                "prompt.tools": "bold ansicyan",
+                "toolbar.model": "bold",
+                "toolbar.effort": "ansimagenta",
+                "toolbar.ctx.bar": "ansigreen",
+                "toolbar.ctx.value": "",
+                "toolbar.cwd.value": "ansimagenta",
+                "toolbar.mode.default": "bold ansigreen",
+                "toolbar.mode.auto": "bold ansiyellow",
+                "toolbar.mode.plan": "bold ansicyan",
+                "toolbar.gap": "",
             }
         ),
         key_bindings=_permission_key_bindings(permission_mode),
@@ -547,7 +555,26 @@ async def _handle_slash(
                 "session_usage": _session_usage_payload(session_state),
                 "pricing_note": "Built-in provider prices are dated defaults and may change.",
             }
-            console.print_json(json.dumps(payload, ensure_ascii=False))
+            usage = agent.last_usage.to_dict()
+            session = payload["session_usage"]
+            line = Table.grid(padding=(0, 2))
+            line.add_column(style="dim", no_wrap=True)
+            line.add_column()
+            line.add_row(
+                "turn",
+                f"{usage.get('input_tokens', 0)} in / {usage.get('output_tokens', 0)} out",
+            )
+            hist = session.get("historical_total", {})
+            line.add_row(
+                "session",
+                f"{hist.get('turns', 0)} turns · {hist.get('total_tokens', 0)} tokens",
+            )
+            cost = agent.last_cost or {}
+            if cost:
+                parts = [f"{cur.upper()} {value:.6f}" for cur, value in sorted(cost.items())]
+                line.add_row("cost", ", ".join(parts))
+            line.add_row("note", "[dim]built-in prices are dated defaults and may change[/dim]")
+            console.print(line)
     elif command == "/skill":
         _skill_command(arg, console, cwd, agent)
     elif command == "/mcp":
@@ -676,6 +703,7 @@ def _prompt_message(
     skills: int,
     stats: dict[str, Any] | None = None,
     permission_mode: PermissionMode = "default",
+    agent: Any | None = None,
 ) -> list[tuple[str, str]]:
     return [
         ("class:prompt.count.agents", str(agents_files)),
@@ -686,9 +714,9 @@ def _prompt_message(
         ("class:prompt.dim", f" {_plural_label(skills, 'skill')} · Tools "),
         ("class:prompt.tools", str(tools)),
         ("class:prompt.dim", "\n"),
-        *_bottom_toolbar(cwd, model, stats, permission_mode=permission_mode),
+        *_bottom_toolbar(cwd, model, stats, permission_mode=permission_mode, agent=agent),
         ("class:prompt.dim", "\n\n"),
-        ("class:prompt", "* "),
+        ("class:prompt", "❯ "),
     ]
 
 
@@ -698,6 +726,7 @@ def _bottom_toolbar(
     stats: dict[str, Any] | None = None,
     *,
     permission_mode: PermissionMode = "default",
+    agent: Any | None = None,
 ) -> list[tuple[str, str]]:
     stats = stats or {}
     has_usage = bool(stats.get("has_usage"))
@@ -705,19 +734,33 @@ def _bottom_toolbar(
     context_text = _format_toolbar_percent(context_ratio) if has_usage else "0%"
     return [
         ("class:toolbar.model", model),
-        ("class:toolbar.gap", "    "),
+        ("class:toolbar.effort", _effort_label(agent)),
+        ("class:toolbar.gap", "  "),
         ("class:toolbar.ctx.bar", _format_toolbar_bar(context_ratio if has_usage else 0)),
         ("class:toolbar.gap", " "),
         ("class:toolbar.ctx.value", context_text),
         ("class:toolbar.gap", "  "),
         ("class:toolbar.cwd.value", _shorten_home(cwd)),
         ("class:toolbar.gap", "  "),
-        (
-            f"class:toolbar.mode.{permission_mode}",
-            _permission_mode_label(permission_mode),
-        ),
-        ("class:toolbar.gap", "  Shift+Tab"),
+        (f"class:toolbar.mode.{permission_mode}", _permission_mode_label(permission_mode)),
+        ("class:toolbar.gap", "  ⇧Tab"),
     ]
+
+
+def _effort_label(agent: Any) -> str:
+    """Status-bar thinking level, pi-style: a suffix on the model name.
+
+    Only a concrete level renders. ``off`` is stored as ``None`` (the field
+    is simply never sent), so it is indistinguishable from an unset level
+    here — the status bar shows neither. That is accurate rather than lossy:
+    both states put no ``reasoning_effort`` on the wire, and ``/effort``
+    confirms the change in its own output.
+    """
+    client = getattr(agent, "llm_client", None)
+    level = getattr(client, "reasoning_effort", None)
+    if level:
+        return f":{level}"
+    return ""
 
 
 def _plural_label(count: int, singular: str) -> str:

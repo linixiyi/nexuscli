@@ -64,7 +64,7 @@ NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做：核心路�
 
 ### Agent 运行模式
 
-- 交互式终端 Agent，基于 Rich 和 prompt-toolkit 渲染；也支持单次 prompt 模式，适合脚本、管道和自动化调用
+- 交互式终端 Agent，基于 Rich 和 prompt-toolkit 渲染；界面只用前景色、不写死背景，复用你自己的终端主题（浅色/深色都可读）；也支持单次 prompt 模式，适合脚本、管道和自动化调用
 - ReAct 工具调用循环，支持 thinking、tool call、tool result、final output 和 usage 事件
 - 工具循环调用检测：同一工具以完全相同的参数连续重复达到阈值（`agent.loop_detection_threshold`，默认 3，0 关闭）时拦截该次调用并注入换策略提示；提示后仍重复则终止该回合并输出 warning
 - Plan-and-Execute 模式：独立 Planner 生成 DAG，按依赖批次并行执行任务；图级 checkpoint 默认开启，支持跨进程续跑（`/plan --resume`）与协作式中断（详见 [Plan-and-Execute 检查点与续跑](#-plan-and-execute-检查点与续跑)）
@@ -317,7 +317,7 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 /goal set <text>
 /goal show
 /goal clear
-/effort minimal|low|medium|high
+/effort off|minimal|low|medium|high|xhigh|max
 /skill
 /skill list
 /skill show <name>
@@ -345,7 +345,7 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 
 `/usage stats [N天]` 汇总本地 SQLite 用量库 `~/.nexuscli/usage.db`：近 N 天（缺省 7 天）的回合数、总 Token、总成本（USD/CNY）、按模型分布与按来源分布（By source）。落库为 best-effort：普通 REPL 回合（含自定义命令回合）记为 `source=repl`，值为该回合主代理自身的用量；`task` 工具委派的子代理与 `/workflow`、`/expert` 派发的工作流步骤，只要真实产出了 token，也各自落一行 `source=subagent`（记录器在 `run_subagent` 的 done 事件处，零 token 的空跑不落行），所以统计值覆盖 REPL 直连对话与委派回合两类；team/plan-and-execute 模式的 worker 回合与单次 `-p` 模式不落库。
 
-不带参数的 `/usage` 输出 JSON，除最近一回合的 usage/cost 外还带 `session_usage` 双口径：`historical_total`（恢复基线 + 本进程累计，两者之和等于当前转录的 usage 台账）与 `current_process`（仅本进程记录的回合），并附 `sources` 标注来源。`/clear`、`/resume`、`/fork` 都会同步重置基线与本进程累计，保证双口径始终对应当前转录。
+不带参数的 `/usage` 打印一张四行状态表而不是 JSON dump：`turn`（本回合 input/output）、`session`（历史累计回合数与总 Token）、`cost`（有成本数据时按币种列出）与 `note`（内置价格表为带日期的默认值）。底层仍是 `session_usage` 双口径：`historical_total`（恢复基线 + 本进程累计，两者之和等于当前转录的 usage 台账）与 `current_process`（仅本进程记录的回合），并附 `sources` 标注来源，供 SDK 与单次 `--json` 消费。`/clear`、`/resume`、`/fork` 都会同步重置基线与本进程累计，保证双口径始终对应当前转录。
 
 `/history <query> [--all]` 在会话转录正文里做大小写不敏感的关键词检索，按更新时间倒序、每会话最多一条命中（取最早命中的消息片段），缺省只搜当前项目，`--all` 搜全部项目；结果表附会话 id 与片段，可 `/resume <id>` 直接跳回。检索基于转录内的消息正文，usage 记录行与损坏行会被跳过；空参数只打印用法提示。
 
@@ -353,7 +353,7 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 
 `/goal set <text>` 给当前会话设置一句长程目标，之后每个回合开始前都会把 `[session goal] <目标>` 注入用户消息，直到 `/goal clear`；`/goal show` 查看。目标按会话存储在 `~/.nexuscli/goals/<session_id>.json`，只存文本。
 
-`/effort minimal|low|medium|high` 在会话内即时切换推理力度，无参数显示当前值。该字段只对白名单内的 chat-completions provider（`openai`、`openai-compatible`、`compatible`）随请求发送 `reasoning_effort`；deepseek / glm / kimi 等其他 provider 不支持、不会发送该字段，anthropic provider 会提示不支持。切换模型（`/model`）会创建新客户端并重置 effort。
+`/effort off|minimal|low|medium|high|xhigh|max` 在会话内即时切换推理力度：带参数直接设定，无参数循环切到下一档（未设置时从 `low` 起步），当前档位以 `模型名:档位` 的形式显示在状态栏。`off` 表示完全不带 `reasoning_effort` 字段发送。该字段只对白名单内的 chat-completions provider（`openai`、`openai-compatible`、`compatible`）随请求发送 `reasoning_effort`；deepseek / glm / kimi 等其他 provider 不支持、不会发送该字段，anthropic provider 会提示不支持。切换模型（`/model`）会创建新客户端并重置 effort。
 
 `/workflow run <file>.json` 加载 JSON 步骤图并按依赖批次并行派发子代理执行（上界 `workflow.max_parallel_steps`，默认 3）；`/expert <topic>` 是同一引擎的内置三步专家流程（调研 → 实施 → 复核）。JSON schema、校验规则与执行边界见 [docs/workflows.md](docs/workflows.md)。
 
@@ -363,7 +363,7 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具：
 
 | 类别 | 工具 |
 |---|---|
-| 文件 | `read_file`（支持 `.pdf`）· `write_file` · `list_dir` |
+| 文件 | `read_file`（支持 `.pdf`）· `write_file` · `edit_file` · `list_dir` · `directory_tree` · `get_file_info` |
 | 检索 | `glob` / `glob_files` · `grep` / `grep_code` · `search_code` |
 | 执行 | `bash` / `execute_command` · `task_output` · `task_stop` |
 | 网络 | `web_search` · `web_fetch` |

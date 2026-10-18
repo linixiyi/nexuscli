@@ -1,12 +1,16 @@
-"""Tests for `/effort minimal|low|medium|high`: session-level reasoning effort.
+"""Tests for pi-style `/effort`: seven thinking levels, cycle on empty arg.
 
 The REPL command sets ``reasoning_effort`` live on the current client instance
 (no /model re-creation involved). ``OpenAICompatibleClient._build_payload``
 attaches the OpenAI-style ``reasoning_effort`` field only for whitelisted
 providers ({openai, openai-compatible, compatible}); anything else — and an
-unset effort — never sees the field (absent, not blank). A client without the
-attribute (AnthropicClient is a slots dataclass) gets a polite refusal from
-the command via the hasattr capability probe.
+unset or ``off`` effort — never sees the field (absent, not blank). A client
+without the attribute (AnthropicClient is a slots dataclass) gets a polite
+refusal from the command via the hasattr capability probe.
+
+Levels follow pi: ``off minimal low medium high xhigh max``. ``off`` maps to
+``None`` (no field on the wire); empty arg cycles one step forward from the
+current level, and an unset level starts the cycle at ``low``.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import pytest
 from rich.console import Console
 
 from nexuscli.config import NexusCliConfig
+from nexuscli.entrypoints.commands.effort import EFFORT_LEVELS, next_effort_level
 from nexuscli.entrypoints.repl import PermissionModeController, _handle_slash
 from nexuscli.llm.openai_compatible import OpenAICompatibleClient
 
@@ -67,6 +72,24 @@ def _run_slash(raw: str, console: Console, tmp_path: Path, config, agent) -> boo
     )
 
 
+def test_effort_levels_cover_pi_seven():
+    assert EFFORT_LEVELS == ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def test_cycle_from_unset_starts_at_low():
+    assert next_effort_level(None) == "low"
+    assert next_effort_level("") == "low"
+
+
+def test_cycle_advances_through_all_levels_and_wraps():
+    order = []
+    level = "off"
+    for _ in range(len(EFFORT_LEVELS) + 1):
+        level = next_effort_level(level)
+        order.append(level)
+    assert order == ["minimal", "low", "medium", "high", "xhigh", "max", "off", "minimal"]
+
+
 @pytest.mark.parametrize("provider_name", ["openai", "openai-compatible", "compatible"])
 def test_build_payload_attaches_effort_for_whitelisted_providers(provider_name: str) -> None:
     client = _client(provider_name, effort="high")
@@ -76,8 +99,8 @@ def test_build_payload_attaches_effort_for_whitelisted_providers(provider_name: 
     assert payload["reasoning_effort"] == "high"
 
 
-@pytest.mark.parametrize("level", ["minimal", "low", "medium", "high"])
-def test_build_payload_attaches_all_four_levels(level: str) -> None:
+@pytest.mark.parametrize("level", ["minimal", "low", "medium", "high", "xhigh", "max"])
+def test_build_payload_attaches_all_six_on_levels(level: str) -> None:
     client = _client("openai-compatible", effort=level)
 
     payload = _payload(client)
@@ -85,14 +108,14 @@ def test_build_payload_attaches_all_four_levels(level: str) -> None:
     assert payload["reasoning_effort"] == level
 
 
-def test_build_payload_omits_effort_when_unset() -> None:
+def test_build_payload_omits_effort_when_unset_or_off() -> None:
     client = _client("openai-compatible")
 
     assert client.reasoning_effort is None
+    assert "reasoning_effort" not in _payload(client)
 
-    payload = _payload(client)
-
-    assert "reasoning_effort" not in payload
+    client.reasoning_effort = None  # /effort off lands here
+    assert "reasoning_effort" not in _payload(client)
 
 
 @pytest.mark.parametrize("provider_name", ["deepseek", "glm", "kimi", "anthropic"])
@@ -104,43 +127,57 @@ def test_build_payload_omits_effort_for_unsupported_providers(provider_name: str
     assert "reasoning_effort" not in payload
 
 
-def test_effort_command_set_show_invalid_and_unsupported(tmp_path: Path) -> None:
+def test_effort_command_set_all_levels_cycle_off_and_invalid(tmp_path: Path) -> None:
     config = _test_config(tmp_path)
     console = _console()
     client = _client("openai-compatible")
     agent = SimpleNamespace(llm_client=client)
 
-    _run_slash("/effort high", console, tmp_path, config, agent)
+    for level in ("minimal", "low", "medium", "high", "xhigh", "max"):
+        marker = len(console.file.getvalue())
+        _run_slash(f"/effort {level}", console, tmp_path, config, agent)
+        assert client.reasoning_effort == level
+        assert f"set to {level}" in console.file.getvalue()[marker:]
 
-    assert client.reasoning_effort == "high"
-    assert "Reasoning effort set" in console.file.getvalue()
+    # /effort off sends no field at all.
+    _run_slash("/effort off", console, tmp_path, config, agent)
+    assert client.reasoning_effort is None
+    assert "set to off" in console.file.getvalue()
+
+    # Empty arg cycles: unset -> low -> medium.
+    client.reasoning_effort = None
+    _run_slash("/effort", console, tmp_path, config, agent)
+    assert client.reasoning_effort == "low"
+    assert "cycled to low" in console.file.getvalue()
+    _run_slash("/effort", console, tmp_path, config, agent)
+    assert client.reasoning_effort == "medium"
+    assert "cycled to medium" in console.file.getvalue()
+
+    # /effort with no arg also shows the level line.
+    marker = len(console.file.getvalue())
+    _run_slash("/effort high", console, tmp_path, config, agent)
+    marker = len(console.file.getvalue())
+    _run_slash("/effort clear", console, tmp_path, config, agent)
+    assert client.reasoning_effort is None
+
+    # Invalid level keeps the current one and prints usage.
+    _run_slash("/effort bogus", console, tmp_path, config, agent)
+    assert "Usage:" in console.file.getvalue()
+    assert client.reasoning_effort is None
+
+
+def test_effort_command_refuses_unsupported_client(tmp_path: Path) -> None:
+    config = _test_config(tmp_path)
+    console = _console()
+    unsupported = SimpleNamespace(model_name="m", provider_name="anthropic")
+    agent = SimpleNamespace(llm_client=unsupported)
+
+    _run_slash("/effort low", console, tmp_path, config, agent)
+
+    assert "does not support" in console.file.getvalue()
+    assert not hasattr(unsupported, "reasoning_effort")
 
     marker = len(console.file.getvalue())
     _run_slash("/effort", console, tmp_path, config, agent)
 
-    assert "Reasoning effort: high" in console.file.getvalue()[marker:]
-    assert "Usage: /effort minimal|low|medium|high" in console.file.getvalue()[marker:]
-
-    marker = len(console.file.getvalue())
-    _run_slash("/effort bogus", console, tmp_path, config, agent)
-
-    assert "Usage:" in console.file.getvalue()[marker:]
-    assert client.reasoning_effort == "high"
-
-    unsupported = SimpleNamespace(model_name="m", provider_name="anthropic")
-    agent2 = SimpleNamespace(llm_client=unsupported)
-    marker = len(console.file.getvalue())
-    _run_slash("/effort low", console, tmp_path, config, agent2)
-
     assert "does not support" in console.file.getvalue()[marker:]
-    assert not hasattr(unsupported, "reasoning_effort")
-
-    marker = len(console.file.getvalue())
-    _run_slash("/effort", console, tmp_path, config, agent2)
-
-    assert "does not support" in console.file.getvalue()[marker:]
-    assert "Usage:" not in console.file.getvalue()[marker:]
-
-    _run_slash("/effort MINIMAL", console, tmp_path, config, agent)
-
-    assert client.reasoning_effort == "minimal"
