@@ -14,3 +14,24 @@ _RENDER_ENV_VARS = ("CI", "GITHUB_ACTIONS", "FORCE_COLOR", "PY_COLORS")
 def _isolate_render_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in _RENDER_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_home(tmp_path_factory, monkeypatch: pytest.MonkeyPatch):
+    """Point every test's user home at a throwaway directory.
+
+    Anything the code resolves through `Path.home()` — the audit log, usage
+    DB, session transcripts, long-term memory, skill registry, background task
+    registry — used to land in the developer's real `~/.nexuscli` whenever a
+    test forgot to redirect it. That silently mixed test fixtures into real
+    user state: after one suite run the real audit log carried hundreds of
+    `pytest-of-*` entries, and `/audit` in a live REPL showed them.
+
+    Both HOME and USERPROFILE are set because win32 `Path.home()` prefers
+    USERPROFILE; a HOME-only redirect leaks there. Tests that redirect HOME
+    themselves still win: their patch lands after this fixture.
+    """
+    home = tmp_path_factory.mktemp("user-home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home

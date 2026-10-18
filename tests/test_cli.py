@@ -167,6 +167,26 @@ def test_resume_rejected_for_non_react_single_prompt_modes(tmp_path, monkeypatch
     assert captured["usage_baseline"] == SessionUsageTotals()
 
 
+def test_plan_mode_turns_on_the_read_only_gate(tmp_path, monkeypatch):
+    # '--mode plan' names the Plan-and-Execute agent, not the read-only gate,
+    # so it used to write files while README framed it as the inspect-first
+    # example. The gate must now follow the mode name.
+    _patch_config(monkeypatch, api_key=_placeholder_llm_key())
+    _isolate_home(monkeypatch, tmp_path)
+    seen = {}
+
+    async def fake_run_prompt(prompt, cwd, config_arg, **kwargs):
+        seen["plan_mode"] = config_arg.policy.plan_mode
+
+    monkeypatch.setattr(cli, "_run_prompt", fake_run_prompt)
+
+    runner.invoke(cli.app, ["-p", "inspect", "--mode", "plan", "--cwd", str(tmp_path)])
+    assert seen["plan_mode"] is True
+
+    runner.invoke(cli.app, ["-p", "act", "--mode", "react", "--cwd", str(tmp_path)])
+    assert seen["plan_mode"] is False
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

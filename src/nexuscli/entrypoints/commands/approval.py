@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 from rich.prompt import Prompt
 
+from nexuscli.entrypoints.commands.approval_keys import APPROVAL_HELP, interpret_approval_answer
+
 if TYPE_CHECKING:
     # Runtime import would be circular: repl imports this package for its
     # handlers while owning the permission controller. Annotations are
@@ -26,21 +28,25 @@ def _approval_prompt(
         f"[yellow]Approval required[/yellow] {request['tool_name']} "
         f"({request['danger_level']})\n{request['input']}"
     )
-    console.print(
-        "[dim]y approve once · r approve this tool for the rest of this run "
-        "(subagents prompt separately) · a switch to auto mode · s skip · "
-        "n deny[/dim]"
-    )
-    answer = Prompt.ask("Approve?", choices=["y", "n", "r", "a", "s"], default="n")
-    if answer == "a":
-        permission_mode.set("auto")
-        return "approve"
-    if answer == "r":
-        # Run-scoped grant: the executor records the tool name so later calls
-        # to the same tool skip the prompt until this agent run ends.
-        return "approve_run"
-    if answer == "y":
-        return "approve"
-    if answer == "s":
-        return "skip"
-    return "deny"
+    console.print(f"[dim]{APPROVAL_HELP}[/dim]")
+    # rich.prompt.Prompt re-asks forever on unknown input and ignores Esc, so a
+    # stray keystroke (/usage, /exit, a paste) trapped the user in a loop with
+    # no exit but two Ctrl+C presses, the second of which killed the session.
+    # Ask with a plain key read instead: Esc / Ctrl+C / Ctrl+D deny immediately,
+    # anything unrecognised is reported once and asked again with the options
+    # restated, and the answer is interpreted in one tested place.
+    while True:
+        try:
+            raw = Prompt.ask("Approve? (y / r / a / s / n, Esc denies)", default="n")
+        except (EOFError, KeyboardInterrupt):
+            console.print("[yellow]Denied (no answer).[/yellow]")
+            return "deny"
+        decision = interpret_approval_answer(raw)
+        if decision is not None:
+            if decision == "approve_auto":
+                permission_mode.set("auto")
+                return "approve"
+            return decision
+        console.print(
+            f"[yellow]Not an option:[/yellow] {raw.strip()!r}. {APPROVAL_HELP}",
+        )

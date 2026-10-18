@@ -38,6 +38,7 @@
     <div class="toc-title">目录</div>
     <div class="toc">
 <ul>
+<li><a href="#单次--p-模式下没有审批弹窗">单次 -p 模式下没有审批弹窗</a></li>
 <li><a href="#只读-bash-直通">只读 bash 直通</a></li>
 <li><a href="#审批弹窗的四个选项">审批弹窗的四个选项</a></li>
 <li><a href="#子进程环境清洗env_sanitization">子进程环境清洗（env_sanitization）</a></li>
@@ -106,6 +107,17 @@
 <li><code>allow</code> 命中时跳过审批弹窗；但 <code>hitl_mode: "always"</code>（逐切确认）下仍会提示；<code>hitl_mode: "never"</code> 时 <code>ask</code> 按失败关闭原则直接拒绝</li>
 </ul>
 <p>规则与 HITL 一样按层拼接：用户级和项目级 config.json 的同名列表会合并去重，项目规则不会覆盖掉用户级 <code>deny</code>。</p>
+<h2 id="单次--p-模式下没有审批弹窗"><a class="toclink" href="#单次--p-模式下没有审批弹窗">单次 <code>-p</code> 模式下没有审批弹窗</a></h2>
+<p>交互式 REPL 才有 HITL 弹窗；<code>nexuscli -p</code> 的 <code>ToolContext</code> 不带审批回调，因此<strong>需要审批的工具在该模式下按失败关闭处理</strong>：<code>bash</code> / <code>execute_command</code>（非只读命令）、<code>write_file</code>、<code>edit_file</code>、<code>task</code>、<code>save_memory</code>、<code>save_skill</code>、<code>task_stop</code>、<code>revert_turn</code> 都会被拒绝，模型收到的 tool 结果形如：</p>
+<pre><code class="language-text">Tool &quot;bash&quot; was denied by approval policy. This run has no interactive approver
+(single-prompt mode), so no human could be asked. Allow the tool beforehand with
+permissions.allow (for example {&quot;allow&quot;: [&quot;bash&quot;]}) in config.json, or run the
+interactive REPL for approval prompts.
+</code></pre>
+<p>只读工具（<code>read_file</code>、<code>grep</code>、<code>glob</code>、<code>search_code</code>、只读 bash 命令等）不受影响。脚本化场景要真正执行写类动作，必须在 config.json 里显式声明：</p>
+<pre><code class="language-json">{ &quot;permissions&quot;: { &quot;allow&quot;: [&quot;bash&quot;, &quot;write_file&quot;] } }
+</code></pre>
+<p>这条边界和 <code>ask</code> 在 <code>hitl_mode: "never"</code> 下的处理是同一姿态：<strong>无人可问时按失败关闭，而不是静默放行</strong>。注意 <code>permissions.allow</code> 只是放行审批层，<code>path_guard</code> 仍在生效——工作区外的写入依旧会被 <code>path escapes workspace</code> 拒绝。</p>
 <h2 id="只读-bash-直通"><a class="toclink" href="#只读-bash-直通">只读 bash 直通</a></h2>
 <p><code>bash</code> / <code>execute_command</code> 的命令串会先做一次 argv 级只读静态判定。判定是保守的：只认单条简单命令（含 <code>;</code>、<code>|</code>、重定向、命令替换等元字符时一律视为不只读），并基于内置白名单——<code>ls</code>、<code>cat</code>、<code>grep</code>、<code>head</code> 等检查类命令，不带写动作参数的 <code>find</code>，只读子命令的 <code>git</code>（<code>status</code>、<code>log</code>、<code>diff</code>、<code>show</code> 等，<code>branch</code> / <code>tag</code> / <code>remote</code> / <code>config</code> 另有参数限制），以及 <code>python</code> / <code>node</code> / <code>npm</code> 的 <code>--version</code> / <code>--help</code> 式自述调用与 <code>uv</code> / <code>pip</code> 的列表类子命令；白名单之外的命令一律视为不只读，回落到正常审批链。</p>
 <p>判定为只读的命令在默认模式下免 HITL 审批直通执行，<code>plan</code> 态的只读闸门也按同一判定放行。直通不改变既有优先级：<code>deny</code> 命中照常拒绝，<code>ask</code> 命中照常追问，PreToolUse hook 的阻断与 ask 提示同样优先，<code>hitl_mode: "always"</code> 下仍会弹审批。直通不等于无痕：直通调用仍写审计日志，approver 记为 <code>readonly-rule</code>。</p>

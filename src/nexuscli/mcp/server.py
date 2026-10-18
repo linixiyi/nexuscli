@@ -6,9 +6,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from nexuscli import __version__
 from nexuscli.config import load_config
 from nexuscli.tools import ToolRegistry, get_builtin_tools
 from nexuscli.tools.base import ToolContext
+
+# Protocol revision this server speaks. Clients negotiate against it during
+# initialize; bump only alongside the message shapes that change.
+MCP_PROTOCOL_VERSION = "2024-11-05"
 
 
 def _build_registry() -> ToolRegistry:
@@ -37,7 +42,23 @@ async def _handle_request(request: dict[str, Any], cwd: str) -> dict[str, Any]:
     method = request.get("method")
     params = request.get("params") or {}
     if method in {"initialize", "notifications/initialized"}:
-        return {"jsonrpc": "2.0", "id": request_id, "result": {"serverInfo": {"name": "nexuscli"}}}
+        # MCP clients validate this reply against InitializeResult, which
+        # requires protocolVersion, capabilities and serverInfo.version. The
+        # bare {"serverInfo": {"name": ...}} shape worked for hand-rolled
+        # curl calls but every official SDK client rejected it at handshake
+        # (3 pydantic validation errors), so the server was unreachable from
+        # the ecosystem it exists to serve.
+        if method == "notifications/initialized":
+            return {"jsonrpc": "2.0", "id": request_id, "result": {}}
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "nexuscli", "version": __version__},
+            },
+        }
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": _tool_list(registry)}}
     if method == "tools/call":

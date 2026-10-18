@@ -140,6 +140,58 @@ def test_unparseable_quoting_fails_conservatively() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Credential files never ride the read-only fast path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "head -2 ~/.ssh/id_rsa",
+        "cat ~/.nexuscli/config.json",
+        "cat ~/.aws/credentials",
+        "cat ~/.netrc",
+        "cat .env",
+        "cat server.pem",
+        "cat ~/.kube/config",
+        "ls ~/.ssh",
+    ],
+)
+def test_credential_paths_are_not_readonly(command: str) -> None:
+    # The fast path returns tool output straight to the model with no human in
+    # the loop, so a credential file must never qualify: 'head -2
+    # ~/.ssh/id_rsa' used to be auto-approved and handed the private key to the
+    # transcript, while the file tools refused that same path.
+    assert is_readonly_bash_command(command) is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["ls -la", "git status", "cat notes.txt", "grep TODO src/app.py", "wc -l data.txt"],
+)
+def test_ordinary_inspection_stays_readonly(command: str) -> None:
+    assert is_readonly_bash_command(command) is True
+
+
+def test_credential_read_goes_through_approval(tmp_path) -> None:
+    config = _hermetic_config(tmp_path)
+    prompts: list[str] = []
+
+    def deny(request):
+        prompts.append(request["tool_name"])
+        return "deny"
+
+    executed: list[str] = []
+    context = ToolContext(cwd=str(tmp_path), config=config, approval_callback=deny)
+
+    result = _run_shell("bash", "cat ~/.nexuscli/config.json", config, context, executed)
+
+    assert result.is_error
+    assert prompts == ["bash"]
+    assert executed == []
+
+
+# ---------------------------------------------------------------------------
 # Executor integration
 # ---------------------------------------------------------------------------
 

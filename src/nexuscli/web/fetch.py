@@ -77,5 +77,33 @@ def _validate_public_url(url: str) -> None:
 
 
 def _reject_private_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
-    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast:
+    """Refuse loopback / link-local / LAN / metadata addresses.
+
+    ``ipaddress.is_private`` also covers 198.18.0.0/15, the benchmarking range
+    that TUN-style transparent proxies (Clash, Surge, sing-box) hand out as
+    fake-IP. Treating that as "private" made every public hostname fail with
+    "resolves to a private or local address" on machines running such a proxy,
+    which took web_fetch offline entirely while curl on the same box returned
+    200 (measured: example.com -> 198.18.0.38, is_private True). The classes
+    below are the ones an SSRF guard actually cares about; the fake-IP range
+    is normal internet traffic wearing a proxy mask.
+    """
+    if (
+        ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or _is_private_or_shared(ip)
+    ):
         raise NetworkPolicyError("URL resolves to a private or local address")
+
+
+_FAKE_IP_RANGES = (ipaddress.ip_network("198.18.0.0/15"),)  # RFC 2544 benchmarking
+
+
+def _is_private_or_shared(ip) -> bool:
+    """True for RFC1918 / ULA / CGNAT, minus the fake-IP range proxies use."""
+    if any(ip in network for network in _FAKE_IP_RANGES if ip.version == network.version):
+        return False
+    return ip.is_private
