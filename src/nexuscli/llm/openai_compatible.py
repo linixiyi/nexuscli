@@ -39,6 +39,7 @@ class ModelListingProfile:
     base_url: str = ""
     reasoning_effort_supported: bool | None = None
     thinking_can_disable: bool | None = None
+    vision: bool | None = None
 
 
 @dataclass(slots=True)
@@ -61,6 +62,7 @@ class _ModelListing:
     context_window: int | None
     reasoning_effort_supported: bool | None = None
     thinking_can_disable: bool | None = None
+    vision: bool | None = None
 
 
 def _parse_capability_bool(capabilities: object, key: str) -> bool | None:
@@ -103,6 +105,7 @@ def _parse_models_payload(payload: object) -> list[_ModelListing]:
                     capabilities, "thinkingEffortSupported"
                 ),
                 thinking_can_disable=_parse_capability_bool(capabilities, "thinkingCanDisable"),
+                vision=_parse_capability_bool(capabilities, "vision"),
             )
         )
     return listings
@@ -176,6 +179,7 @@ def fetch_available_models(
             context_window=listing.context_window or default_context_window,
             reasoning_effort_supported=listing.reasoning_effort_supported,
             thinking_can_disable=listing.thinking_can_disable,
+            vision=listing.vision,
         )
         for listing in listings
     ]
@@ -208,6 +212,10 @@ class OpenAICompatibleClient:
     # True when the user explicitly chose "off", so the status bar can tell a
     # decision from a default. Wire behaviour is identical (no field either way).
     reasoning_effort_explicit_off: bool = False
+    # Tri-state multimodal capability: True/False from an explicit decision
+    # (llm.vision config or a gateway capabilities.vision picked up by /model),
+    # None to fall back to the model-name heuristic.
+    vision_capable: bool | None = None
 
     @property
     def model_name(self) -> str:
@@ -215,6 +223,8 @@ class OpenAICompatibleClient:
 
     @property
     def supports_images(self) -> bool:
+        if self.vision_capable is not None:
+            return self.vision_capable
         model = self.model.lower()
         provider = self.provider_name.lower()
         return any(marker in model for marker in ("vision", "image", "5v", "vl")) or (

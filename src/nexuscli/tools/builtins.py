@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from nexuscli.memory import MemoryManager
-from nexuscli.policy import CommandGuard, FSScopeGuard, sanitize_environment
+from nexuscli.policy import CommandGuard, FSScopeGuard, evaluate_permissions, sanitize_environment
 from nexuscli.rag import CodeIndex, format_hit_stats
 from nexuscli.skill import SkillRegistry, SkillStateStore
 from nexuscli.snapshot import SnapshotService
@@ -645,7 +645,21 @@ async def _reject_outside_write_scope(command: str, context: ToolContext) -> Too
     """
     guard = FSScopeGuard()
     targets = guard.extract_write_targets(command, context.cwd)
+    # /dev/null is the canonical discard target: `2>/dev/null` in an
+    # otherwise read-only command must not read as an out-of-workspace write.
+    targets = [t for t in targets if t != "/dev/null"]
     if guard.classify(targets, context.cwd) != "outside":
+        return None
+    # An explicit allow rule for this tool is the user's standing trust
+    # decision — the executor's chain treats it as auto-approve — so the
+    # inner write-scope prompt must not re-ask for the same call. hitl_mode
+    # "always" keeps asking, mirroring the executor.
+    permission = evaluate_permissions(context.config.permissions, "bash", {"command": command})
+    if (
+        permission
+        and permission.action == "allow"
+        and context.config.policy.hitl_mode != "always"
+    ):
         return None
     preview = ", ".join(targets[:5]) + ("..." if len(targets) > 5 else "")
     reason = f"Static analysis found a write target outside the workspace: {preview}"

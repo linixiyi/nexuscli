@@ -170,6 +170,7 @@ def _store_fetched_profiles(
                 context_window=item.context_window,
                 api_key=config.llm.api_key,
                 api_key_env="NEXUSCLI_API_KEY",
+                vision=item.vision,
             )
         except ValueError as exc:
             console.print(f"[red]跳过 {item.model}：[/red]{exc}")
@@ -207,6 +208,8 @@ def _capability_description(listing) -> str:
         parts.append("支持强度档位 (/effort minimal/low/medium/high)")
     if listing.thinking_can_disable:
         parts.append("思考可关闭")
+    if listing.vision:
+        parts.append("支持图片输入 (@image:)")
     return "；".join(parts)
 
 
@@ -265,6 +268,7 @@ def _activate_model(
     config.llm.model = profile.model
     config.llm.base_url = profile.base_url
     config.llm.context_window = profile.context_window
+    config.llm.vision = profile.vision
     config.llm.api_key = profile.resolve_api_key(
         current_provider=old_provider,
         current_api_key=old_api_key,

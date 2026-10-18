@@ -18,6 +18,8 @@
 | ⬜ 未测 | 两条都没有 |
 
 > 2026-10-18 第二轮（`fix-audit-residual`）之后，表中带 【本轮】 的行是这一轮补的真实运行/机器验证；带 【已修】 的缺陷行是本轮修掉并复测过的。
+>
+> 2026-10-19 收口轮（`verify-zero-and-yellow`，两轮工作流 + 轮间修复）：带 【收口】 的行是这两轮补齐的 62 个表面（17 ⬜ + 45 🟡 对应行，含 /history 主线程补测）。证据明细在 `.spec/specs/2026-10-18_verify-zero-and-yellow/evidence/`；两轮共修复 13 个真实运行暴露的缺陷，全部带回归测试。
 
 ---
 
@@ -47,10 +49,10 @@
 | 2.4 | plan 只读闸门（`Shift+Tab` → plan） | 只读调研，确认方案再执行 | `test_plan_mode.py` | pty 实测写工具被硬拒、不写审计 | ✅ |
 | 2.5 | `--mode plan` 的只读语义 | 同上，但走单次模式 | `test_cli.py` | 本轮修复后实测写入被拒 | ✅ |
 | 2.6 | Multi-Agent team 模式 | "并行审计这几个模块" | `test_multi_agent.py` | 真实网关跑通，Phase 1/2 结构正确 | ✅ |
-| 2.7 | team 的 worker-mode=plan | worker 内部再走 plan | 无 | 未跑 | ⬜ |
-| 2.8 | 工具循环检测 | 模型卡在同一个调用上要能止损 | `test_loop_detection.py` | 未跑（需要构造真实重复调用） | 🟡 |
-| 2.9 | provider 超限自动压缩重试 | 长会话撞 context 上限 | `test_overflow_retry.py` | 未跑（需要构造真实超限） | 🟡 |
-| 2.10 | 中断后续跑（`/plan --resume`） | 计划跑到一半 Ctrl+C，第二天续 | `test_plan_checkpoint.py` | 未跑 | 🟡 |
+| 2.7 | 【收口】team 的 worker-mode=plan | worker 内部再走 plan | `test_lane_c_modes.py` | pty 实测 `--mode plan` 写工具被硬拒;修复 plan worker 从不置位 `plan_mode` 的缺陷;用户 pin 优先于 planner 步级 mode(round2 复验) | ✅ |
+| 2.8 | 【收口】工具循环检测 | 模型卡在同一个调用上要能止损 | `test_loop_detection.py` | 真实网关单回合 6 次同参 list_dir,nudge→abort 止损信息可读 | ✅ |
+| 2.9 | 【收口】provider 超限自动压缩重试 | 长会话撞 context 上限 | `test_overflow_retry.py` | 生产 react 循环+真实压缩器;provider 错误为 client 接缝注入(网关实测 600KB/1.4MB 均接受,无法自然触发,如实标注) | ✅ |
+| 2.10 | 【收口】中断后续跑（`/plan --resume`） | 计划跑到一半 Ctrl+C，第二天续 | `test_plan_checkpoint.py` | pty 实测 task_2 中断后续跑跳过 task_1;摘要「首批任务」指向未完成批次(round2 复验) | ✅ |
 
 ## 三、REPL 交互表面
 
@@ -77,34 +79,34 @@
 | `/help` | 忘了命令名 | 1 | pty 实测列出全部命令 | ✅ |
 | `/exit` | 收工 | 1 | pty 实测 exit=0 | ✅ |
 | `/clear` | 换话题，清上下文 | 2 | 【本轮】pty 实测重绘 banner | ✅ |
-| `/resume` | 切回某个历史会话 | 3 | 未在 REPL 内跑（`-c` 跑过） | 🟡 |
-| `/history` | 找上周问过的问题 | 1 | 未跑 | 🟡 |
+| `/resume` | 切回某个历史会话 | 3 | pty 实测列表可读、`/resume 1` 恢复行带 id/条数/标题,跨进程答出上一会话暗号 | ✅ |
+| `/history` | 找上周问过的问题 | 1 | pty 实测 `/history 紫罗兰 --all` 4 列表格命中刚问的问题(evidence/main-history.md) | ✅ |
 | `/context` | 看当前上下文占了多少 | 0 | pty 实测表格正确 | 🟠 |
 | `/compact` | 手动压一次上下文 | 1 | 【本轮】pty 实测空历史如实回报 | ✅ |
-| `/memory` | 看记住了什么 | 0 | 未跑 | ⬜ |
-| `/save` | 存当前会话 | 0 | 未跑 | ⬜ |
+| `/memory` | 看记住了什么 | `test_lane_b_memory_surface.py` | pty 实测列表/搜索/统计/删除各态可读 | ✅ |
+| `/save` | 存一条长期记忆(`<fact>` 进 MemoryManager;会话本身由回合自动持久化) | `test_lane_a_session_surface.py` | pty 实测 `Saved memory #1` 可读,sessions 列表由自动持久化覆盖(行描述按实现语义更正) | ✅ |
 | `/config` | 核对生效配置 | 0 | 【本轮】pty 实测摘要 43 行、无 JSON dump | ✅ |
 | `/tools` | 看有哪些工具 | 0 | pty 实测列出 27 个 | 🟠 |
-| `/hitl` | 切审批档位 | 0 | 未跑 | ⬜ |
+| `/hitl` | 切审批档位 | `test_lane_e_tool_surfaces.py` | pty 实测切档、状态栏、错误提示联动;`/hitl never` 下带 `2>/dev/null` 纯读命令零审批直通(round2 复验) | ✅ |
 | `/policy` | 核对安全策略 | 0 | pty 实测摘要（同 /config） | 🟠 |
 | `/audit` | 查刚才那条为什么被拒 | 0 | 【本轮】pty 实测输出 4 列摘要表 | ✅ |
-| `/index` | 建代码索引 | 0 | 未跑 | ⬜ |
-| `/search` | 语义搜代码 | 0 | 未跑 | ⬜ |
-| `/init` | 生成 AGENTS.md | 1 | 未跑 | 🟡 |
+| `/index` | 建代码索引 | `test_lane_b_index_search.py` | pty 实测计数与源文件非空行一致 | ✅ |
+| `/search` | 语义搜代码 | `test_lane_b_index_search.py` | pty 实测命中 path:line 与源码一致 | ✅ |
+| `/init` | 生成 AGENTS.md | 1 | pty 实测生成内容与仓库实际相符(入口由模型实跑验证) | ✅ |
 | `/plan` | 进入 Plan-and-Execute | 1 | 真实网关跑通 | ✅ |
-| `/team` | 进入多代理 | 0 | 未跑（`--mode team` 跑过） | 🟡 |
-| `/model` | 切模型 | `test_model_selector.py` | 未跑（TUI 选择器） | ⬜ |
+| `/team` | 进入多代理 | 0 | pty 实测 REPL 内最小规模真实网关跑通,Phase 1/2 可读;`--mode plan` 用户 pin 生效(round2) | ✅ |
+| `/model` | 切模型 | `test_model_selector.py`、`test_lane_e_tool_surfaces.py` | pty 实测上下选/回车切换/Esc 取消、无密钥报对变量名;拉取列表含 视觉✓ 徽标(round2 补) | ✅ |
 | `/usage` | 看这轮烧了多少 token | 2 | pty 实测四行状态表 | 🟠 |
 | `/skill` | 加载技能 | 2 | 【已修】pty 实测 `Unknown skill: "nosuchskill". Available: web-access` | ✅ |
-| `/mcp` | 看接了哪些 MCP | 0 | 未跑 | ⬜ |
-| `/task` | 派子代理 | 0 | 未跑 | ⬜ |
-| `/workflow` | 跑 JSON 步骤图 | 1 | 未跑 | 🟡 |
-| `/expert` | 内置三步专家流程 | 2 | 未跑 | 🟡 |
-| `/fork` | 分叉会话试另一个方向 | 2 | 未跑 | 🟡 |
-| `/goal` | 设跨回合长程目标 | 1 | 未跑 | 🟡 |
+| `/mcp` | 看接了哪些 MCP | `test_repl_mcp_status.py` | pty 实测列出 server 名/类型/命令/工具数、disabled、error 行(F3 修复后 round2 复验) | ✅ |
+| `/task` | 派子代理(持久任务队列) | `test_lane_c_team_task.py` | pty 实测入队→真实 worker 消费→`/task log` 取回结果 | ✅ |
+| `/workflow` | 跑 JSON 步骤图 | 1 | pty 实测 3 步 DAG 并行分批跑通,三份报告可读 | ✅ |
+| `/expert` | 内置三步专家流程 | 2 | pty 实测 research→execute→report 真实网关走通 | ✅ |
+| `/fork` | 分叉会话试另一个方向 | `test_lane_a_session_surface.py` | pty 实测分叉后主线逐字节未变、forked_from/usage 清零正确 | ✅ |
+| `/goal` | 设跨回合长程目标 | 1 | pty 实测下回合回复带【GOAL-ON-DUTY】,目标落盘持久 | ✅ |
 | `/effort` | 调推理力度 | 1 | pty 实测八次循环顺序正确；【本轮】`off` 在状态栏可见 | ✅ |
-| `/snapshot` | 手动存快照 | 0 | 未跑 | ⬜ |
-| `/restore` | 回滚到某个快照 | 0 | 未跑 | ⬜ |
+| `/snapshot` | 手动存快照(`save [label]`/列表/clean) | `test_lane_a_snapshot_restore.py` | pty 实测 save→列表→restore→clean 全闭环文案可读(round2 复验);修复了默认关自动快照时无手动建快照入口的缺陷 | ✅ |
+| `/restore` | 回滚到某个快照 | `test_lane_a_snapshot_restore.py` | pty 实测文件内容还原、pre-restore 安全快照新增、错误路径可读 | ✅ |
 
 ## 五、内置工具（25 个 + 2 个 vfs 视图）
 
@@ -112,23 +114,23 @@
 |---|---|---|---|---|
 | `read_file` | "读一下这个文件" | 18 | 真实网关跑过；越界被拒 | ✅ |
 | `write_file` | "把这个写进去" | 9 | 真实网关跑过（补了审批） | ✅ |
-| `edit_file` | "把这行改掉" | 4 | 未跑 | 🟡 |
+| `edit_file` | "把这行改掉" | 4 | 真实网关实测两行编辑,第二行未动,落盘核对 | ✅ |
 | `list_dir` | "这个目录有啥" | 4 | 真实网关跑过 | ✅ |
 | `glob` / `glob_files` | "找出所有测试文件" | 3 | 真实网关跑过 | ✅ |
 | `grep` / `grep_code` | "哪里用了这个函数" | 6 | 真实网关跑过 | ✅ |
-| `directory_tree` | "给我看目录树" | 0 | 未跑 | ⬜ |
-| `get_file_info` | "这个文件多大" | 0 | 未跑 | ⬜ |
+| `directory_tree` | "给我看目录树" | `test_lane_e_tool_surfaces.py` | 真实网关实测树正确、`.git` 排除、连接符可读 | ✅ |
+| `get_file_info` | "这个文件多大" | `test_lane_e_tool_surfaces.py` | 真实网关实测与 stat 一致;修复 Modified 由裸 epoch 改为本地时间 | ✅ |
 | `bash` / `execute_command` | "跑一下测试" | 17 / 6 | 真实网关跑过（含拒绝路径） | ✅ |
 | `web_search` | "搜一下这个报错" | 1 | 【已修】真实检索返回 5 条；失败时报 `DuckDuckGo request failed (ConnectError) for query 'anything': All connection attempts failed` | ✅ |
 | `web_fetch` | "看看这个链接" | 2 | 真实跑过（修了 fake-IP 误杀） | ✅ |
-| `save_memory` / `search_memory` | "记住这个偏好" | 2 / 1 | 未跑 | 🟡 |
-| `load_skill` / `save_skill` | 加载/沉淀技能 | 1 / 3 | 未跑 | 🟡 |
-| `search_code` | 语义搜代码 | 0 | 未跑 | ⬜ |
+| `save_memory` / `search_memory` | "记住这个偏好" | 2 / 1 | 真实网关:save 落盘(source=agent)、新进程 search 原样召回 | ✅ |
+| `load_skill` / `save_skill` | 加载/沉淀技能 | 1 / 3 | 跨进程双会话:save 落盘→新进程 load 注入→按技能指示输出 | ✅ |
+| `search_code` | 语义搜代码 | `test_lane_e_tool_surfaces.py` | 先建索引后真实检索命中+统计行;空索引提示先 `/index` | ✅ |
 | `task_output` / `task_stop` | 看/停后台任务 | 2 / 2 | 【已修】实测 `sh -c 'sleep 30 & sleep 30'` 停止后进程组为空 | ✅ |
-| `revert_turn` | 撤销上一轮改动 | 2 | 未跑 | 🟡 |
-| `todo_write` / `todo_read` | 任务清单 | 0 / 0 | 未跑 | ⬜ |
-| `task`（子代理） | "派个子代理去查" | 3 | 未跑 | 🟡 |
-| `vfs_ls` / `vfs_read` | 只读看历史快照 | 13 | 未跑 | 🟡 |
+| `revert_turn` | 撤销上一轮改动 | 2 | 真实网关实测文件精确回到改前 | ✅ |
+| `todo_write` / `todo_read` | 任务清单 | `test_lane_e_tool_surfaces.py` | 写入读回一致、todo.json 落盘匹配、REPL 展示可读 | ✅ |
+| `task`（子代理） | "派个子代理去查" | 3 | 真实 `-p`:主代理派子代理查测试函数,返回事实与 ground truth 一致 | ✅ |
+| `vfs_ls` / `vfs_read` | 只读看历史快照 | 13 | 真实网关回合中模型调用,返回改前内容、未误读工作区现值 | ✅ |
 
 ## 六、权限与安全
 
@@ -141,8 +143,8 @@
 | 6.5 | 路径守卫 | 别让它写到项目外 | `test_fs_scope.py` | 实测 `..` 与 symlink 均被拒 | ✅ |
 | 6.6 | 环境变量清洗 | 别把 API key 漏给子进程 | `test_sandbox_guard.py` | 实测子进程看不到 KEY/TOKEN | ✅ |
 | 6.7 | 【已修】审计日志 | 事后查谁批了什么 | `test_audit_redaction.py` | 实测文件 `0o600`、正文截断 500 字符、`sk-` 形态掩码 | ✅ |
-| 6.8 | Hooks 七事件 | 在工具调用前跑自己的检查 | `test_hooks.py` | 未跑真实 hook | 🟡 |
-| 6.9 | 工作区 hooks 信任门禁 | clone 别人的仓库先审 hooks | `test_hooks_trust.py` | 未跑 | 🟡 |
+| 6.8 | 【收口】Hooks 七事件 | 在工具调用前跑自己的检查 | `test_hooks.py` | 真实 hook 脚本七事件全触发:SessionStart1/UserPromptSubmit2/PreToolUse2/PostToolUse1/PostToolUseFailure1/PermissionRequest2/Stop2 | ✅ |
+| 6.9 | 【收口】工作区 hooks 信任门禁 | clone 别人的仓库先审 hooks | `test_hooks_trust.py` | n 拒→hooks 不执行、y 信→执行,信任记录含 sha256 持久化 | ✅ |
 | 6.10 | plan 态只读 | 见 2.4 | `test_plan_mode.py` | pty 实测 | ✅ |
 | 6.11 | `-p` 审批默认拒绝 + `--yes` 显式放行 | 脚本里跑要写文件 | `test_cli_single_prompt.py` | 实测默认被拒、`--yes` 放行 | ✅ |
 | 6.12 | 【已修】Runtime API 审批通道 | 机器人接进来跑任务 | `test_runtime.py` | 实测 `write_file` 被拒且文件未落盘 | ✅ |
@@ -152,12 +154,12 @@
 
 | # | 功能 | 真人会怎么用 | 机器验证 | 真实运行 | 状态 |
 |---|---|---|---|---|---|
-| 7.1 | 静态记忆（AGENTS.md/NEXUS.md） | 项目约定写进文件 | `test_prompt.py` | 未跑 | 🟡 |
-| 7.2 | 动态长期记忆（SQLite） | "记住我用 uv 不用 pip" | `test_memory.py` | 未跑 | 🟡 |
-| 7.3 | 相关性召回 Top-K | 不问也能想起相关约束 | `test_memory.py` | 未跑 | 🟡 |
-| 7.4 | 自动压缩（80% 触发） | 长会话不炸 | `test_context.py` | 未跑 | 🟡 |
+| 7.1 | 【收口】静态记忆（AGENTS.md/NEXUS.md） | 项目约定写进文件 | `test_prompt.py` | 真实 `-p` 问杜撰代号 BLUE-OTTER-77,隔离 HOME 下唯一来源即 `<project-instructions>` | ✅ |
+| 7.2 | 【收口】动态长期记忆（SQLite） | "记住我用 uv 不用 pip" | `test_memory.py` | 会话1 save_memory 落盘(sqlite 核对),会话2 全新进程逐字答出 bun 偏好;`<project-constraints>` 受信块措辞加强后 2/2 带出(round2) | ✅ |
+| 7.3 | 【收口】相关性召回 Top-K | 不问也能想起相关约束 | `test_memory.py` | 播种 [OTTER-42] 前缀约定,不点名提问被主动带出并处理与 AGENTS.md 的冲突 | ✅ |
+| 7.4 | 【收口】自动压缩（80% 触发） | 长会话不炸 | `test_context.py` | 真实触发压缩 52469→12991 token;修复摘要 assistant 角色被严格交替网关 400 的缺陷,修复后压缩+续聊可用 | ✅ |
 | 7.5 | 【已修】`/compact` 手动压缩 | 主动瘦身 | `test_context.py` | pty 实测空历史如实回报；压缩必须变小 | ✅ |
-| 7.6 | 代码索引与检索 | "搜一下这个函数在哪" | `test_search_rank.py` | 未跑 | 🟡 |
+| 7.6 | 【收口】代码索引与检索 | "搜一下这个函数在哪" | `test_search_rank.py` | pty /index 落盘后真实 `-p` 让模型 search_code,答出 app.py 第 8 行,与 /search 互相印证 | ✅ |
 
 ## 八、会话与持久化
 
@@ -165,9 +167,9 @@
 |---|---|---|---|---|---|
 | 8.1 | 会话转录 JSONL | 关掉再开还在 | `test_session_store.py` | 实测落盘 | ✅ |
 | 8.2 | usage 随转录持久化 | 恢复后 token 接着算 | `test_session_usage.py` | 实测双口径正确 | ✅ |
-| 8.3 | `/fork` 分叉 | 试另一个方向不污染主线 | 无 | 未跑 | ⬜ |
-| 8.4 | 快照 / `/snapshot` / `/restore` | 改坏了回滚 | `test_snapshot.py` | 未跑 | 🟡 |
-| 8.5 | vfs 只读视图 | 对比改前改后 | `test_vfs.py` | 未跑 | 🟡 |
+| 8.3 | 【收口】`/fork` 分叉 | 试另一个方向不污染主线 | `test_lane_a_session_surface.py` | pty 实测主线逐字节未变、分叉回合只进分叉 transcript | ✅ |
+| 8.4 | 【收口】快照 / `/snapshot` / `/restore` | 改坏了回滚 | `test_snapshot.py`、`test_lane_a_snapshot_restore.py` | create→index→跨进程 resolve→restore(含 pre-restore 安全快照)全链路真实走通 | ✅ |
+| 8.5 | 【收口】vfs 只读视图 | 对比改前改后 | `test_vfs.py` | 真实网关回合中 vfs_ls/vfs_read 返回改前内容 | ✅ |
 | 8.6 | 【已修】自动快照（pre/post turn） | 想要每回合回滚点 | `test_config.py` | 实测默认关；README 已写明开关与默认值 | ✅ |
 
 ## 九、联网
@@ -184,8 +186,8 @@
 | # | 功能 | 真人会怎么用 | 机器验证 | 真实运行 | 状态 |
 |---|---|---|---|---|---|
 | 10.1 | MCP client（stdio / HTTP） | 接 filesystem server | `test_mcp.py` | 实测 npx server 可接入 | ✅ |
-| 10.2 | 工具级过滤 allowed/blocked | 只放几个工具进来 | `test_mcp_filter.py` | 未跑 | 🟡 |
-| 10.3 | OAuth 令牌落盘 0600 | 接需要授权的 server | `test_mcp_oauth.py` | 未跑 | 🟡 |
+| 10.2 | 【收口】工具级过滤 allowed/blocked | 只放几个工具进来 | `test_mcp_filter.py` | 真实 stdio server 实测只放行的工具可见 | ✅ |
+| 10.3 | 【收口】OAuth 令牌落盘 0600 | 接需要授权的 server | `test_mcp_oauth.py` | 本地假 OAuth server 走完整流程,令牌文件 0600 | ✅ |
 | 10.4 | 自身作为 MCP server | 让别的客户端用 NexusCLI | `test_mcp_server_protocol.py` | 官方 SDK 握手通过 | ✅ |
 | 10.5 | 【已修】MCP server 浏览器安全 | 本机跑着别被网页打 | `test_mcp_http_security.py` | 实测 405/404/415/403 全部生效 | ✅ |
 | 10.6 | 【已修】MCP client 连接复用 | 有状态 server 要保活 | `test_mcp.py` | 实测三次调用同一 pid，count 1→2→3 | ✅ |
@@ -204,39 +206,39 @@
 | 11.6 | 【已修】`cron list/next/run` | 定时跑日报 | `test_cron.py` | 实测 `[disabled] dead`；`cron run` 单行可直接 `$(...)` | ✅ |
 | 11.7 | `eval list/run` | 改坏了看回归 | `test_eval.py` | 实测 3/3 通过 | ✅ |
 | 11.8 | 【已修】eval 在 wheel 形态 | `pip install` 后跑 eval | `test_eval.py` | 内置场景随包分发 | ✅ |
-| 11.9 | SDK `create_default_engine` | 在 Python 里调 | 无 | 未跑 | ⬜ |
+| 11.9 | 【收口】SDK `create_default_engine` | 在 Python 里调 | `test_lane_e_mcp_sdk.py` | 真实创建引擎并跑通一个 turn | ✅ |
 
 ## 十二、扩展机制
 
 | # | 功能 | 真人会怎么用 | 机器验证 | 真实运行 | 状态 |
 |---|---|---|---|---|---|
-| 12.1 | Skill 系统（builtin/user/project） | 装个团队规范 | `test_skill.py` | 未跑 | 🟡 |
-| 12.2 | Agent Skills 规范兼容 | 直接用社区 skill | `test_skill_spec_compat.py` | 未跑 | 🟡 |
-| 12.3 | 自定义斜杠命令 | 把常用提示词存起来 | `test_slash_commands.py` | 未跑 | 🟡 |
-| 12.4 | 插件（`.nexuscli/plugins/`） | 打包一组 agents+skills+commands | `test_plugins.py` | 未跑 | 🟡 |
-| 12.5 | 自定义子代理（`.nexuscli/agents/*.md`） | 定义专属 reviewer | `test_subagent.py` | 未跑 | 🟡 |
-| 12.6 | 动态工作流（JSON DAG） | 把固定流程存成文件 | `test_workflow.py` | 未跑 | 🟡 |
-| 12.7 | 子代理文件邮箱 | 两个子代理协作 | `test_subagent_mailbox.py` | 未跑 | 🟡 |
-| 12.8 | 后台子代理 + 完成播报 | 派出去就不管了 | `test_bg_subagent.py` | 未跑 | 🟡 |
+| 12.1 | 【收口】Skill 系统（builtin/user/project） | 装个团队规范 | `test_skill.py` | 三层真实加载且覆盖链正确:user 覆盖 builtin、project 覆盖 user | ✅ |
+| 12.2 | 【收口】Agent Skills 规范兼容 | 直接用社区 skill | `test_skill_spec_compat.py` | 社区格式(frontmatter allowed-tools 等)直接可用 | ✅ |
+| 12.3 | 【收口】自定义斜杠命令 | 把常用提示词存起来 | `test_lane_d_extensions.py` | pty 实测 `/release-note v9.9.9` 提示词经网关生效,mode/allowed-tools 运行期生效且还原 | ✅ |
+| 12.4 | 【收口】插件（`.nexuscli/plugins/`） | 打包一组 agents+skills+commands | `test_plugins.py` | 最小插件三类组件真实进程全部生效 | ✅ |
+| 12.5 | 【收口】自定义子代理（`.nexuscli/agents/*.md`） | 定义专属 reviewer | `test_lane_d_extensions.py` | pty 实测 agent_type=reviewer 报告遵循 md 格式、system prompt 来自 md | ✅ |
+| 12.6 | 【收口】动态工作流（JSON DAG） | 把固定流程存成文件 | `test_workflow.py` | 3 步图并行分批真实跑通,Workflow complete 可读 | ✅ |
+| 12.7 | 【收口】子代理文件邮箱 | 两个子代理协作 | `test_subagent_mailbox.py` | 双子代理经 mailbox 交换数字,双方独立算出 42,inbox drain 清空 | ✅ |
+| 12.8 | 【收口】后台子代理 + 完成播报 | 派出去就不管了 | `test_bg_subagent.py` | run_in_background 立即返回 id,回合末播报完成,报告落盘可查 | ✅ |
 
 ## 十三、可观测性
 
 | # | 功能 | 真人会怎么用 | 机器验证 | 真实运行 | 状态 |
 |---|---|---|---|---|---|
-| 13.1 | `trace_id` 关联 | 把一次请求的所有日志串起来 | `test_trace_id.py` | 未跑 | 🟡 |
-| 13.2 | OTel span | 接自己的 collector | `test_telemetry.py` | 未跑（无 exporter，如实边界） | 🟡 |
-| 13.3 | `llm.debug_dump` | 排查请求长什么样 | `test_llm_io_dump.py` | 未跑 | 🟡 |
-| 13.4 | `/usage stats` 落库 | 看这周花了多少 | `test_usage_coverage.py` | 未跑 | 🟡 |
+| 13.1 | 【收口】`trace_id` 关联 | 把一次请求的所有日志串起来 | `test_trace_id.py` | pty 真实会话 audit trace_id == 网关 x-request-id | ✅ |
+| 13.2 | 【收口】OTel span | 接自己的 collector | `test_telemetry.py` | 真实 SDK provider+exporter 导出成功;无 collector 时 NonRecording 边界如实 | ✅ |
+| 13.3 | 【收口】`llm.debug_dump` | 排查请求长什么样 | `test_llm_io_dump.py` | 真实 dump 落盘、敏感头脱敏、请求结构可读 | ✅ |
+| 13.4 | 【收口】`/usage stats` 落库 | 看这周花了多少 | `test_usage_coverage.py` | 双进程数字一致,重启持久 | ✅ |
 
 ## 十四、图片与 PDF
 
 | # | 功能 | 真人会怎么用 | 机器验证 | 真实运行 | 状态 |
 |---|---|---|---|---|---|
-| 14.1 | `@image:` 本地图片 | 贴截图让它看 | `test_image.py` | 未跑 | 🟡 |
-| 14.2 | 远程图片 | 贴 URL | `test_image.py` | 未跑 | 🟡 |
-| 14.3 | 非多模态模型降级 | 用 deepseek 时别报错 | `test_image.py` | 未跑 | 🟡 |
-| 14.4 | PDF 读取 | 让它读需求文档 | `test_file_read_pdf.py` | 未跑 | 🟡 |
-| 14.5 | Python 语法诊断 | 写完自动查错 | `test_lsp.py` | 未跑 | 🟡 |
+| 14.1 | 【收口】`@image:` 本地图片 | 贴截图让它看 | `test_vision_capability.py`、`test_lane_f_media.py` | round2 pty 真实网关端到端:答「蓝色背景上有一个黄色的圆形」,降级行不再出现(supports_images 改能力驱动后解锁) | ✅ |
+| 14.2 | 【收口】远程图片 | 贴 URL | `test_lane_f_media.py` | CLI 直传正确(wire dump 证实);上游网关当前拒收一切远程 URL(11135,含 round1 成功过的图),待上游恢复复跑端到端 | 🟡 |
+| 14.3 | 【收口】非多模态模型降级 | 用 deepseek 时别报错 | `test_lane_f_media.py` | 显式 `llm.vision=false` 端到端:不崩、提示可读、payload 退化为纯文本(round2 复验) | ✅ |
+| 14.4 | 【收口】PDF 读取 | 让它读需求文档 | `test_file_read_pdf.py` | 造双页 PDF,票号/活动名答对 | ✅ |
+| 14.5 | 【收口】Python 语法诊断 | 写完自动查错 | `test_lsp.py` | 真实 agent 会话原样展示行号+原因 | ✅ |
 
 ---
 
@@ -244,24 +246,23 @@
 
 | 状态 | 数量 | 含义 |
 |---|---|---|
-| ✅ 已测 | 76 | 机器验证 + 真实运行都有 |
+| ✅ 已测 | 137 | 机器验证 + 真实运行都有 |
 | 🟠 仅真人 | 9 | 真实跑过，但没有自动化断言护着 |
-| 🟡 仅机器 | 45 | 有断言，从没在真实场景里跑过 |
-| ⬜ 未测 | 17 | 两条都没有 |
+| 🟡 仅机器 | 1 | 有断言，真实端到端被上游环境卡住（14.2 远程图片，CLI 契约 wire 级已证） |
+| ⬜ 未测 | 0 | — |
 | **合计** | **147** | |
 
-### 这一轮（`fix-audit-residual`）补上的验证
+### 收口轮（`verify-zero-and-yellow`，两轮工作流）补上的验证
 
-- **安全与审批**：`-p --yes` 真跑、审计日志 0600 + 脱敏、MCP HTTP 6 条安全检查、Runtime 审批通道——全部真实进程实测。
-- **进程**：背景任务进程组停止后实测 group empty；bash 超时 2s 实测 2.06s 返回（此前孙进程持管道会拖到 12s）。
-- **REPL**：48 列窄终端保留模式名、`/sk<Tab>` 补全、`@image:` 占位符、`/clear` 重绘、`/config` 摘要、`/skill` 未知报错、`/effort off` 可见。
-- **平台**：MCP 三次调用同一 pid 且状态累计、缺参数本地拒发、`mcp list` 展示 disabled 与损坏配置报错、`cron` disabled 与单行输出、端口占用可读提示、`web_search` 失败带原因。
+- **17 个 ⬜ 全部双补**：/model 选择器（TUI 交互 + 视觉徽标）、/task、/snapshot save+/restore（补了手动建快照入口）、/fork、/mcp（补了 server 列表渲染）、/memory、/index+/search、/hitl、/save（行描述按实现语义更正为长期记忆）、directory_tree、get_file_info、search_code、todo_write/read、team worker-mode=plan、/fork(8.3)、SDK create_default_engine。
+- **45 个 🟡 中 44 个补真实运行**：/team（REPL 内）、/workflow、/expert、/goal、/history、插件、自定义命令、hooks 七事件、@image: 端到端、PDF、LSP、全部扩展机制与可观测性面。
+- **真实运行暴露并修复的缺陷（13 个，全部带回归测试）**：plan worker 可写（2.7）、压缩摘要 assistant 角色被网关拒（7.4）、/snapshot 无手动入口、rich markup 吞 `[label]`、get_file_info 裸 epoch、写域守卫无视 allow 且误报 /dev/null、/mcp 不列 server、supports_images 名称门槛挡住真实 vision 模型、planner 静默覆盖用户 --worker-mode、plan resume 摘要误导、/model 拉取列表缺视觉徽标、审批提示不渲染原因、<recalled-memory> 泛化措辞约束力弱（改受信 `<project-constraints>` 块）。
 
-### 仍然没测的（下一轮优先）
+### 仍然没测的
 
-1. **⬜ 17 项**里最该补的是 `/model` 选择器、`/task` 子代理、`/snapshot`+`/restore`、`/fork`、`/mcp`、`/memory`、`/index`+`/search`、`/hitl`、`/save`。
-2. **🟡 45 项**里优先补真实运行：`/team`（REPL 内）、`/workflow`、`/expert`、插件、自定义命令、hooks、`@image:`、PDF。
-3. **🟠 9 项**需要补断言：`doctor`、`--version`、`/context`、`/tools`、`/policy`、`/usage`、空 prompt Ctrl+C、Ctrl+D、bracketed paste。
+1. **14.2 远程图片端到端**：上游网关当前拒收一切远程图片 URL（CLI 直传契约已由 wire dump 证实正确），待上游恢复复跑即可置绿。
+2. **🟠 9 项**仍缺自动化断言：`doctor`、`--version`、`/context`、`/tools`、`/policy`、`/usage`、空 prompt Ctrl+C、Ctrl+D、bracketed paste。
+3. **低危接受项**：loop 止损文案单复数（"1 turns"）、/expert 中游子代理空产出仅在最终报告可见、弱模型对召回约束的遵守是概率性的（对抗问法下不保证）。
 
 ---
 

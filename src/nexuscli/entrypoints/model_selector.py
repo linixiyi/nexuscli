@@ -242,6 +242,8 @@ def _capability_badges(profile: ModelListingProfile) -> str:
         badges += " · 强度✓"
     if profile.thinking_can_disable:
         badges += " · 思考可关"
+    if profile.vision:
+        badges += " · 视觉✓"
     return badges
 
 

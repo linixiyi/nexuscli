@@ -31,6 +31,10 @@ class LlmConfig:
     # When enabled, every turn appends the request and the response as JSON
     # lines to ~/.nexuscli/debug/llm/<date>.jsonl (sensitive headers redacted).
     debug_dump: bool = False
+    # Explicit multimodal override for the selected model: True forces image
+    # support on, False forces it off, None falls back to the model-name
+    # heuristic. /model fills this from the gateway's capabilities.vision.
+    vision: bool | None = None
 
 
 @dataclass(slots=True)

@@ -51,6 +51,12 @@ def _approval_prompt(
         f"[yellow]Approval required[/yellow] {request['tool_name']} "
         f"({request['danger_level']}) {_summarize_input(request.get('input') or {})}"
     )
+    description = str(request.get("description") or "").strip()
+    if description:
+        # The write-scope guard and other callers use this to say WHY the call
+        # needs approval; without it stacked prompts look identical apart from
+        # the danger level and the user cannot tell which gate is asking.
+        console.print(f"[dim]Reason: {description}[/dim]")
     console.print(f"[dim]{APPROVAL_HELP}[/dim]")
     # rich.prompt.Prompt re-asks forever on unknown input and ignores Esc, so a
     # stray keystroke (/usage, /exit, a paste) trapped the user in a loop with

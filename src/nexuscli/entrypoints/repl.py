@@ -352,6 +352,7 @@ async def start_repl(
                     renderer,
                     session_state,
                     custom_commands,
+                    mcp_manager,
                 )
                 if should_exit:
                     return
@@ -393,6 +394,7 @@ async def _handle_slash(
     renderer: RichRenderer,
     session_state: ReplSessionState,
     custom_commands: dict[str, CustomCommand] | None = None,
+    mcp_manager: Any | None = None,
 ) -> bool:
     command, _, rest = raw.partition(" ")
     arg = rest.strip()
@@ -683,9 +685,7 @@ async def _handle_slash(
     elif command == "/skill":
         _skill_command(arg, console, cwd, agent)
     elif command == "/mcp":
-        console.print(
-            "Use `nexuscli mcp serve --transport stdio|http --port 3000` to expose tools."
-        )
+        _mcp_status_command(console, mcp_manager, registry)
     elif command == "/task":
         _task_command(arg, console, cwd)
     elif command == "/workflow":
@@ -763,6 +763,47 @@ async def _handle_slash(
 # Kept in repl.py (not commands/usage.py): tests/test_usage_history.py
 # monkeypatches ``nexuscli.entrypoints.repl.UsageStore``, so the helper must
 # resolve the store through this module's globals.
+def _mcp_status_command(console: Any, mcp_manager: Any, registry: Any) -> None:
+    """Show the MCP servers configured for this workspace and their live state.
+
+    Reads the same specs the manager loaded at startup (project + user
+    mcp.json), the per-server tools actually registered (``mcp__<server>__…``
+    names), and any connection error the last load recorded — the surfaces
+    `nexuscli mcp list` shows statically, but reflecting this session.
+    """
+    if mcp_manager is None:
+        console.print("MCP support is disabled (features.mcp=false).")
+        return
+    if not mcp_manager.specs:
+        console.print(
+            "No MCP servers configured. Add them to .nexuscli/mcp.json (project) "
+            "or ~/.nexuscli/mcp.json (user)."
+        )
+        console.print(
+            "[dim]To expose this CLI's tools to other clients: "
+            "nexuscli mcp serve --transport stdio|http --port 3000[/dim]"
+        )
+        return
+    names = list(registry.list_names()) if registry is not None else []
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold", no_wrap=True)
+    grid.add_column()
+    for spec in mcp_manager.specs.values():
+        target = spec.command or spec.url or ""
+        tool_names = [n for n in names if n.startswith(f"mcp__{spec.name}__")]
+        detail = f"[dim]{spec.type}[/dim] {target}" if target else f"[dim]{spec.type}[/dim]"
+        state = (
+            f"{len(tool_names)} tools"
+            if spec.enabled and tool_names
+            else ("enabled, 0 tools" if spec.enabled else "disabled")
+        )
+        grid.add_row(spec.name, f"{detail} · {state}")
+        error = mcp_manager.last_errors.get(spec.name)
+        if error:
+            grid.add_row("", f"[red]error:[/red] {error}")
+    console.print(grid)
+
+
 def _record_turn_usage(agent: Agent, session_id: str) -> None:
     """Persist one completed turn's usage to ~/.nexuscli/usage.db.
 

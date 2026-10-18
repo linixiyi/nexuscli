@@ -61,7 +61,10 @@ def test_dynamic_prompt_recall_is_rebuilt_for_each_request(tmp_path, monkeypatch
 
     assert len(client.system_prompts) == 2
     assert "Current time" in client.system_prompts[1]
-    assert "recalled-memory" in client.system_prompts[1]
+    # kind=preference recalls render in the trusted project-constraints block
+    # (round-2: the untrusted recalled-memory frame made models ignore saved
+    # constraints), not in the untrusted recalled-memory block.
+    assert "project-constraints" in client.system_prompts[1]
     assert "uv run python -m pytest" in client.system_prompts[1]
 
 
@@ -74,5 +77,8 @@ def test_dynamic_memory_is_bounded_and_marked_untrusted(tmp_path, monkeypatch):
 
     dynamic = assembler.build_dynamic("项目测试怎么运行")
 
-    assert '<recalled-memory trust="untrusted-data">' in dynamic
+    # kind=constraint is user-saved and renders as a trusted block with the
+    # binding wording (以下召回的项目约束必须遵守).
+    assert '<project-constraints trust="user-saved-memory">' in dynamic
     assert "项目测试统一使用 pytest" in dynamic
+    assert "以下召回的项目约束必须遵守" in dynamic

@@ -213,10 +213,18 @@ class SubAgent:
             )
         from nexuscli.agent.plan_execute import PlanExecuteAgent
 
+        # Worker plan mode carries the same read-only guarantee as single-prompt
+        # ``--mode plan`` (cli.py turns policy.plan_mode on there): a worker in
+        # plan mode investigates and verifies, it does not write. The gate is a
+        # config flag read by the tool executor, so hand the nested agent a
+        # per-run config copy with the flag on — workers run concurrently on one
+        # shared config, and mutating the flag in place would gate (or ungate)
+        # sibling react workers mid-flight.
+        plan_config = replace(self.config, policy=replace(self.config.policy, plan_mode=True))
         agent = PlanExecuteAgent(
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
-            config=self.config,
+            config=plan_config,
             cwd=self.cwd,
             approval_callback=self.approval_callback,
         )
@@ -325,6 +333,11 @@ class AgentOrchestrator:
         self.cwd = cwd
         self.approval_callback = approval_callback
         self.default_worker_mode = _normalize_worker_mode(default_worker_mode)
+        # Any non-default worker mode is an explicit user pin (/team --mode
+        # plan). The planner must not silently override it per step — seen
+        # live: it emitted "mode": "react" for write steps, so the user's
+        # read-only request never took effect.
+        self.pinned_worker_mode = self.default_worker_mode != AgentRunMode.REACT.value
         self.planner = self._subagent("planner", AgentRole.PLANNER)
         self.workers = [
             self._subagent(f"worker-{index}", AgentRole.WORKER)
@@ -576,11 +589,15 @@ class AgentOrchestrator:
                     dependencies=[],
                     mode=_normalize_worker_mode(
                         str(
-                            node.get("mode")
-                            or (
-                                AgentRunMode.PLAN.value
-                                if str(node.get("type") or "").upper() == "PLAN"
-                                else self.default_worker_mode
+                            self.default_worker_mode
+                            if self.pinned_worker_mode
+                            else (
+                                node.get("mode")
+                                or (
+                                    AgentRunMode.PLAN.value
+                                    if str(node.get("type") or "").upper() == "PLAN"
+                                    else self.default_worker_mode
+                                )
                             )
                         )
                     ),

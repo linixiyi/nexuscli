@@ -39,7 +39,9 @@ def test_context_compresses_old_turns_and_keeps_latest_user_message():
 
     assert result.compressed
     assert result.summarized_messages > 0
-    assert result.messages[0].role == "assistant"
+    # The rolling summary rides in a user message: strict-alternation gateways
+    # (GLM) reject a request that opens with, or repeats, the assistant role.
+    assert result.messages[0].role == "user"
     assert "conversation-summary" in str(result.messages[0].content)
     assert any(
         message.content.startswith("request 7")

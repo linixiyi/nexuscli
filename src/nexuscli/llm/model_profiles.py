@@ -22,6 +22,9 @@ class ModelProfile:
     api_key: str = ""
     api_key_env: str = "NEXUSCLI_API_KEY"
     custom: bool = False
+    # Tri-state multimodal capability carried from a gateway listing's
+    # capabilities.vision; None leaves the client on the name heuristic.
+    vision: bool | None = None
 
     @classmethod
     def custom_profile(
@@ -34,6 +37,7 @@ class ModelProfile:
         context_window: int,
         api_key: str = "",
         api_key_env: str = "NEXUSCLI_API_KEY",
+        vision: bool | None = None,
     ) -> ModelProfile:
         name = name.strip()
         provider = provider.strip().lower()
@@ -57,6 +61,7 @@ class ModelProfile:
             api_key=api_key,
             api_key_env=api_key_env,
             custom=True,
+            vision=vision,
         )
 
     def resolve_api_key(

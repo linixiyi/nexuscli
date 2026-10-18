@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from nexuscli.lsp import diagnose_file
@@ -585,7 +586,7 @@ def get_file_info(
         f"Path: {rel}\n"
         f"Type: {kind}\n"
         f"Size: {_human_size(size)}\n"
-        f"Modified: {mtime:.0f}\n"
+        f"Modified: {_format_mtime(mtime)}\n"
         f"Permissions: {oct(stat.st_mode & 0o777)}"
     )
     return FileOpResult(info)
@@ -611,3 +612,13 @@ def _human_size(size: int) -> str:
             return f"{size:.1f}{unit}" if isinstance(size, float) else f"{size}{unit}"
         size /= 1024
     return f"{size:.1f}TB"
+
+
+def _format_mtime(mtime: float) -> str:
+    """Render ``st_mtime`` as local time a user can read, epoch kept for scripts.
+
+    A user asking "这个文件什么时候改的" cannot read a bare ``1792326641``;
+    the local timestamp answers them directly while the epoch suffix keeps the
+    exact, timezone-free value available for comparisons.
+    """
+    return f"{datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')} (epoch {mtime:.0f})"

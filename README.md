@@ -150,6 +150,12 @@ uv run nexuscli --mode plan -p "先读取 README，再验证项目" --json
 uv run nexuscli --mode team --worker-mode plan -p "并行审计核心模块" --json
 ```
 
+`-p` 模式没有人工审批通道，默认按失败关闭：需要写文件、跑命令、`save_memory` 等落盘动作的调用会被拒绝（审计留痕），显式加 `--yes` 才放行；旗标在 `-p "prompt"` 之前或之后均可，没有 `--approve-all` 别名。
+
+```bash
+uv run nexuscli -p "记住这个项目用 uv 管理依赖" --yes
+```
+
 检查当前环境：
 
 ```bash
@@ -238,6 +244,7 @@ uv run nexuscli -p "解释这个仓库"
 
 - `telemetry.enabled`（默认 `false`）：为 `llm.chat` 与 `tool.call` 两条路径产出 OpenTelemetry span（属性带会话 trace_id）。未开启、或可选依赖 `opentelemetry` 未安装（`uv sync --extra telemetry`）时全链路 no-op，行为与没有遥测代码时完全一致
 - `llm.debug_dump`（默认 `false`）：开启后每回合把 LLM 请求与响应以 JSONL 追加写入 `~/.nexuscli/debug/llm/<日期>.jsonl`，`Authorization` 等敏感请求头会脱敏为 `<redacted>`；消息正文与工具定义会原样落盘，只在可信机器上临时开启排查
+- `llm.vision`（默认不设置）：显式声明当前模型是否支持图片输入。不设置时按模型名特征猜测（名称含 vision/image/5v/vl）；自建网关经 `/model` 的「API 拉取」选择模型时会自动带入响应里声明的 `capabilities.vision`。名称不带特征但实际支持图片的模型，手动设 `"llm": { "vision": true }` 即可启用 `@image:` 流程
 
 两者的完整口径（trace_id 关联、span 支持边界、落盘结构与用量落库覆盖面）见 [docs/observability.md](docs/observability.md)。
 
@@ -341,6 +348,7 @@ JSON 载荷字段、超时语义、信任机制的存储格式与安全边界的
 /workflow run <file>.json
 /expert <topic>
 /snapshot
+/snapshot save [label]
 /snapshot clean
 /restore <snapshot-id-or-index>
 ```
