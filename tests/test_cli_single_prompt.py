@@ -179,3 +179,44 @@ def test_json_mode_emits_single_object_and_no_stream_output(tmp_path, monkeypatc
             "current_process": "this run only",
         },
     }
+
+
+def test_yes_flag_installs_an_approval_callback(tmp_path, monkeypatch):
+    # -p used to build QueryEngine with no approval_callback, so every tool
+    # that needs approval was refused (executor fails closed) and scripted
+    # work could not write files or run commands at all. --yes is the
+    # explicit opt-in that says nobody will be asked.
+    captured = {}
+
+    async def fake_build_registry(config, cwd):
+        return None, None
+
+    monkeypatch.setattr(cli, "build_tool_registry", fake_build_registry)
+    monkeypatch.setattr(cli, "create_llm_client", lambda llm, telemetry_enabled: object())
+
+    def fake_engine(**kwargs):
+        captured["approval_callback"] = kwargs.get("approval_callback")
+        return StubQueryEngine(_DELTA_EVENTS)
+
+    monkeypatch.setattr(cli, "QueryEngine", fake_engine)
+    monkeypatch.setattr(sys, "stdout", _WriteCapture())
+
+    asyncio.run(cli._run_prompt("hi", str(tmp_path), _test_config(), approve_all=True))
+    assert captured["approval_callback"] is cli._auto_approver
+
+    asyncio.run(cli._run_prompt("hi", str(tmp_path), _test_config(), approve_all=False))
+    assert captured["approval_callback"] is None
+
+
+def test_auto_approver_answers_approve():
+    assert cli._auto_approver({"tool_name": "bash"}) == "approve"
+
+
+def test_yes_and_no_approve_are_mutually_exclusive(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    result = CliRunner().invoke(cli.app, ["-p", "hi", "--yes", "--no-approve"])
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output

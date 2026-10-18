@@ -66,6 +66,15 @@ def _skill_command(arg: str, console: Console, cwd: str, agent: Agent) -> None:
         _skill_stats(registry, console)
         return
     rows = registry.all_skills()
+    if sub and sub not in {"list", "ls"}:
+        # /skill <name> used to fall through to the full table, which looked
+        # like the command had acted on that name. Say plainly that the name is
+        # unknown, then show what is available.
+        names = ", ".join(item.name for item in rows[:12]) or "(none)"
+        console.print(f'Unknown skill: "{sub}". Available: {names}')
+        if len(rows) > 12:
+            console.print(f"[dim]…and {len(rows) - 12} more; run /skill to list all.[/dim]")
+        return
     lines = [
         f"{item.name}\t{item.source}\t{'on' if item.enabled else 'off'}\t{item.description}"
         for item in rows

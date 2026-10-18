@@ -30,11 +30,13 @@ Usage modes::
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
@@ -65,7 +67,8 @@ from nexuscli.eval import (
 )
 from nexuscli.llm import create_llm_client
 from nexuscli.mcp import (
-    load_mcp_server_specs,
+    McpConfigError,
+    read_mcp_config_entries,
     serve_http,
     serve_stdio,
     write_chrome_devtools_config,
@@ -153,6 +156,22 @@ def main(
             help="Resume the most recent session in this project",
         ),
     ] = False,
+    # --- Non-interactive approval ---
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Single-prompt only: approve every tool call that would ask (non-interactive)",
+        ),
+    ] = False,
+    no_approve: Annotated[
+        bool,
+        typer.Option(
+            "--no-approve",
+            help="Single-prompt only: refuse every tool call that would ask (the default)",
+        ),
+    ] = False,
     # --- Workspace ---
     cwd: Annotated[
         Path | None,
@@ -195,6 +214,9 @@ def main(
     if plain:
         config.render_mode = "plain"
 
+    if yes and no_approve:
+        raise typer.BadParameter("--yes and --no-approve are mutually exclusive")
+
     if prompt is not None:
         selected_mode = (mode or config.prompt.agent_mode or "react").lower()
         if selected_mode not in {"react", "plan", "team"}:
@@ -230,6 +252,7 @@ def main(
                 json_output=json_output,
                 history=history,
                 usage_baseline=usage_baseline,
+                approve_all=yes,
             )
         )
     elif resume or continue_session:
@@ -363,7 +386,8 @@ def runtime_serve(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-    RuntimeApiServer(cwd=str(root), config=config, api_key=key, port=port).serve_forever()
+    server = RuntimeApiServer(cwd=str(root), config=config, api_key=key, port=port)
+    _serve_or_exit(server.serve_forever, port)
 
 
 @app.command("worker")
@@ -400,7 +424,7 @@ def mcp_serve(
     """Expose NexusCLI tools via the Model Context Protocol."""
     root = str((cwd or Path.cwd()).resolve())
     if transport == "http":
-        serve_http(port=port, cwd=root)
+        _serve_or_exit(lambda: serve_http(port=port, cwd=root), port)
     elif transport == "stdio":
         asyncio.run(serve_stdio(cwd=root))
     else:
@@ -438,15 +462,24 @@ def mcp_init_chrome(
 def mcp_list(
     cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
 ) -> None:
-    """List configured MCP servers."""
+    """List configured MCP servers, including the disabled ones."""
     root = (cwd or Path.cwd()).resolve()
-    specs = load_mcp_server_specs(root)
+    try:
+        specs, skipped = read_mcp_config_entries(root)
+    except McpConfigError as exc:
+        # A corrupt mcp.json used to print "No MCP servers configured.", which
+        # sends the user looking for a missing file instead of the broken one.
+        typer.echo(f"Invalid MCP config: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    for entry in skipped:
+        typer.echo(f"[skip] {entry}", err=True)
     if not specs:
         typer.echo("No MCP servers configured.")
         return
     for spec in specs.values():
         target = spec.url or f"{spec.command} {' '.join(spec.args)}".strip()
-        typer.echo(f"{spec.name}\t{spec.type}\t{target}")
+        state = "enabled" if spec.enabled else "disabled"
+        typer.echo(f"{spec.name}\t{spec.type}\t{state}\t{target}")
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +503,11 @@ def cron_list() -> None:
 def cron_next() -> None:
     """Show the next trigger time of every cron task (local time)."""
     for task, upcoming in next_trigger(cron_tasks_path()):
+        if not task.enabled:
+            # Disabled tasks never fire; showing a time made external
+            # schedulers queue work that ``cron run`` then refuses.
+            typer.echo(f"[disabled] {task.id}")
+            continue
         if upcoming is None:
             typer.echo(f"[warn] invalid cron expression: {task.cron}")
             continue
@@ -480,18 +518,20 @@ def cron_next() -> None:
 def cron_run(
     task_id: Annotated[str, typer.Argument(help="Task id")],
 ) -> None:
-    """Print a task's prompt so an external scheduler can pipe it into ``nexuscli -p``.
+    """Print a task's prompt on one line, ready for ``nexuscli -p "$(...)"``.
 
     Offline form — nothing is executed here. Windows Task Scheduler / system
     cron invokes this command at the scheduled time and feeds the printed
-    prompt to ``nexuscli -p`` for the actual run.
+    prompt to ``nexuscli -p`` for the actual run. Newlines inside the prompt
+    are folded to spaces: ``-p`` takes its prompt as an argument and does not
+    read stdin, so a multi-line prompt cannot be piped into it.
     """
     try:
         prompt = run_task(cron_tasks_path(), task_id)
     except CronError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-    typer.echo(prompt)
+    typer.echo(_single_line(prompt))
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +647,18 @@ async def _ask_streaming(
     return await engine._complete_from_events(_tee(engine.ask(prompt, history)))
 
 
+def _auto_approver(request: dict) -> str:
+    """The --yes approval callback: approve without asking a human.
+
+    Only reached for calls the permission chain already let through to the
+    approval step, so deny rules, ask rules and hook blocks keep their
+    priority. The executor audits these as hitl; the CLI warns at startup so
+    the choice is visible in the transcript.
+    """
+    _ = request
+    return "approve"
+
+
 async def _run_prompt(
     prompt: str,
     cwd: str,
@@ -617,8 +669,15 @@ async def _run_prompt(
     json_output: bool = False,
     history: list | None = None,
     usage_baseline: SessionUsageTotals | None = None,
+    approve_all: bool = False,
 ) -> None:
-    """Execute a single prompt and print the result."""
+    """Execute a single prompt and print the result.
+
+    approve_all is the --yes switch: without an approval callback every tool
+    that requires one is refused (the executor fails closed), which made -p
+    useless for scripted work that writes files or runs commands. The default
+    stays "deny"; --yes says out loud that nobody will be asked.
+    """
     config.render_mode = "plain"
     if not config.llm.api_key:
         typer.echo(
@@ -637,6 +696,7 @@ async def _run_prompt(
         tool_registry=registry,
         config=config,
         cwd=cwd,
+        approval_callback=_auto_approver if approve_all else None,
     )
     try:
         if mode == "plan":
@@ -699,7 +759,41 @@ def _single_shot_session_usage(result, usage_baseline: SessionUsageTotals | None
     }
 
 
+def _serve_or_exit(serve: Callable[[], None], port: int) -> None:
+    """Run a blocking server, turning a busy port into a readable error.
+
+    Binding used to escape as a raw ``OSError: [Errno 48] Address already in
+    use`` traceback, which says nothing about which port or what to do next.
+    """
+    try:
+        serve()
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            typer.echo(f"Port {port} is already in use. Try --port <other>.", err=True)
+            raise typer.Exit(1) from exc
+        if exc.errno == errno.EACCES:
+            typer.echo(
+                f"Port {port} cannot be bound (permission denied). "
+                "Ports below 1024 need elevated privileges; try --port <other>.",
+                err=True,
+            )
+            raise typer.Exit(1) from exc
+        typer.echo(f"Cannot start the server on port {port}: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+def _single_line(text: str) -> str:
+    """Fold every run of whitespace (including newlines) into one space.
+
+    ``cron run`` output is consumed as ``-p "$(nexuscli cron run <id>)"``; a
+    multi-line prompt survives that quoting but not a bare pipe, and an empty
+    line in the middle would split the prompt in two.
+    """
+    return " ".join(text.split())
+
+
 def _version_of(command: str) -> str:
+
     if not shutil.which(command):
         return "missing"
     try:

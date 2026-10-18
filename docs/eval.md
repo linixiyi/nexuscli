@@ -98,10 +98,11 @@ Each run is isolated: no network call, no real LLM, telemetry disabled
 prefixes. The report itself is written under the project's own
 `.nexuscli/evals/`.
 
-One known side effect, disclosed rather than hidden: scenarios run the real
-`Agent.run`, whose pre/post-turn snapshot step still executes — each turn
-copies the project tree to `~/.nexuscli/snapshots/<digest>` (twice per turn,
-like any other agent run). Nothing else escapes the project or the user home.
+One side effect worth naming: scenarios run the real `Agent.run`. Automatic
+pre/post-turn snapshots are opt-in (`features.auto_snapshot`, default off), so
+under the default configuration nothing is copied; with the switch on, each
+turn copies the project tree to `~/.nexuscli/snapshots/<digest>` twice, like
+any other agent run. Nothing else escapes the project or the user home.
 
 
 ## Regression comparison

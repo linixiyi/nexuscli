@@ -80,6 +80,21 @@ class RichRenderer:
         self._output_tokens = 0
         self._last_input_tokens = 0
 
+    def reset_usage(self) -> None:
+        """Forget the previous conversation's usage.
+
+        /clear starts a new transcript, so the context bar must start empty too;
+        leaving the old ratio on screen claimed the fresh session was already
+        half full.
+        """
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._last_input_tokens = 0
+        self._last_turns = 0
+        self._last_total_tokens = 0
+        self._last_context_ratio = 0.0
+        self._last_has_usage = False
+
     def toolbar_status(self) -> dict[str, Any]:
         return {
             "turns": self._last_turns,

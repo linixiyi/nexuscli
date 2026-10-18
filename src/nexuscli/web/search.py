@@ -15,11 +15,33 @@ class SearchResult:
     snippet: str
 
 
+class SearchError(RuntimeError):
+    """A search failure with a non-empty, human-readable reason.
+
+    httpx exceptions often stringify to the empty string (``ConnectError()``
+    is the worst case), so ``Search error: {exc}`` reached the model as
+    ``Search error: `` with no hint at all. Every failure raised here names
+    the exception type, the query, and whatever message the transport gave.
+    """
+
+
 async def search_web(query: str, max_results: int = 5, timeout: float = 15.0) -> list[SearchResult]:
+    if not query.strip():
+        raise SearchError("search query is empty")
     url = f"https://duckduckgo.com/html/?q={quote(query)}"
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        response = await client.get(url, headers={"user-agent": "NexusCLI-Python/0.1.0"})
-        response.raise_for_status()
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            response = await client.get(url, headers={"user-agent": "NexusCLI-Python/0.1.0"})
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise SearchError(
+            f"DuckDuckGo returned HTTP {exc.response.status_code} for query {query!r}"
+        ) from exc
+    except httpx.HTTPError as exc:
+        detail = str(exc).strip() or repr(exc)
+        raise SearchError(
+            f"DuckDuckGo request failed ({type(exc).__name__}) for query {query!r}: {detail}"
+        ) from exc
     return _parse_duckduckgo(response.text)[:max_results]
 
 

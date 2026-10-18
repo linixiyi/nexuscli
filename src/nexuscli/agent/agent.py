@@ -371,8 +371,19 @@ class Agent:
                     break
                 compression = context_manager.compact_now(messages)
                 if not compression.compressed:
-                    break  # nothing left to compact; surface the error as-is
-                messages = compression.messages
+                    # compact_now refuses to hand back a history that grew (the
+                    # summary block can cost more than the turns it replaces on
+                    # a short session). That refusal must not disable overflow
+                    # recovery: the provider already said the request is too
+                    # big, so a hard trim is the remaining lever. Drop the
+                    # oldest turns and retry once; if nothing is left to drop,
+                    # surface the provider error as-is.
+                    trimmed = context_manager.force_trim(messages)
+                    if trimmed is None:
+                        break
+                    messages = trimmed
+                else:
+                    messages = compression.messages
                 yield {
                     "type": "text_delta",
                     "text": (

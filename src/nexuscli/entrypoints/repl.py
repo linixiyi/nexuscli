@@ -12,8 +12,8 @@ as re-exports.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
+import shutil
 import signal
 import sys
 from contextlib import suppress
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
@@ -185,9 +185,13 @@ async def start_repl(
     # Future completed" and a full rich traceback. Point script users at the
     # one-shot mode instead of entering the prompt loop at all.
     if not sys.stdin.isatty():
-        console.print(
-            'Interactive REPL needs a terminal. For piped/script use, run: nexuscli -p "<prompt>"'
+        # stdout stays clean so a pipeline never receives this notice as data;
+        # the message is one line because a hard-wrapped diagnostic reads like a
+        # crash. Keep the width clamp: at 80 columns rich would otherwise wrap it.
+        sys.stderr.write(
+            'Interactive REPL needs a terminal. For piped/script use, run: nexuscli -p "<prompt>"\n'
         )
+        sys.stderr.flush()
         raise SystemExit(1)
     permission_mode = PermissionModeController(config)
     registry, mcp_manager = await build_tool_registry(config=config, cwd=cwd)
@@ -268,11 +272,8 @@ async def start_repl(
             agent=agent,
         ),
         history=FileHistory(str(history_path)),
-        completer=WordCompleter(
-            SLASH_COMMANDS + [f"/{name}" for name in custom_commands],
-            ignore_case=True,
-        ),
-        placeholder=[("class:placeholder", "Type your message or @path/to/file")],
+        completer=SlashCommandCompleter(SLASH_COMMANDS + [f"/{name}" for name in custom_commands]),
+        placeholder=[("class:placeholder", "Type your message or @image:path/to/file")],
         # Foreground-only palette drawn from the terminal's own ANSI slots.
         # No backgrounds, so the prompt rides the user's theme instead of
         # painting black strips over it. Named ANSI colours (never literals
@@ -398,6 +399,10 @@ async def _handle_slash(
     if command in {"/exit", "/quit"}:
         return True
     if command == "/help":
+        console.print(
+            "[dim]Type a message to talk to the agent; start with / for commands. "
+            "Shift+Tab cycles permission mode · Ctrl+C aborts a turn · Ctrl+D exits.[/dim]"
+        )
         console.print("\n".join(SLASH_COMMANDS))
         for name, custom in (custom_commands or {}).items():
             description = f" — {custom.description}" if custom.description else ""
@@ -413,7 +418,23 @@ async def _handle_slash(
         # and the new transcript's ledger is not the old one's turns.
         session_state.usage_baseline = SessionUsageTotals()
         session_state.process_usage = SessionUsageTotals()
+        # The context bar reads renderer state, so a bare screen clear left it
+        # showing the previous conversation's fill. Reset the counters and
+        # redraw the banner: after /clear the terminal should look like a fresh
+        # start, not an empty screen with stale numbers.
+        if renderer is not None:
+            renderer.reset_usage()
         console.clear()
+        if renderer is not None:
+            renderer.banner(
+                model=agent.llm_client.model_name,
+                provider=agent.llm_client.provider_name,
+                cwd=cwd,
+                tools=len(registry.list_names()) if registry is not None else 0,
+                version=__version__,
+                api_key_configured=bool(config.llm.api_key),
+                hitl_mode=config.policy.hitl_mode,
+            )
     elif command == "/resume":
         if not arg:
             _print_session_list(console, session_state.store, cwd)
@@ -466,16 +487,23 @@ async def _handle_slash(
                 summary_max_chars=config.memory.summary_max_chars,
             )
             result = manager.compact_now(agent.history, focus=arg)
-            agent.history = result.messages
-            table = Table(title="NexusCLI Compaction")
-            table.add_column("Field")
-            table.add_column("Value")
-            table.add_row("tokens before", str(result.estimated_tokens_before))
-            table.add_row("tokens after", str(result.estimated_tokens_after))
-            table.add_row("summarized messages", str(result.summarized_messages))
-            if arg:
-                table.add_row("focus", arg)
-            console.print(table)
+            if not result.compressed:
+                # compact_now refuses to hand back a history that grew: on a
+                # short conversation the summary block costs more than the
+                # turns it replaces. Saying so is the whole point — the old
+                # table reported 24 -> 101 as a successful compaction.
+                console.print("(nothing to compact: the summary would be larger than the history)")
+            else:
+                agent.history = result.messages
+                table = Table(title="NexusCLI Compaction")
+                table.add_column("Field")
+                table.add_column("Value")
+                table.add_row("tokens before", str(result.estimated_tokens_before))
+                table.add_row("tokens after", str(result.estimated_tokens_after))
+                table.add_row("summarized messages", str(result.summarized_messages))
+                if arg:
+                    table.add_row("focus", arg)
+                console.print(table)
     elif command == "/memory":
         await _memory_command(arg, console, cwd, config)
     elif command == "/save":
@@ -490,18 +518,73 @@ async def _handle_slash(
             ).save(arg, source="manual", importance=0.8)
             console.print(f"Saved memory #{memory_id}")
     elif command == "/config":
-        console.print_json(json.dumps(config_to_public_dict(config), ensure_ascii=False))
+        # A full config dump is hundreds of lines and scrolls the conversation
+        # away. The fields a user actually checks before a run fit on one screen;
+        # everything else is one command away.
+        public = config_to_public_dict(config)
+        llm = public.get("llm", {})
+        summary = Table(title="NexusCLI Config", show_header=False, box=None)
+        summary.add_column("Field", style="bold")
+        summary.add_column("Value")
+        for label, value in (
+            ("provider", llm.get("provider")),
+            ("model", llm.get("model")),
+            ("base_url", llm.get("base_url")),
+            ("api_key", "***" if llm.get("api_key") else "(unset)"),
+            ("context_window", llm.get("context_window")),
+            ("max_tokens", llm.get("max_tokens")),
+            ("render_mode", public.get("render_mode")),
+            ("hitl_mode", public.get("policy", {}).get("hitl_mode")),
+            ("audit_log_path", public.get("policy", {}).get("audit_log_path")),
+            ("auto_snapshot", public.get("features", {}).get("auto_snapshot")),
+        ):
+            summary.add_row(str(label), str(value))
+        console.print(summary)
+        console.print("[dim]Full dump: nexuscli doctor --cwd .[/dim]")
     elif command == "/tools":
         console.print("\n".join(registry.list_names()))
     elif command == "/hitl":
         _hitl_command(arg, console, permission_mode)
     elif command == "/policy":
-        console.print_json(json.dumps(config_to_public_dict(config)["policy"], ensure_ascii=False))
-    elif command == "/audit":
-        limit = int(arg or "20") if (arg or "20").isdigit() else 20
-        console.print_json(
-            json.dumps(AuditLog(config.policy.audit_log_path).tail(limit), ensure_ascii=False)
+        policy = config_to_public_dict(config)["policy"]
+        summary = Table(title="NexusCLI Policy", show_header=False, box=None)
+        summary.add_column("Field", style="bold")
+        summary.add_column("Value")
+        for label, value in (
+            ("hitl_mode", policy.get("hitl_mode")),
+            ("path_guard", policy.get("path_guard_enabled")),
+            ("command_guard", policy.get("command_guard_enabled")),
+            ("env_sanitization", policy.get("env_sanitization")),
+            ("plan_mode", policy.get("plan_mode")),
+            ("command_blacklist", f"{len(policy.get('command_blacklist') or [])} entries"),
+        ):
+            summary.add_row(str(label), str(value))
+        console.print(summary)
+        rules = config_to_public_dict(config).get("permissions", {})
+        console.print(
+            "[dim]permissions: "
+            f"allow {len(rules.get('allow') or [])} · "
+            f"ask {len(rules.get('ask') or [])} · "
+            f"deny {len(rules.get('deny') or [])}[/dim]"
         )
+    elif command == "/audit":
+        limit = int(arg or "10") if (arg or "10").isdigit() else 10
+        events = AuditLog(config.policy.audit_log_path).tail(limit)
+        if not events:
+            console.print("(no audit records)")
+        else:
+            table = Table(title=f"NexusCLI Audit — last {len(events)}")
+            for column in ("time", "tool", "outcome", "approver"):
+                table.add_column(column)
+            for event in events:
+                stamp = str(event.get("timestamp") or "")
+                table.add_row(
+                    stamp[11:19] if len(stamp) >= 19 else stamp,
+                    str(event.get("tool_name") or ""),
+                    str(event.get("outcome") or ""),
+                    str(event.get("approver") or ""),
+                )
+            console.print(table)
     elif command == "/index":
         count = CodeIndex(cwd).rebuild(arg or ".")
         console.print(f"Indexed {count} code lines.")
@@ -734,6 +817,29 @@ def _disarm_turn_sigint(armed: bool) -> None:
         asyncio.get_running_loop().remove_signal_handler(signal.SIGINT)
 
 
+class SlashCommandCompleter(Completer):
+    """Complete slash commands, including the leading "/".
+
+    WordCompleter cannot do this: prompt_toolkit's default word pattern treats
+    ``/`` as a delimiter, so with the cursor after ``/sk`` the word under it is
+    ``sk`` while every candidate starts with ``/`` — nothing ever matches and Tab
+    silently does nothing. Matching on the whole text before the cursor fixes
+    that and keeps completion inside the command position: once a space is
+    typed the argument is free text and no candidates are offered.
+    """
+
+    def __init__(self, commands: list[str]) -> None:
+        self.commands = sorted(set(commands))
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if not text.startswith("/") or " " in text:
+            return
+        for command in self.commands:
+            if command.startswith(text):
+                yield Completion(command, start_position=-len(text))
+
+
 def _permission_key_bindings(permission_mode: PermissionModeController) -> KeyBindings:
     bindings = KeyBindings()
 
@@ -779,40 +885,98 @@ def _bottom_toolbar(
     *,
     permission_mode: PermissionMode = "default",
     agent: Any | None = None,
+    width: int | None = None,
 ) -> list[tuple[str, str]]:
     stats = stats or {}
     has_usage = bool(stats.get("has_usage"))
     context_ratio = float(stats.get("context_ratio") or 0)
     context_text = _format_toolbar_percent(context_ratio) if has_usage else "0%"
-    return [
+    mode_label = _permission_mode_label(permission_mode)
+
+    # Priority order when the terminal is narrow: the permission mode must
+    # never be the thing that gets cut. At 60 columns the old fixed layout ran
+    # past the edge, the mode name fell off first, and Shift+Tab changed state
+    # with zero visible feedback — the user could believe they were in
+    # read-only plan mode while auto-approve was actually active.
+    segments: list[tuple[str, str]] = [
         ("class:toolbar.model", model),
         ("class:toolbar.effort", _effort_label(agent)),
-        ("class:toolbar.gap", "  "),
-        ("class:toolbar.ctx.bar", _format_toolbar_bar(context_ratio if has_usage else 0)),
-        ("class:toolbar.gap", " "),
-        ("class:toolbar.ctx.value", context_text),
-        ("class:toolbar.gap", "  "),
-        ("class:toolbar.cwd.value", _shorten_home(cwd)),
-        ("class:toolbar.gap", "  "),
-        (f"class:toolbar.mode.{permission_mode}", _permission_mode_label(permission_mode)),
-        ("class:toolbar.gap", "  ⇧Tab"),
     ]
+    model_width = sum(len(text) for _, text in segments)
+    mode_width = len(mode_label)
+    gap = 2
+
+    # Widths this layout needs, cheapest thing to drop first.
+    cwd_text = _shorten_home(cwd)
+    bar = _format_toolbar_bar(context_ratio if has_usage else 0)
+    usage_width = gap + len(bar) + 1 + len(context_text)
+    cwd_width = gap + len(cwd_text)
+    mode_block = gap + mode_width + gap + len("⇧Tab")
+
+    def _width() -> int:
+        if width is not None:
+            return width
+        try:
+            from prompt_toolkit.application import get_app
+
+            return get_app().output.get_size().columns
+        except Exception:  # noqa: BLE001 - no app outside a running prompt
+            return shutil.get_terminal_size((120, 24)).columns
+
+    available = _width()
+    show_cwd = model_width + mode_block + usage_width + cwd_width <= available
+    show_usage = model_width + mode_block + usage_width <= available
+    if not show_cwd and show_usage and model_width + mode_block > available:
+        show_usage = False
+    if model_width + mode_block > available:
+        # Last resort on a very narrow pane: shorten the model name, never the
+        # mode. Below this the terminal is too small for a status bar at all.
+        room = max(8, available - mode_block)
+        if len(model) > room:
+            segments[0] = ("class:toolbar.model", _ellipsize(model, room))
+
+    if show_usage:
+        segments.append(("class:toolbar.gap", "  "))
+        segments.append(("class:toolbar.ctx.bar", bar))
+        segments.append(("class:toolbar.gap", " "))
+        segments.append(("class:toolbar.ctx.value", context_text))
+    if show_cwd:
+        segments.append(("class:toolbar.gap", "  "))
+        segments.append(("class:toolbar.cwd.value", cwd_text))
+    segments.append(("class:toolbar.gap", "  "))
+    segments.append((f"class:toolbar.mode.{permission_mode}", mode_label))
+    segments.append(("class:toolbar.gap", "  ⇧Tab"))
+    return segments
 
 
 def _effort_label(agent: Any) -> str:
     """Status-bar thinking level, pi-style: a suffix on the model name.
 
-    Only a concrete level renders. ``off`` is stored as ``None`` (the field
-    is simply never sent), so it is indistinguishable from an unset level
-    here — the status bar shows neither. That is accurate rather than lossy:
-    both states put no ``reasoning_effort`` on the wire, and ``/effort``
-    confirms the change in its own output.
+    ``off`` and "never touched" both put no ``reasoning_effort`` on the wire, but
+    they are different states to the person who just typed ``/effort off``: the
+    first is a decision, the second is a default. Showing `:off` for the decision
+    makes the status bar confirm the command instead of going silent.
     """
     client = getattr(agent, "llm_client", None)
+    if getattr(client, "reasoning_effort_explicit_off", False):
+        return ":off"
     level = getattr(client, "reasoning_effort", None)
     if level:
         return f":{level}"
     return ""
+
+
+def _ellipsize(text: str, limit: int) -> str:
+    """Shorten to limit cells, keeping the tail readable.
+
+    Model names carry their distinguishing part at the end (glm-5.3-flash),
+    so a plain head-cut would leave a row of identical prefixes.
+    """
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return "…"
+    return "…" + text[-(limit - 1) :]
 
 
 def _plural_label(count: int, singular: str) -> str:

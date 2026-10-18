@@ -162,6 +162,16 @@ class ContextWindowManager:
             compacted = self._shrink_summary(compacted, "", [])
             after = self._estimate_request(compacted, "", [])
 
+        # Refuse to inflate. The summary block carries a fixed header and one
+        # line per summarized message, so on a short history it can be larger
+        # than what it replaces: measured 24 -> 101 -> 180 -> 258 tokens over
+        # four consecutive /compact runs, each reported as a success. A
+        # compaction that does not shrink the history is not a compaction, so
+        # hand the original back with compressed=False and let the caller say
+        # so instead of printing a table that claims the opposite.
+        if after >= before:
+            return CompressionResult(list(messages), before, before, False)
+
         return CompressionResult(
             compacted,
             before,
@@ -169,6 +179,32 @@ class ContextWindowManager:
             True,
             summarized_messages=len(older),
         )
+
+    def force_trim(self, messages: list[Message]) -> list[Message] | None:
+        """Hard-trim the oldest turns when summarization cannot help.
+
+        Used only by overflow recovery: the provider rejected the request
+        outright, so keeping the full history is not an option. Returns None
+        when there is nothing left to drop, letting the caller surface the
+        original error instead of retrying an equally oversized request.
+        """
+        if len(messages) <= 1:
+            return None
+        # Summarize everything but the newest turn, then keep that turn
+        # verbatim. Keeping the summary (rather than only the tail) preserves
+        # the goal and the decisions — the part a retry needs to stay coherent.
+        older = messages[:-1]
+        tail = [_copy_message(messages[-1])]
+        while tail and tail[0].role == "tool":
+            # A tool result whose assistant call was dropped is invalid on the
+            # wire; drop it rather than sending an orphan.
+            tail.pop(0)
+        if not tail:
+            return None
+        summary = self._summarize(older, min(self.summary_max_chars, 1_200))
+        trimmed = [Message(role="assistant", content=summary), *tail]
+        trimmed = self._truncate_tool_payloads(trimmed)
+        return trimmed
 
     def _build_compacted(
         self,

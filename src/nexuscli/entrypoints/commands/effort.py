@@ -66,7 +66,7 @@ def _effort_command(arg: str, console: Console, agent: Agent) -> None:  # noqa: 
         return
     if not arg:
         level = next_effort_level(client.reasoning_effort)
-        client.reasoning_effort = None if level == "off" else level
+        _apply_level(client, level)
         _print_set(console, client, cycled=True)
         return
     level = arg.strip().lower()
@@ -75,8 +75,18 @@ def _effort_command(arg: str, console: Console, agent: Agent) -> None:  # noqa: 
     if level not in EFFORT_LEVELS:
         console.print(f"[red]{_usage_line()}[/red]")
         return
-    client.reasoning_effort = None if level == "off" else level
+    _apply_level(client, level)
     _print_set(console, client)
+
+
+def _apply_level(client, level: str) -> None:
+    """Store the level, and remember that "off" was a decision, not a default.
+
+    The wire payload is identical either way (no reasoning_effort field), but
+    the status bar needs to tell "I turned it off" from "never touched it".
+    """
+    client.reasoning_effort = None if level == "off" else level
+    client.reasoning_effort_explicit_off = level == "off"
 
 
 def _print_set(console: Console, client, *, cycled: bool = False) -> None:

@@ -36,7 +36,7 @@ uv run nexuscli cron next          # 每行：id  YYYY-MM-DD HH:MM（本地时�
 uv run nexuscli cron run <id>      # 原样打印该任务的 prompt 后退出——不执行任何东西
 ```
 
-`cron run` 的行为：任务不存在或已 `enabled: false` 时报错退出码 1；否则把 prompt 原样输出到 stdout。这是刻意的离线设计：执行交给外部调度器串联。
+`cron run` 的行为：任务不存在或已 `enabled: false` 时报错退出码 1；否则把 prompt 输出到 stdout。**输出是单行的**——prompt 内部的换行会被折叠成空格，因为多行输出在 `$(...)` 里会被 shell 拆成多个参数，`nexuscli -p "$(...)"` 就会失败。这是刻意的离线设计：执行交给外部调度器串联。
 
 ## 外部调度器触发模式
 

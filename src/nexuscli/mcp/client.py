@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import json
 import os
 import re
-from contextlib import asynccontextmanager, contextmanager
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager, contextmanager, suppress
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -19,11 +21,70 @@ from nexuscli.mcp.config import McpServerSpec, load_mcp_server_specs
 from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 
 
+class _ServerConnection:
+    """One long-lived MCP session, owned by a dedicated task.
+
+    The mcp transports are anyio context managers: entering and exiting them
+    from different tasks makes the anyio cancel scope complain ("Attempted to
+    exit cancel scope in a different task") and leaks the child process. So the
+    owner task enters the session, publishes it, and parks until aclose() asks
+    it to leave — enter and exit always happen in the same task.
+    """
+
+    def __init__(
+        self,
+        spec: McpServerSpec,
+        session_factory: Callable[[McpServerSpec], Any],
+    ):
+        self.spec = spec
+        self.loop = asyncio.get_running_loop()
+        self.lock = asyncio.Lock()
+        self._ready: asyncio.Future[Any] = self.loop.create_future()
+        self._stop = asyncio.Event()
+        self._task = self.loop.create_task(self._run(session_factory))
+
+    async def session(self) -> Any:
+        return await self._ready
+
+    @property
+    def alive(self) -> bool:
+        return not self._task.done()
+
+    async def aclose(self) -> None:
+        self._stop.set()
+        with suppress(Exception):
+            await self._task
+
+    def abandon(self) -> None:
+        """Drop a connection whose loop is gone without awaiting its task."""
+        self._stop.set()
+        with suppress(Exception):
+            self._task.cancel()
+
+    async def _run(self, session_factory: Callable[[McpServerSpec], Any]) -> None:
+        try:
+            async with session_factory(self.spec) as session:
+                self._ready.set_result(session)
+                await self._stop.wait()
+        except asyncio.CancelledError:
+            if not self._ready.done():
+                self._ready.cancel()
+            raise
+        except BaseException as exc:  # noqa: BLE001 - surfaced through session()
+            if not self._ready.done():
+                self._ready.set_exception(exc)
+                # The awaiting caller re-raises it; mark it retrieved so an
+                # unconsumed future cannot log "exception was never retrieved".
+                self._ready.exception()
+            return
+
+
 class McpClientManager:
     def __init__(self, project_root: str | Path):
         self.project_root = str(Path(project_root).resolve())
         self.specs = load_mcp_server_specs(self.project_root)
         self.last_errors: dict[str, str] = {}
+        self._connections: dict[str, _ServerConnection] = {}
 
     async def load_tools(self) -> list[Tool]:
         tools: list[Tool] = []
@@ -40,43 +101,76 @@ class McpClientManager:
         return tools
 
     async def list_server_tools(self, spec: McpServerSpec) -> list[Any]:
-        async with self._session(spec) as session:
+        async def operation(session: Any) -> list[Any]:
             result = await session.list_tools()
             return list(result.tools)
+
+        return await self._with_session(spec, operation)
 
     async def call_server_tool(
         self,
         spec: McpServerSpec,
         tool_name: str,
         arguments: dict[str, Any],
+        *,
+        required: tuple[str, ...] = (),
     ) -> ToolResult:
-        async with self._session(spec) as session:
+        """Call a remote tool, refusing locally when a required input is absent.
+
+        The remote server happily accepts a null for a required argument (the
+        audit's mini server echoed "echo: None"), so a missing key has to fail
+        here — before the request — where the message can name the tool and the
+        field instead of surfacing as a remote-side surprise.
+        """
+        missing = [key for key in required if arguments.get(key) is None]
+        if missing:
+            return ToolResult(
+                content=(
+                    f'MCP tool "{tool_name}" on server "{spec.name}" is missing required '
+                    f"input: {', '.join(missing)}. Not sent."
+                ),
+                is_error=True,
+            )
+
+        async def operation(session: Any) -> ToolResult:
             result = await session.call_tool(
                 tool_name,
                 arguments,
                 read_timeout_seconds=timedelta(seconds=spec.timeout),
             )
-        return ToolResult(content=_content_to_text(result.content), is_error=bool(result.isError))
+            return ToolResult(
+                content=_content_to_text(result.content), is_error=bool(result.isError)
+            )
+
+        return await self._with_session(spec, operation)
 
     async def list_resources(self, spec: McpServerSpec) -> ToolResult:
-        async with self._session(spec) as session:
+        async def operation(session: Any) -> ToolResult:
             result = await session.list_resources()
-        lines = [
-            f"{resource.uri} {resource.name or ''} {resource.description or ''}".strip()
-            for resource in result.resources
-        ]
-        return ToolResult("\n".join(lines) or "(no resources)")
+            lines = [
+                f"{resource.uri} {resource.name or ''} {resource.description or ''}".strip()
+                for resource in result.resources
+            ]
+            return ToolResult("\n".join(lines) or "(no resources)")
+
+        return await self._with_session(spec, operation)
 
     async def read_resource(self, spec: McpServerSpec, uri: str) -> ToolResult:
-        async with self._session(spec) as session:
+        async def operation(session: Any) -> ToolResult:
             result = await session.read_resource(AnyUrl(uri))
-        return ToolResult(_content_to_text(result.contents))
+            return ToolResult(_content_to_text(result.contents))
+
+        return await self._with_session(spec, operation)
 
     async def list_prompts(self, spec: McpServerSpec) -> ToolResult:
-        async with self._session(spec) as session:
+        async def operation(session: Any) -> ToolResult:
             result = await session.list_prompts()
-        lines = [f"{prompt.name} {prompt.description or ''}".strip() for prompt in result.prompts]
-        return ToolResult("\n".join(lines) or "(no prompts)")
+            lines = [
+                f"{prompt.name} {prompt.description or ''}".strip() for prompt in result.prompts
+            ]
+            return ToolResult("\n".join(lines) or "(no prompts)")
+
+        return await self._with_session(spec, operation)
 
     async def get_prompt(
         self,
@@ -84,9 +178,73 @@ class McpClientManager:
         name: str,
         arguments: dict[str, str] | None = None,
     ) -> ToolResult:
-        async with self._session(spec) as session:
+        async def operation(session: Any) -> ToolResult:
             result = await session.get_prompt(name, arguments or {})
-        return ToolResult(_content_to_text(result.messages))
+            return ToolResult(_content_to_text(result.messages))
+
+        return await self._with_session(spec, operation)
+
+    async def _with_session(
+        self, spec: McpServerSpec, operation: Callable[[Any], Awaitable[Any]]
+    ) -> Any:
+        """Run one MCP request on the server's long-lived session.
+
+        The session is reused across calls (a fresh server process per call
+        lost all server-side state and paid a cold start each time). A server
+        that died between calls leaves a dead connection behind, so a single
+        rebuild is attempted — but only then: a live session that raised is
+        never retried, or a tool with side effects could run twice.
+        """
+        for attempt in (1, 2):
+            connection = await self._connection(spec)
+            try:
+                session = await connection.session()
+            except Exception:
+                # Connection setup failed: report it once, exactly like the
+                # per-call sessions did (a bad command or a 401 must not turn
+                # into a second startup attempt).
+                await self._drop(spec.name, connection)
+                raise
+            try:
+                async with connection.lock:
+                    return await operation(session)
+            except Exception:
+                dead = not connection.alive
+                await self._drop(spec.name, connection)
+                if attempt == 2 or not dead:
+                    raise
+        raise AssertionError("unreachable: the retry loop always returns or raises")
+
+    async def _connection(self, spec: McpServerSpec) -> _ServerConnection:
+        loop = asyncio.get_running_loop()
+        connection = self._connections.get(spec.name)
+        if connection is not None and connection.loop is not loop:
+            # A previous event loop owned that session; its task died with the
+            # loop, so only the stale reference is left to forget.
+            self._connections.pop(spec.name, None)
+            connection = None
+        if connection is not None and not connection.alive:
+            await self._drop(spec.name, connection)
+            connection = None
+        if connection is None:
+            connection = _ServerConnection(spec, self._session)
+            self._connections[spec.name] = connection
+        return connection
+
+    async def _drop(self, name: str, connection: _ServerConnection) -> None:
+        if self._connections.get(name) is connection:
+            self._connections.pop(name, None)
+        if connection.loop is asyncio.get_running_loop():
+            await connection.aclose()
+        else:
+            # Owned by another (usually already closed) loop: awaiting it here
+            # would hang or raise, so only the stale reference is released.
+            connection.abandon()
+
+    async def aclose(self) -> None:
+        """Close every open server session, terminating the child processes."""
+        for name, connection in list(self._connections.items()):
+            await self._drop(name, connection)
 
     async def _tools_for_server(self, spec: McpServerSpec) -> list[Tool]:
         remote_tools = await self.list_server_tools(spec)
@@ -99,6 +257,7 @@ class McpClientManager:
             schema = remote_tool.inputSchema or object_schema({})
             annotations = getattr(remote_tool, "annotations", None)
             read_only = bool(getattr(annotations, "readOnlyHint", False))
+            required = _required_inputs(schema)
 
             async def handler(
                 payload: dict[str, Any],
@@ -106,9 +265,12 @@ class McpClientManager:
                 *,
                 server_spec: McpServerSpec = spec,
                 remote_name: str = tool_name,
+                required_inputs: tuple[str, ...] = required,
             ) -> ToolResult:
                 _ = context
-                return await self.call_server_tool(server_spec, remote_name, payload)
+                return await self.call_server_tool(
+                    server_spec, remote_name, payload, required=required_inputs
+                )
 
             wrapped.append(
                 Tool(
@@ -304,6 +466,21 @@ class McpClientManager:
             path = os.devnull
         with open(path, "a", encoding="utf-8") as handle:
             yield handle
+
+
+def _required_inputs(schema: Any) -> tuple[str, ...]:
+    """Required argument names declared by a remote tool's JSON input schema.
+
+    Only top-level ``required`` names are collected: nested object properties
+    are the remote server's business, while a missing top-level argument is
+    exactly the case that used to reach the server as an explicit null.
+    """
+    if not isinstance(schema, dict):
+        return ()
+    required = schema.get("required")
+    if not isinstance(required, (list, tuple)):
+        return ()
+    return tuple(str(name) for name in required)
 
 
 def _tool_matches(pattern: str, tool_name: str) -> bool:

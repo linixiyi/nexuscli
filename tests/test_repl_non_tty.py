@@ -39,8 +39,12 @@ def test_start_repl_non_tty_prints_guidance_and_exits_1(tmp_path, monkeypatch, c
         asyncio.run(repl.start_repl(str(tmp_path), NexusCliConfig()))
 
     assert excinfo.value.code == 1
-    # rich soft-wraps the 86-char guidance at the default 80-column width, so
-    # the content assertions compare whitespace-normalized text, not layout.
-    out = " ".join(capsys.readouterr().out.split())
-    assert "Interactive REPL needs a terminal" in out
-    assert 'nexuscli -p "<prompt>"' in out
+    # The guidance goes to stderr: on a pipeline stdout is data, and a
+    # diagnostic written there corrupts whatever the caller was collecting.
+    # It is also emitted as one line so it never reads like a wrapped crash.
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    err = captured.err
+    assert "Interactive REPL needs a terminal" in err
+    assert 'nexuscli -p "<prompt>"' in err
+    assert err.count("\n") == 1

@@ -5,6 +5,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from nexuscli import __version__
 from nexuscli.config import load_config
@@ -102,30 +103,101 @@ async def serve_stdio(cwd: str | None = None) -> None:
         print(json.dumps(response, ensure_ascii=False), flush=True)
 
 
-def serve_http(port: int = 3000, cwd: str | None = None) -> None:
-    root = str(Path(cwd or ".").resolve())
+# 只开这两个入口：一个短路径，一个 MCP 惯例路径。其他路径一律 404，避免把
+# 任何未知 URL 当成 JSON-RPC 端点（修复前 POST /random/path 也返回 200）。
+_ALLOWED_PATHS = ("/", "/mcp")
 
+# 浏览器发起的跨源请求必须带 Origin；非浏览器客户端（curl、SDK）通常不带。
+# 只放行本机来源，其余一律拒绝——否则本机任意网页都能 POST 到 127.0.0.1 跑 bash。
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+_SSE_UNSUPPORTED = (
+    "This endpoint speaks JSON-RPC over POST only. "
+    "SSE streaming (GET) is not supported by the NexusCLI MCP server.\n"
+)
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    try:
+        hostname = urlsplit(origin).hostname
+    except ValueError:
+        return False
+    # urlsplit strips the IPv6 brackets, so the set holds the bare "::1".
+    return hostname is not None and hostname.lower() in _LOOPBACK_HOSTS
+
+
+def _handler_class(root: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        def _send(
+            self,
+            status: int,
+            body: bytes,
+            content_type: str,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
+            self.send_response(status)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(body)))
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, value)
+            self.end_headers()
+            # HEAD 只回头部；写正文会让客户端把多余的字节当成下一个响应。
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _send_text(self, status: int, text: str, **headers: str) -> None:
+            self._send(status, text.encode("utf-8"), "text/plain; charset=utf-8", headers)
+
+        def _reject_method(self) -> None:
+            # 路径先判：未知 URL 不存在，比"方法不对"更准确。
+            if urlsplit(self.path).path not in _ALLOWED_PATHS:
+                self._send_text(404, "Not found\n")
+                return
+            self._send_text(405, _SSE_UNSUPPORTED, allow="POST")
+
+        do_GET = _reject_method  # noqa: N815 - stdlib naming
+        do_HEAD = _reject_method  # noqa: N815
+        do_PUT = _reject_method  # noqa: N815
+        do_DELETE = _reject_method  # noqa: N815
+        do_PATCH = _reject_method  # noqa: N815
+
         def do_POST(self) -> None:  # noqa: N802 - stdlib API
+            if urlsplit(self.path).path not in _ALLOWED_PATHS:
+                self._send_text(404, "Not found\n")
+                return
+            origin = self.headers.get("origin")
+            if origin is not None and not _is_loopback_origin(origin):
+                # 浏览器跨源请求：拒绝且不回 CORS 头，页面读不到响应也发不出工具调用。
+                self._send_text(403, "Cross-origin requests are not allowed.\n")
+                return
+            # http.client 在缺省时把 content-type 报成 text/plain，缺头同样落到这里：
+            # 浏览器能伪造的简单请求类型（text/plain、form）一律挡在解析之前。
+            if self.headers.get_content_type() != "application/json":
+                self._send_text(415, "Expected content-type: application/json\n")
+                return
             length = int(self.headers.get("content-length") or 0)
             raw = self.rfile.read(length).decode("utf-8")
             try:
                 request = json.loads(raw)
                 response = asyncio.run(_handle_request(request, root))
-                status = 200
             except Exception as exc:  # noqa: BLE001
                 response = {"jsonrpc": "2.0", "error": {"message": str(exc)}}
-                status = 200
             body = json.dumps(response, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("content-type", "application/json")
-            self.send_header("content-length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send(200, body, "application/json")
 
         def log_message(self, _format: str, *args: Any) -> None:
             return
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    return Handler
+
+
+def _make_server(port: int, root: str) -> ThreadingHTTPServer:
+    """Build the loopback server without serving; port 0 picks a free port."""
+    return ThreadingHTTPServer(("127.0.0.1", port), _handler_class(root))
+
+
+def serve_http(port: int = 3000, cwd: str | None = None) -> None:
+    root = str(Path(cwd or ".").resolve())
+    server = _make_server(port, root)
     print(f"NexusCLI MCP server listening on http://127.0.0.1:{port}", flush=True)
     server.serve_forever()

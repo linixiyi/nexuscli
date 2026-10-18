@@ -28,6 +28,7 @@ DOC_META = {
     "slash-commands": ("🪄", "markdown 提示词、frontmatter 与占位符注入"),
     "spec-skill": ("📐", "规范驱动开发技能的核心概念与质量门禁"),
     "subagents": ("🧩", "后台委派、自定义代理定义与文件邮箱"),
+    "testing-matrix": ("🧭", "147 个用户表面的测试状态：测过什么、没测过什么"),
     "workflows": ("🔀", "JSON 步骤图 DAG、依赖批次并行与内置专家流程"),
 }
 
@@ -45,6 +46,7 @@ PAGER_ORDER = [
     "cron",
     "eval",
     "spec-skill",
+    "testing-matrix",
 ]
 
 FAVICON = (

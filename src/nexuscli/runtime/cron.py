@@ -186,11 +186,18 @@ def next_trigger(
 
     A task whose ``cron`` fails to parse (or that matches no time within a
     year) stays in the result with ``None`` instead of aborting the whole
-    listing — the CLI renders such entries as a ``[warn]`` line.
+    listing — the CLI renders such entries as a ``[warn]`` line. A task with
+    ``enabled: false`` also yields ``None``: it will never fire, and printing
+    a time for it would schedule work that ``cron run`` then refuses.
     """
     moment = now if now is not None else _now()
     results: list[tuple[CronTask, datetime | None]] = []
     for task in list_tasks(path):
+        if not task.enabled:
+            # A disabled task can never fire, so publishing a time for it made
+            # external schedulers trigger work ``cron run`` then refuses.
+            results.append((task, None))
+            continue
         try:
             upcoming = next_run(parse_cron(task.cron), moment)
         except CronError:
