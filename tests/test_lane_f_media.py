@@ -238,9 +238,7 @@ def test_write_file_surfaces_syntax_diagnostic_line_and_reason(tmp_path, monkeyp
     tool, context = _write_tool_context(tmp_path, monkeypatch)
 
     broken = asyncio.run(
-        tool.execute(
-            {"path": "broken.py", "content": "def nope(:\n    pass\n"}, context
-        )
+        tool.execute({"path": "broken.py", "content": "def nope(:\n    pass\n"}, context)
     )
     assert not broken.is_error
     # The user-facing result names the file, then the diagnostic: line number

@@ -28,12 +28,12 @@ def calculate_tax(amount):
     return amount * 0.2
 '''
 
-UTILS_PY = '''TIMEOUT_SECONDS = 30
+UTILS_PY = """TIMEOUT_SECONDS = 30
 
 
 def retry_failed_request(url):
     return f"retrying {url}"
-'''
+"""
 
 
 def _make_project(tmp_path: Path) -> None:

@@ -32,6 +32,11 @@ def _console() -> Console:
     return Console(file=io.StringIO(), width=200)
 
 
+def _has_box_drawing(text: str) -> bool:
+    """True when any Rich box/border glyph survives in the plain output."""
+    return any(ch in text for ch in "─│┌┐└┘├┤┬┴┼═║╭╮╯╰")
+
+
 def _run_slash(raw: str, console: Console, tmp_path, state) -> bool:
     return asyncio.run(
         _handle_slash(
@@ -161,9 +166,12 @@ def test_history_slash_lists_hits_with_resume_hint(tmp_path):
 
     assert should_exit is False
     text = console.file.getvalue()
+    assert "NexusCLI History" in text
     assert writer.meta.id in text
     assert "fix the login bug" in text
     assert "/resume" in text
+    # Frameless pi-style listing: no Rich box/border characters.
+    assert not _has_box_drawing(text)
 
 
 def test_history_slash_no_matches_prints_placeholder(tmp_path):

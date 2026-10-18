@@ -89,4 +89,4 @@ def test_static_project_instructions_untouched_by_wording_change(tmp_path, monke
     # No recalled content in the static prefix (the guideline line may name
     # the block, but no memory item is embedded there).
     assert "<recalled-memory" not in static
-    assert '<project-constraints trust=' not in static
+    assert "<project-constraints trust=" not in static

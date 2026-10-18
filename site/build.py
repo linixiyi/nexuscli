@@ -1,6 +1,13 @@
 # Local docs-site generator.
 # Renders docs/*.md + TUTORIAL.md into site/ HTML pages with a shared shell.
-# Run: uv run --with markdown,pygments python site/build.py
+#
+# Canonical run command (the only supported one):
+#   uv run --with markdown,pygments python site/build.py
+# markdown is NOT a project dependency (absent from pyproject.toml
+# `dependencies` and from uv.lock); pygments appears in uv.lock only as a
+# transitive dep of rich/pytest. --with provisions both explicitly and
+# ephemerally. Plain `.venv/bin/python site/build.py` only works on machines
+# where someone hand-installed markdown into .venv — do not rely on it.
 from __future__ import annotations
 
 import html

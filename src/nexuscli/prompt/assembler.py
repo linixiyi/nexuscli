@@ -174,7 +174,8 @@ class PromptAssembler:
                 # Directive phrasing per item: live runs showed models weigh
                 # "workspace is empty" over a passive bullet, so each binding
                 # item is framed as a rule, not as data.
-                f"- 必须遵守的项目约定：{item.content}" for item in binding
+                f"- 必须遵守的项目约定：{item.content}"
+                for item in binding
             )[:6_000]
             constraint_block = "\n".join(
                 [

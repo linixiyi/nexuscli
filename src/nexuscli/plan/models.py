@@ -210,14 +210,10 @@ class ExecutionPlan:
         # as 首批任务 reads like those tasks will run again. Point the line at
         # the first batch that still has pending work instead.
         pending_batches = [
-            batch
-            for batch in batches
-            if any(task.status != TaskStatus.COMPLETED for task in batch)
+            batch for batch in batches if any(task.status != TaskStatus.COMPLETED for task in batch)
         ]
         first_batch = (
-            ", ".join(task.id for task in pending_batches[0])
-            if pending_batches
-            else "无(全部完成)"
+            ", ".join(task.id for task in pending_batches[0]) if pending_batches else "无(全部完成)"
         )
         final_batch = ", ".join(task.id for task in batches[-1]) if batches else "无"
         return (

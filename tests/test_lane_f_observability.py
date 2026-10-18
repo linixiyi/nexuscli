@@ -258,9 +258,7 @@ def test_debug_dump_from_config_wiring_and_dump_shows_request(tmp_path, monkeypa
     dump_path = (
         tmp_path / "home" / ".nexuscli" / "debug" / "llm" / f"{datetime.now():%Y-%m-%d}.jsonl"
     )
-    records = [
-        json.loads(line) for line in dump_path.read_text(encoding="utf-8").splitlines()
-    ]
+    records = [json.loads(line) for line in dump_path.read_text(encoding="utf-8").splitlines()]
     assert [r["direction"] for r in records] == ["request", "response"]
     serialized = json.dumps(records[0]["payload"], ensure_ascii=False)
     assert _DUMP_MARKER in serialized, "the request dump must show the user's message"
