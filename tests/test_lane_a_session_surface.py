@@ -56,9 +56,9 @@ def _run_slash(raw: str, console: Console, cwd: str, agent, state: ReplSessionSt
     )
 
 
-def _make_state(tmp_path: Path, *, messages: list[Message] | None = None) -> tuple[
-    ReplSessionState, SessionStore
-]:
+def _make_state(
+    tmp_path: Path, *, messages: list[Message] | None = None
+) -> tuple[ReplSessionState, SessionStore]:
     store = SessionStore(root=tmp_path / "sessions")
     writer = store.new_writer(cwd=str(tmp_path), model="m1", provider="deepseek")
     if messages:

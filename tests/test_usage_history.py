@@ -74,6 +74,11 @@ class _BoomStore:
         raise RuntimeError("boom")
 
 
+def _has_box_drawing(text: str) -> bool:
+    """True when any Rich box/border glyph survives in the plain output."""
+    return any(ch in text for ch in "─│┌┐└┘├┤┬┴┼═║╭╮╯╰")
+
+
 def test_record_and_stats_roundtrip(tmp_path, monkeypatch):
     home = _isolate_home(tmp_path, monkeypatch)
     store = UsageStore()
@@ -183,8 +188,11 @@ def test_usage_slash_keeps_turn_display_and_adds_stats(tmp_path, monkeypatch):
     stats_console = _console()
     _run_slash("/usage stats 7", stats_console, tmp_path, config, agent)
     stats_text = _console_text(stats_console)
-    assert "Usage" in stats_text
+    assert "NexusCLI Usage" in stats_text
+    assert "By model" in stats_text
     assert "turns" in stats_text
+    # Frameless pi-style stats: no Rich box/border characters.
+    assert not _has_box_drawing(stats_text)
 
     bad_console = _console()
     _run_slash("/usage stats abc", bad_console, tmp_path, config, agent)

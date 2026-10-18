@@ -18,8 +18,14 @@ from nexuscli.config import NexusCliConfig
 from nexuscli.entrypoints.commands.approval import _summarize_input
 from nexuscli.entrypoints.commands.skill import _skill_command
 from nexuscli.entrypoints.repl import ReplSessionState, _handle_slash
+from nexuscli.policy.audit_log import AuditLog
 from nexuscli.render import RichRenderer
 from nexuscli.session import SessionStore
+
+
+def _has_box_drawing(text: str) -> bool:
+    """True when any Rich box/border glyph survives in the plain output."""
+    return any(ch in text for ch in "─│┌┐└┘├┤┬┴┼═║╭╮╯╰")
 
 
 def _config(tmp_path: Path) -> NexusCliConfig:
@@ -106,6 +112,32 @@ def test_audit_prints_a_table_not_json(tmp_path: Path) -> None:
 
     out = console.file.getvalue()
     assert "(no audit records)" in out
+
+
+def test_audit_with_records_is_a_frameless_four_column_summary(tmp_path: Path) -> None:
+    """The records path of /audit: heading, four dim headers, no box glyphs."""
+    config = _config(tmp_path)
+    AuditLog(config.policy.audit_log_path).record(
+        tool_name="bash",
+        input_data={"command": "ls"},
+        outcome="success",
+        approver="auto",
+        cwd=str(tmp_path),
+    )
+    console = _console()
+
+    asyncio.run(
+        _handle_slash("/audit", console, str(tmp_path), config, _agent(), None, None, None, None)
+    )
+
+    out = console.file.getvalue()
+    assert "NexusCLI Audit" in out
+    assert "— last 1" in out
+    for header in ("time", "tool", "outcome", "approver"):
+        assert header in out, f"audit summary lost the {header!r} column"
+    assert "bash" in out and "success" in out and "auto" in out
+    # Frameless pi-style listing: no Rich box/border characters.
+    assert not _has_box_drawing(out)
 
 
 def test_help_mentions_the_real_key_bindings(tmp_path: Path) -> None:

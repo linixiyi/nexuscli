@@ -655,11 +655,7 @@ async def _reject_outside_write_scope(command: str, context: ToolContext) -> Too
     # inner write-scope prompt must not re-ask for the same call. hitl_mode
     # "always" keeps asking, mirroring the executor.
     permission = evaluate_permissions(context.config.permissions, "bash", {"command": command})
-    if (
-        permission
-        and permission.action == "allow"
-        and context.config.policy.hitl_mode != "always"
-    ):
+    if permission and permission.action == "allow" and context.config.policy.hitl_mode != "always":
         return None
     preview = ", ".join(targets[:5]) + ("..." if len(targets) > 5 else "")
     reason = f"Static analysis found a write target outside the workspace: {preview}"

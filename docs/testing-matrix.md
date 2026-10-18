@@ -33,9 +33,9 @@
 | 1.4 | `--plain` 无 ANSI 输出 | 管道给文件或别的工具 | `test_render.py` | `od -c` 确认无转义序列 | ✅ |
 | 1.5 | 非 TTY stdin | `echo hi \| nexuscli`，期望友好提示 + exit 1 | `test_repl_non_tty.py` | 实测 exit=1 且提示指向 `-p` | ✅ |
 | 1.6 | `--resume <id>` / `-c` 跨进程恢复 | 昨天聊到一半，今天接着聊 | `test_session_store.py` | 真实网关：能答出上一会话的 codeword | ✅ |
-| 1.7 | `doctor` 环境自检 | 装完第一件事就是跑它看缺什么 | 无 | 实测输出 Python/uv/Node/rg/key 五项 | 🟠 |
+| 1.7 | 【收口】`doctor` 环境自检 | 装完第一件事就是跑它看缺什么 | `test_doctor_surface.py` | 实测输出 Python/uv/Node/rg/key 五项;子进程断言五节结构 | ✅ |
 | 1.8 | `sessions` 列表 | 找回上周那个会话 | `test_session_store.py` | 实测列出会话 | ✅ |
-| 1.9 | `--version` | 报 bug 时贴版本 | 无 | 实测 `nexuscli 0.1.0` | 🟠 |
+| 1.9 | 【收口】`--version` | 报 bug 时贴版本 | `test_plain_exits.py` | 实测输出;断言动态跟随 `__version__` | ✅ |
 | 1.10 | 【本轮】`-p --yes` 非交互放行 | CI 里让它真的跑命令 | `test_cli_single_prompt.py` | 实测 `touch made.txt` 真的落盘；不带 `--yes` 仍被拒 | ✅ |
 | 1.11 | 【本轮】`-p` 端口占用/启动错误 | 端口撞了要知道换哪个 | `test_cli.py` | 实测 `Port 63644 is already in use. Try --port <other>.`，无 traceback | ✅ |
 
@@ -62,12 +62,12 @@
 | 3.2 | `Shift+Tab` 三态循环 | 临时切 auto 放行、切 plan 只读 | `test_permission_mode.py` | pty 实测 Default→Auto→plan→Default | ✅ |
 | 3.3 | 【已修】窄终端下的状态栏（≤60 列） | 分屏或小窗口里用 | `test_render.py` | 48 列 pty 实测模式名保留：`cbcn/glm-5.3-flash  Default  ⇧Tab` | ✅ |
 | 3.4 | 回合中途 Ctrl+C | 发现方向错了立刻打断 | 无（上一轮补的 pty 验证） | pty 实测：修复前杀进程，修复后中止回合且 `/exit` 正常 | ✅ |
-| 3.5 | 空 prompt 上 Ctrl+C | 想清屏/退出 | 无 | pty 实测 exit=0 | 🟠 |
-| 3.6 | Ctrl+D 退出 | 惯用退出键 | 无 | pty 实测 exit=0 | 🟠 |
+| 3.5 | 【收口】空 prompt 上 Ctrl+C | 想清屏/退出 | `test_plain_exits.py` | pty 实测 exit=0;自动化同断言(POSIX skipif win32) | ✅ |
+| 3.6 | 【收口】Ctrl+D 退出 | 惯用退出键 | `test_plain_exits.py` | pty 实测 exit=0;自动化同断言 | ✅ |
 | 3.7 | 【已修】斜杠命令 Tab 补全 | 打 `/sk` 按 Tab 补成 `/skill` | `test_slash_completion.py` | pty 实测 `/sk<Tab>` → `/skill` | ✅ |
 | 3.8 | 【已修】placeholder 文案 | 照着提示敲图片路径 | `test_repl.py` | pty 实测 `Type your message or @image:path/to/file` | ✅ |
 | 3.9 | 中文输入输出 | 全程中文对话 | `test_render.py` | pty 实测 60 列无超宽 | ✅ |
-| 3.10 | bracketed paste | 粘贴多行代码 | 无 | pty 实测换行保留 | 🟠 |
+| 3.10 | 【收口】bracketed paste | 粘贴多行代码 | `test_plain_exits.py` | pty 实测换行保留;自动化同断言 | ✅ |
 | 3.11 | 长回答（>200 行） | 让它输出一份清单 | `test_render.py` | 实测换行曾折叠成一段（上一轮修复） | ✅ |
 | 3.12 | 【本轮】`/clear` 重绘 | 换话题，清上下文 | `test_repl_ux.py` | pty 实测重绘 banner（35 行输出） | ✅ |
 | 3.13 | 【本轮】`/compact` 压缩预算 | 主动瘦身 | `test_context.py` | pty 实测空历史回 `(no conversation history to compact)`；有历史时压缩后必须变小，否则如实报 | ✅ |
@@ -81,14 +81,14 @@
 | `/clear` | 换话题，清上下文 | 2 | 【本轮】pty 实测重绘 banner | ✅ |
 | `/resume` | 切回某个历史会话 | 3 | pty 实测列表可读、`/resume 1` 恢复行带 id/条数/标题,跨进程答出上一会话暗号 | ✅ |
 | `/history` | 找上周问过的问题 | 1 | pty 实测 `/history 紫罗兰 --all` 4 列表格命中刚问的问题(evidence/main-history.md) | ✅ |
-| `/context` | 看当前上下文占了多少 | 0 | pty 实测表格正确 | 🟠 |
+| `/context` | 看当前上下文占了多少 | `test_slash_surfaces_docs.py` | pty 实测表格正确;直驱断言可读 | ✅ |
 | `/compact` | 手动压一次上下文 | 1 | 【本轮】pty 实测空历史如实回报 | ✅ |
 | `/memory` | 看记住了什么 | `test_lane_b_memory_surface.py` | pty 实测列表/搜索/统计/删除各态可读 | ✅ |
 | `/save` | 存一条长期记忆(`<fact>` 进 MemoryManager;会话本身由回合自动持久化) | `test_lane_a_session_surface.py` | pty 实测 `Saved memory #1` 可读,sessions 列表由自动持久化覆盖(行描述按实现语义更正) | ✅ |
 | `/config` | 核对生效配置 | 0 | 【本轮】pty 实测摘要 43 行、无 JSON dump | ✅ |
-| `/tools` | 看有哪些工具 | 0 | pty 实测列出 27 个 | 🟠 |
+| `/tools` | 看有哪些工具 | `test_slash_surfaces_docs.py` | pty 实测列出 27 个;直驱断言 | ✅ |
 | `/hitl` | 切审批档位 | `test_lane_e_tool_surfaces.py` | pty 实测切档、状态栏、错误提示联动;`/hitl never` 下带 `2>/dev/null` 纯读命令零审批直通(round2 复验) | ✅ |
-| `/policy` | 核对安全策略 | 0 | pty 实测摘要（同 /config） | 🟠 |
+| `/policy` | 核对安全策略 | `test_slash_surfaces_docs.py` | pty 实测摘要;直驱断言 | ✅ |
 | `/audit` | 查刚才那条为什么被拒 | 0 | 【本轮】pty 实测输出 4 列摘要表 | ✅ |
 | `/index` | 建代码索引 | `test_lane_b_index_search.py` | pty 实测计数与源文件非空行一致 | ✅ |
 | `/search` | 语义搜代码 | `test_lane_b_index_search.py` | pty 实测命中 path:line 与源码一致 | ✅ |
@@ -96,7 +96,7 @@
 | `/plan` | 进入 Plan-and-Execute | 1 | 真实网关跑通 | ✅ |
 | `/team` | 进入多代理 | 0 | pty 实测 REPL 内最小规模真实网关跑通,Phase 1/2 可读;`--mode plan` 用户 pin 生效(round2) | ✅ |
 | `/model` | 切模型 | `test_model_selector.py`、`test_lane_e_tool_surfaces.py` | pty 实测上下选/回车切换/Esc 取消、无密钥报对变量名;拉取列表含 视觉✓ 徽标(round2 补) | ✅ |
-| `/usage` | 看这轮烧了多少 token | 2 | pty 实测四行状态表 | 🟠 |
+| `/usage` | 看这轮烧了多少 token | 2、`test_slash_surfaces_docs.py` | pty 实测四行状态表;直驱断言网格行内容 | ✅ |
 | `/skill` | 加载技能 | 2 | 【已修】pty 实测 `Unknown skill: "nosuchskill". Available: web-access` | ✅ |
 | `/mcp` | 看接了哪些 MCP | `test_repl_mcp_status.py` | pty 实测列出 server 名/类型/命令/工具数、disabled、error 行(F3 修复后 round2 复验) | ✅ |
 | `/task` | 派子代理(持久任务队列) | `test_lane_c_team_task.py` | pty 实测入队→真实 worker 消费→`/task log` 取回结果 | ✅ |
@@ -246,8 +246,8 @@
 
 | 状态 | 数量 | 含义 |
 |---|---|---|
-| ✅ 已测 | 137 | 机器验证 + 真实运行都有 |
-| 🟠 仅真人 | 9 | 真实跑过，但没有自动化断言护着 |
+| ✅ 已测 | 146 | 机器验证 + 真实运行都有 |
+| 🟠 仅真人 | 0 | —（2026-10-19 发布收口轮补齐九项断言） |
 | 🟡 仅机器 | 1 | 有断言，真实端到端被上游环境卡住（14.2 远程图片，CLI 契约 wire 级已证） |
 | ⬜ 未测 | 0 | — |
 | **合计** | **147** | |
@@ -261,8 +261,7 @@
 ### 仍然没测的
 
 1. **14.2 远程图片端到端**：上游网关当前拒收一切远程图片 URL（CLI 直传契约已由 wire dump 证实正确），待上游恢复复跑即可置绿。
-2. **🟠 9 项**仍缺自动化断言：`doctor`、`--version`、`/context`、`/tools`、`/policy`、`/usage`、空 prompt Ctrl+C、Ctrl+D、bracketed paste。
-3. **低危接受项**：loop 止损文案单复数（"1 turns"）、/expert 中游子代理空产出仅在最终报告可见、弱模型对召回约束的遵守是概率性的（对抗问法下不保证）。
+2. **低危接受项**：loop 止损文案单复数（"1 turns"）、/expert 中游子代理空产出仅在最终报告可见、弱模型对召回约束的遵守是概率性的（对抗问法下不保证）、站点 .brand-logo 渐变白字（WCAG logo 豁免）。
 
 ---
 

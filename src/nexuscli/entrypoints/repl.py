@@ -462,16 +462,19 @@ async def _handle_slash(
         _history_command(arg, console, session_state.store, cwd)
     elif command == "/context":
         memories = MemoryManager(config.memory.long_term_db_path, scope=cwd).list(limit=5)
-        table = Table(title="NexusCLI Context")
-        table.add_column("Field")
-        table.add_column("Value")
-        table.add_row("cwd", cwd)
-        table.add_row("model", f"{config.llm.model} ({config.llm.provider})")
-        table.add_row("context window", str(agent.llm_client.max_context_window))
-        table.add_row("render", config.render_mode)
-        table.add_row("memory", f"{len(memories)} recent entries")
-        table.add_row("tools", str(len(registry.list_names())))
-        console.print(table)
+        # Frameless summary, same language as /config /policy: a bold heading
+        # line, then a headerless two-column grid — no box characters.
+        console.print("[bold]NexusCLI Context[/bold]")
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(style="bold")
+        grid.add_column()
+        grid.add_row("cwd", cwd)
+        grid.add_row("model", f"{config.llm.model} ({config.llm.provider})")
+        grid.add_row("context window", str(agent.llm_client.max_context_window))
+        grid.add_row("render", config.render_mode)
+        grid.add_row("memory", f"{len(memories)} recent entries")
+        grid.add_row("tools", str(len(registry.list_names())))
+        console.print(grid)
     elif command == "/compact":
         if len(agent.history) <= 1:
             console.print("(no conversation history to compact)")
@@ -497,15 +500,18 @@ async def _handle_slash(
                 console.print("(nothing to compact: the summary would be larger than the history)")
             else:
                 agent.history = result.messages
-                table = Table(title="NexusCLI Compaction")
-                table.add_column("Field")
-                table.add_column("Value")
-                table.add_row("tokens before", str(result.estimated_tokens_before))
-                table.add_row("tokens after", str(result.estimated_tokens_after))
-                table.add_row("summarized messages", str(result.summarized_messages))
+                # Frameless, same language as /context above: heading line plus
+                # a headerless grid, no box characters.
+                console.print("[bold]NexusCLI Compaction[/bold]")
+                grid = Table.grid(padding=(0, 2))
+                grid.add_column(style="bold")
+                grid.add_column()
+                grid.add_row("tokens before", str(result.estimated_tokens_before))
+                grid.add_row("tokens after", str(result.estimated_tokens_after))
+                grid.add_row("summarized messages", str(result.summarized_messages))
                 if arg:
-                    table.add_row("focus", arg)
-                console.print(table)
+                    grid.add_row("focus", arg)
+                console.print(grid)
     elif command == "/memory":
         await _memory_command(arg, console, cwd, config)
     elif command == "/save":
@@ -575,18 +581,30 @@ async def _handle_slash(
         if not events:
             console.print("(no audit records)")
         else:
-            table = Table(title=f"NexusCLI Audit — last {len(events)}")
-            for column in ("time", "tool", "outcome", "approver"):
-                table.add_column(column)
+            # Frameless listing, same language as /history and /sessions: a
+            # bold heading line, one dim header row, then a grid — no box
+            # characters.
+            console.print(f"[bold]NexusCLI Audit[/bold] [dim]— last {len(events)}[/dim]")
+            grid = Table.grid(padding=(0, 2))
+            grid.add_column(no_wrap=True)
+            grid.add_column()
+            grid.add_column()
+            grid.add_column()
+            grid.add_row(
+                "[dim]time[/dim]",
+                "[dim]tool[/dim]",
+                "[dim]outcome[/dim]",
+                "[dim]approver[/dim]",
+            )
             for event in events:
                 stamp = str(event.get("timestamp") or "")
-                table.add_row(
+                grid.add_row(
                     stamp[11:19] if len(stamp) >= 19 else stamp,
                     str(event.get("tool_name") or ""),
                     str(event.get("outcome") or ""),
                     str(event.get("approver") or ""),
                 )
-            console.print(table)
+            console.print(grid)
     elif command == "/index":
         count = CodeIndex(cwd).rebuild(arg or ".")
         console.print(f"Indexed {count} code lines.")

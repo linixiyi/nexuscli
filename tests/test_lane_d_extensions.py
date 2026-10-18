@@ -97,9 +97,7 @@ def test_custom_command_trigger_applies_hints_and_restores(tmp_path):
     # Simulate exactly what repl.py:326-335 does with the matched expansion.
     match = asyncio.run(_match_custom_command("/ship the renderer", commands, config))
     assert match is not None, "the user's /ship command must match a defined command"
-    asyncio.run(
-        _run_custom_command(agent, _FakeRenderer(), Console(), permission_mode, match[1])
-    )
+    asyncio.run(_run_custom_command(agent, _FakeRenderer(), Console(), permission_mode, match[1]))
 
     # The prompt reached the agent with arguments substituted in.
     assert agent.run_prompts == ["Ship the renderer following the release checklist."]
@@ -183,9 +181,7 @@ def test_project_reviewer_agent_selected_by_task_tool(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     client = _CapturingFakeClient()
-    monkeypatch.setattr(
-        "nexuscli.llm.factory.create_llm_client", lambda _config, **_kwargs: client
-    )
+    monkeypatch.setattr("nexuscli.llm.factory.create_llm_client", lambda _config, **_kwargs: client)
     config = NexusCliConfig()
     config.llm.api_key = "key"
     config.policy.audit_log_path = str(tmp_path / "audit.jsonl")

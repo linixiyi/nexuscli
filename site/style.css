@@ -9,10 +9,12 @@
   --border-strong: rgba(148, 163, 184, 0.28);
   --text: #dbe3f0;
   --muted: #8b96a9;
-  --faint: #647089;
+  /* dimmer than --muted but kept >= 4.5:1 on bg/surface/surface-2/code-bg */
+  --faint: #7c88a0;
   --accent: #7c5cff;
   --accent-2: #22d3ee;
   --green: #34d399;
+  --warn: #f5c26b;
   --link: #9db4ff;
   --code-bg: #0c101a;
   --shadow: 0 12px 40px rgba(2, 6, 18, 0.5);
@@ -30,7 +32,12 @@
   --border-strong: rgba(15, 23, 42, 0.22);
   --text: #1c2537;
   --muted: #5b6779;
-  --faint: #8894a6;
+  /* dimmer than --muted but kept >= 4.5:1 on bg/surface/code-bg */
+  --faint: #5f6b7d;
+  /* dark-theme cyan/green sit under 2:1 on light surfaces; darken for text use */
+  --accent-2: #0e7490;
+  --green: #047857;
+  --warn: #92600a;
   --link: #4056c9;
   --code-bg: #f0f2f7;
   --shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
@@ -55,6 +62,7 @@ body {
 
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 
 /* ---------- Nav ---------- */
 .nav {
@@ -241,7 +249,13 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .btn:hover { text-decoration: none; transform: translateY(-1px); }
 .btn-primary {
   color: #fff;
-  background: linear-gradient(92deg, var(--accent), #9d7bff 60%, var(--accent-2) 130%);
+  /* White text must hold >= 4.5:1 over the *whole* gradient path. The former
+     stops dipped to 3.13:1 at the 60% stop and 2.41:1 at the right edge.
+     Each stop below is the lightest same-hue purple/cyan that clears 4.5:1
+     under #fff: #7152ff=4.82, #7752ff=4.74, #0e7490=5.36; worst point on the
+     path is 4.74:1 (at the 60% stop). Inline hexes because var(--accent)
+     itself measures 4.35:1 and var(--accent-2) 1.81:1 against white. */
+  background: linear-gradient(92deg, #7152ff, #7752ff 60%, #0e7490 130%);
   box-shadow: 0 8px 24px rgba(124, 92, 255, 0.35);
 }
 .btn-ghost {
@@ -287,12 +301,12 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .term-body .t-p { color: var(--green); }
 .term-body .t-c { color: var(--muted); }
 .term-body .t-a { color: var(--accent-2); }
-.term-body .t-w { color: #f5c26b; }
+.term-body .t-w { color: var(--warn); }
 .term-body .t-dim { color: var(--faint); }
 /* Mirrors the real renderer: green speech marker, yellow tool marker, cyan
    inline code. Keep these in step with rich_renderer's role colours. */
 .term-body .t-ok { color: var(--green); }
-.term-body .t-tool { color: #f5c26b; }
+.term-body .t-tool { color: var(--warn); }
 .term-body .t-code { color: var(--accent-2); }
 .term-body b { font-weight: 700; color: var(--text); }
 .term-cursor {
@@ -551,6 +565,8 @@ footer a { color: var(--muted); }
 .content h4 { font-size: 16px; margin: 26px 0 10px; }
 .content p { margin: 14px 0; }
 .content li { margin: 6px 0; }
+/* prose links are marked by more than color (WCAG 1.4.1) */
+.content :is(p, li, td, th, blockquote) a { text-decoration: underline; text-underline-offset: 3px; }
 .content ul ul, .content ol ol, .content ul ol { margin: 4px 0; }
 .content blockquote {
   margin: 20px 0;
@@ -608,17 +624,9 @@ footer a { color: var(--muted); }
   display: block;
   width: max-content;
 }
-[data-theme="dark"] .content pre .k, [data-theme="dark"] .content pre .kn,
-[data-theme="dark"] .content pre .kd, [data-theme="dark"] .content pre .ow,
-[data-theme="dark"] .content pre .nb, [data-theme="dark"] .content pre .nc { color: #569cd6; }
-[data-theme="dark"] .content pre .s, [data-theme="dark"] .content pre .s1,
-[data-theme="dark"] .content pre .s2, [data-theme="dark"] .content pre .sd,
-[data-theme="dark"] .content pre .sa, [data-theme="dark"] .content pre .se { color: #ce9178; }
-[data-theme="dark"] .content pre .c, [data-theme="dark"] .content pre .c1,
-[data-theme="dark"] .content pre .cm { color: #6a9955; font-style: italic; }
-[data-theme="dark"] .content pre .m, [data-theme="dark"] .content pre .mi,
-[data-theme="dark"] .content pre .mf { color: #b5cea8; }
-[data-theme="dark"] .content pre .nf { color: #dcdcaa; }
+/* Code-block token colours come from the highlight.js CDN theme (github /
+   github-dark, swapped per data-theme in the page shell — see build.py); it
+   styles .hljs-* classes, so Pygments short-class rules would be dead code. */
 
 /* task-list checkboxes */
 .content .task-list { list-style: none; padding-left: 4px; }
@@ -675,9 +683,43 @@ footer a { color: var(--muted); }
 @media (max-width: 640px) {
   .features, .docs-grid, .modes { grid-template-columns: 1fr; }
   .nav-links { display: none; }
+  .nav-inner { gap: 12px; }
   .hero { padding: 56px 20px 44px; }
   .section { padding: 48px 20px 8px; }
   .stats { padding: 0 20px; }
   .cta-inner { flex-direction: column; align-items: flex-start; padding: 32px 26px; }
   .layout { padding: 24px 18px 32px; }
+  .pager { grid-template-columns: 1fr; }
+}
+
+/* ---------- Print ---------- */
+@media print {
+  /* force the light palette regardless of the on-screen theme */
+  :root, [data-theme="dark"], [data-theme="light"] {
+    --bg: #ffffff;
+    --bg-soft: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #f4f5f7;
+    --border: #d5d8de;
+    --border-strong: #a8aeb9;
+    --text: #141a26;
+    --muted: #3c4656;
+    --faint: #525c6c;
+    --accent-2: #0e7490;
+    --green: #047857;
+    --warn: #92600a;
+    --link: #1d4ed8;
+    --code-bg: #f5f6f8;
+    --shadow: none;
+  }
+  body { background: #fff; }
+  .nav, .toc, .theme-btn, .pager, .edit-link, .cta-band, .hero::before, .term-cursor { display: none !important; }
+  /* never print the pre-reveal hidden state (printing before scrolling) */
+  .rv, .js-reveal .rv { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .hero { padding: 12px 0 8px; }
+  .hero h1 .grad { background: none; color: var(--text); }
+  .content a { text-decoration: underline; }
+  .content pre, .content pre code { width: auto; }
+  .content pre code, .term-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .content pre, .term, blockquote, tr, .feature, .doc-card, .stat { break-inside: avoid; }
 }

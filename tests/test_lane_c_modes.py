@@ -68,9 +68,7 @@ class _PlanModeWorkerClient:
             yield {"type": "message_end", "stop_reason": "tool_use"}
             return
         self.tool_messages.extend(
-            str(message.content)
-            for message in messages
-            if getattr(message, "role", "") == "tool"
+            str(message.content) for message in messages if getattr(message, "role", "") == "tool"
         )
         yield {"type": "text_delta", "text": "report: the write attempt was refused"}
         yield {"type": "message_end", "stop_reason": "end_turn"}

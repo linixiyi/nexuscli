@@ -111,19 +111,29 @@ def _history_command(arg: str, console: Console, store: SessionStore, cwd: str) 
     if not hits:
         console.print("(no matches)")
         return
-    table = Table(title="NexusCLI History")
-    table.add_column("ID")
-    table.add_column("Title")
-    table.add_column("Match")
-    table.add_column("Updated")
+    # pi-style frameless listing: a bold heading line, then a headerless grid
+    # with one dim header row — no box characters, same language as the
+    # /config summary and the /usage line grid.
+    console.print("[bold]NexusCLI History[/bold]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(no_wrap=True)
+    grid.add_column()
+    grid.add_column()
+    grid.add_column(no_wrap=True)
+    grid.add_row(
+        "[dim]ID[/dim]",
+        "[dim]Title[/dim]",
+        "[dim]Match[/dim]",
+        "[dim]Updated[/dim]",
+    )
     for hit in hits:
-        table.add_row(
+        grid.add_row(
             hit.session_id,
             hit.title or "(untitled)",
             hit.snippet,
             time.strftime("%Y-%m-%d %H:%M", time.localtime(hit.updated_at)),
         )
-    console.print(table)
+    console.print(grid)
     scope = "all projects" if all_projects else "this project"
     console.print(f"[dim]Searched {scope}. Resume with /resume <id>[/dim]")
 
@@ -133,19 +143,28 @@ def _print_session_list(console: Console, store: SessionStore, cwd: str) -> None
     if not metas:
         console.print("(no saved sessions)")
         return
-    table = Table(title="NexusCLI Sessions")
-    table.add_column("#", justify="right")
-    table.add_column("ID")
-    table.add_column("Title")
-    table.add_column("Messages", justify="right")
-    table.add_column("Updated")
+    # Frameless listing, same language as /history above.
+    console.print("[bold]NexusCLI Sessions[/bold]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(justify="right")
+    grid.add_column(no_wrap=True)
+    grid.add_column()
+    grid.add_column(justify="right")
+    grid.add_column(no_wrap=True)
+    grid.add_row(
+        "[dim]#[/dim]",
+        "[dim]ID[/dim]",
+        "[dim]Title[/dim]",
+        "[dim]Messages[/dim]",
+        "[dim]Updated[/dim]",
+    )
     for index, meta in enumerate(metas, 1):
-        table.add_row(
+        grid.add_row(
             str(index),
             meta.id,
             meta.title or "(untitled)",
             str(meta.message_count),
             time.strftime("%Y-%m-%d %H:%M", time.localtime(meta.updated_at)),
         )
-    console.print(table)
+    console.print(grid)
     console.print("[dim]Resume with /resume <index-or-id>[/dim]")

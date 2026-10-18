@@ -18,7 +18,7 @@ NexusCLI 是运行在终端里的 AI Agent CLI：ReAct / Plan / Multi-Agent 三�
 
 ## Positioning
 
-单仓库、Python 实现的完整 agent CLI（非空壳 demo）：核心路径有测试覆盖（82 个 `tests/test_*.py` / 951 个测试函数，CI 在 Linux 3.11+3.12 与 Windows 3.12 跑 ruff + pytest），功能面（skills/MCP/cron/workflow/SDK/Runtime API）显著大于同类 minimal agent。
+单仓库、Python 实现的完整 agent CLI（非空壳 demo）：核心路径有测试覆盖（104 个 `tests/test_*.py` / 全量收集 1060 个测试，CI 在 Linux 3.11+3.12 与 Windows 3.12 跑 ruff + pytest），功能面（skills/MCP/cron/workflow/SDK/Runtime API）显著大于同类 minimal agent。
 
 ## Operating Context
 
@@ -29,7 +29,7 @@ NexusCLI 是运行在终端里的 AI Agent CLI：ReAct / Plan / Multi-Agent 三�
 - 启动头是 pi 式两行：`NexusCLI v{version} ● api key ok|missing` + 一行 dim 提示（`/help commands · Shift+Tab permission mode`）。提示行只列真实绑定的交互；2026-10-18 polish 移除了从未绑定的 `? for shortcuts`。
 - `/effort` 七档 `off|minimal|low|medium|high|xhigh|max`，无参数时循环切换，档位显示在状态栏模型名之后。
 - 工具面：主 agent 路径 27 个工具 = 25 个内置（`get_builtin_tools()`）+ 2 个只读快照视图（`vfs_ls` / `vfs_read`），启用 MCP 时再并入远端工具（`bootstrap.py`）。子代理、SDK、`mcp serve` 路径只拿到 25 个，不含 vfs 视图。
-- 文档站点 `site/`：由 `docs/*.md` + `TUTORIAL.md` 经 `site/build.py` 生成的静态 HTML（12 篇文档 + index + tutorial，产物入库），GitHub Pages 发布。
+- 文档站点 `site/`：由 `docs/*.md` + `TUTORIAL.md` 经 `site/build.py` 生成的静态 HTML（13 篇文档 + index + tutorial，产物入库），GitHub Pages 发布。
 
 ## Capabilities and Constraints
 
@@ -49,10 +49,9 @@ NexusCLI 是运行在终端里的 AI Agent CLI：ReAct / Plan / Multi-Agent 三�
 
 ## Evidence on Hand
 
-- `README.md`（55K，完整功能文档）、`TUTORIAL.md`、`docs/`（12 篇主题文档）、`site/`（生成后的文档站点，与源码同步）。
-- `src/nexuscli/render/rich_renderer.py` 与 `src/nexuscli/entrypoints/repl.py`：incumbent 视觉实现，当前为 pi 式前景色单色系（无 Panel、无 box、无 Table、无背景色）。
+- `README.md`（58K，完整功能文档）、`TUTORIAL.md`、`docs/`（13 篇主题文档）、`site/`（生成后的文档站点，与源码同步）。
+- `src/nexuscli/render/rich_renderer.py` 与 `src/nexuscli/entrypoints/repl.py`：incumbent 视觉实现，当前为 pi 式前景色单色系（无 Panel、无边框、无背景色；`rich.Table` 仅以无框形态使用——布局用 `Table.grid`，/config /policy 汇总表 `box=None`）。列表/汇总类输出两轮无框化后均无 box 字符：slash 命令（/history /usage /context /compact /audit /config /policy）为标题行 + 无框网格，CLI 子命令 `nexuscli sessions` 为纯文本制表行（`cli.py` 的 `sessions_list`）。
 - 文档站点视觉现状：`site/style.css` 双主题（`data-theme="dark|light"`，CSS 变量），无外部资源依赖。
-- 工作区存在未提交的 TUI 观感改动（`effort.py` / `model_selector.py` / `repl.py` / `rich_renderer.py` 及三个测试文件），是本轮 PRODUCT.md 事实核对的对象。
 
 ## Product Principles
 

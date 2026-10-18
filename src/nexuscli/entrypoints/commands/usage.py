@@ -54,20 +54,33 @@ def _usage_stats_command(rest: str, console: Console) -> None:
     except Exception as exc:  # noqa: BLE001 - report and keep the REPL alive
         console.print(f"[red]Usage stats unavailable:[/red] {exc}")
         return
-    summary = Table(title=f"NexusCLI Usage — last {days} day(s)")
-    summary.add_column("Field")
-    summary.add_column("Value", justify="right")
+    # pi-style frameless stats: bold heading lines, then headerless grids with
+    # one dim header row each — no box characters, same language as the
+    # /config summary and the per-turn /usage line grid.
+    console.print(f"[bold]NexusCLI Usage[/bold] — last {days} day(s)")
+    summary = Table.grid(padding=(0, 2))
+    summary.add_column(style="dim", no_wrap=True)
+    summary.add_column(justify="right")
     summary.add_row("turns", str(stats["turns"]))
     summary.add_row("total tokens", str(stats["total_tokens"]))
     summary.add_row("total cost (USD)", f"{stats['total_cost']['usd']:.6f}")
     summary.add_row("total cost (CNY)", f"{stats['total_cost']['cny']:.6f}")
     console.print(summary)
-    per_model = Table(title="By model")
-    per_model.add_column("Model")
-    per_model.add_column("Turns", justify="right")
-    per_model.add_column("Tokens", justify="right")
-    per_model.add_column("USD", justify="right")
-    per_model.add_column("CNY", justify="right")
+    console.print()
+    console.print("[bold]By model[/bold]")
+    per_model = Table.grid(padding=(0, 2))
+    per_model.add_column()
+    per_model.add_column(justify="right")
+    per_model.add_column(justify="right")
+    per_model.add_column(justify="right")
+    per_model.add_column(justify="right")
+    per_model.add_row(
+        "[dim]Model[/dim]",
+        "[dim]Turns[/dim]",
+        "[dim]Tokens[/dim]",
+        "[dim]USD[/dim]",
+        "[dim]CNY[/dim]",
+    )
     for row in stats["by_model"]:
         per_model.add_row(
             row["model"],
@@ -83,12 +96,21 @@ def _usage_stats_command(rest: str, console: Console) -> None:
     # the view alive against an older store (or a stubbed one) without the key.
     by_source = stats.get("by_source") or []
     if by_source:
-        per_source = Table(title="By source")
-        per_source.add_column("Source")
-        per_source.add_column("Turns", justify="right")
-        per_source.add_column("Tokens", justify="right")
-        per_source.add_column("USD", justify="right")
-        per_source.add_column("CNY", justify="right")
+        console.print()
+        console.print("[bold]By source[/bold]")
+        per_source = Table.grid(padding=(0, 2))
+        per_source.add_column()
+        per_source.add_column(justify="right")
+        per_source.add_column(justify="right")
+        per_source.add_column(justify="right")
+        per_source.add_column(justify="right")
+        per_source.add_row(
+            "[dim]Source[/dim]",
+            "[dim]Turns[/dim]",
+            "[dim]Tokens[/dim]",
+            "[dim]USD[/dim]",
+            "[dim]CNY[/dim]",
+        )
         for row in by_source:
             per_source.add_row(
                 row["source"],

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -90,9 +91,7 @@ def test_directory_tree_max_depth_and_error_copy(sample_project: Path) -> None:
     deep = asyncio.run(call_tool(sample_project, "directory_tree", {"max_depth": 3}))
     assert "leaf.py" in deep, deep
 
-    missing = asyncio.run(
-        call_tool(sample_project, "directory_tree", {"path": "README.md"})
-    )
+    missing = asyncio.run(call_tool(sample_project, "directory_tree", {"path": "README.md"}))
     assert missing.startswith("Not a directory:"), missing
 
 
@@ -108,7 +107,13 @@ def test_get_file_info_reports_readable_metadata(sample_project: Path) -> None:
 
     assert "Path: README.md" in out and "Type: file" in out, out
     assert "Size: 5B" in out, out
-    assert "Permissions: 0o644" in out, out
+    # The renderer prints st_mode & 0o777 verbatim (file_ops.py get_file_info).
+    # NTFS carries no POSIX mode bits: a freshly written writable file reports
+    # 0o666 on win32, while the POSIX umask 022 default is 0o644.
+    if sys.platform == "win32":
+        assert "Permissions: 0o666" in out, out
+    else:
+        assert "Permissions: 0o644" in out, out
     # A user asking "这个文件什么时候改的" gets a readable local timestamp;
     # the raw epoch is kept in parentheses for scripts.
     modified_line = next(line for line in out.splitlines() if line.startswith("Modified:"))
@@ -307,9 +312,7 @@ def test_activate_model_without_key_names_provider_env_vars(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, agent, registry, renderer, buffer = _model_fixtures(tmp_path, monkeypatch)
-    profile = next(
-        item for item in DEFAULT_MODEL_PROFILES if item.provider == "deepseek"
-    )
+    profile = next(item for item in DEFAULT_MODEL_PROFILES if item.provider == "deepseek")
 
     _activate_model(profile, config, agent, registry, renderer, str(tmp_path))
 

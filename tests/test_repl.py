@@ -24,6 +24,11 @@ from nexuscli.session import SessionStore
 from nexuscli.types import Message
 
 
+def _has_box_drawing(text: str) -> bool:
+    """True when any Rich box/border glyph survives in the plain output."""
+    return any(ch in text for ch in "─│┌┐└┘├┤┬┴┼═║╭╮╯╰")
+
+
 def test_parse_mode_argument_defaults_to_react():
     mode, prompt = _parse_mode_argument("just do the thing")
     assert (mode, prompt) == ("react", "just do the thing")
@@ -143,8 +148,11 @@ def test_handle_slash_resume_without_arg_lists_sessions(tmp_path):
     )
 
     text = _console_text(console)
+    assert "NexusCLI Sessions" in text
     assert writer.meta.id in text
     assert "list me" in text
+    # Frameless pi-style listing: no Rich box/border characters.
+    assert not _has_box_drawing(text)
 
 
 def test_handle_slash_resume_unknown_id_reports_error(tmp_path):
@@ -201,6 +209,83 @@ def test_handle_slash_clear_starts_new_writer(tmp_path):
     assert agent.history == []
     assert state.writer.meta.id != writer.meta.id
     assert state.writer.persisted == 0
+
+
+def test_handle_slash_context_is_a_frameless_summary(tmp_path):
+    config = NexusCliConfig()
+    config.memory.long_term_db_path = str(tmp_path / "memory.db")
+    agent = SimpleNamespace(
+        history=[],
+        cwd=str(tmp_path),
+        llm_client=SimpleNamespace(
+            model_name="m1",
+            provider_name="deepseek",
+            max_context_window=128_000,
+        ),
+    )
+    registry = SimpleNamespace(list_names=lambda: ["bash", "read_file"])
+    console = Console(file=_string_io(), width=200)
+
+    asyncio.run(
+        _handle_slash(
+            "/context",
+            console,
+            str(tmp_path),
+            config,
+            agent,
+            registry,
+            PermissionModeController(NexusCliConfig()),
+            None,
+            None,
+        )
+    )
+
+    text = _console_text(console)
+    assert "NexusCLI Context" in text
+    for label in ("cwd", "model", "context window", "render", "memory", "tools"):
+        assert label in text, f"context summary lost the {label!r} row"
+    # Frameless, same language as /config and /policy: no Rich box/border.
+    assert not _has_box_drawing(text)
+
+
+def test_handle_slash_compact_is_a_frameless_summary(tmp_path):
+    config = NexusCliConfig()
+    history = []
+    for index in range(16):
+        history.append(Message(role="user", content=f"question {index}: " + "detail " * 80))
+        history.append(Message(role="assistant", content=f"answer {index}: " + "finding " * 80))
+    agent = SimpleNamespace(
+        history=history,
+        cwd=str(tmp_path),
+        llm_client=SimpleNamespace(
+            model_name="m1",
+            provider_name="deepseek",
+            max_context_window=128_000,
+        ),
+    )
+    console = Console(file=_string_io(), width=200)
+
+    asyncio.run(
+        _handle_slash(
+            "/compact keep the login bug",
+            console,
+            str(tmp_path),
+            config,
+            agent,
+            None,
+            PermissionModeController(NexusCliConfig()),
+            None,
+            None,
+        )
+    )
+
+    text = _console_text(console)
+    assert "NexusCLI Compaction" in text
+    for label in ("tokens before", "tokens after", "summarized messages", "keep the login bug"):
+        assert label in text, f"compaction summary lost the {label!r} row"
+    assert len(agent.history) < len(history)
+    # Frameless, same language as /context above: no Rich box/border.
+    assert not _has_box_drawing(text)
 
 
 # ---------------------------------------------------------------------------
