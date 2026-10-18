@@ -193,8 +193,18 @@ class ContextWindowManager:
         # Summarize everything but the newest turn, then keep that turn
         # verbatim. Keeping the summary (rather than only the tail) preserves
         # the goal and the decisions — the part a retry needs to stay coherent.
-        older = messages[:-1]
-        tail = [_copy_message(messages[-1])]
+        # A react-loop request usually ends with tool results, so the "newest
+        # turn" is the trailing tool results plus the assistant tool-call
+        # message that owns them; keeping the results alone would strip them
+        # as orphans below and force_trim would give up (return None) on
+        # exactly the histories overflow recovery most needs to trim.
+        tail_start = len(messages) - 1
+        while tail_start > 0 and messages[tail_start].role == "tool":
+            tail_start -= 1
+        # The walk above stops on the assistant tool-call message that owns
+        # the trailing results, so the tail is always a complete turn.
+        older = messages[:tail_start]
+        tail = [_copy_message(message) for message in messages[tail_start:]]
         while tail and tail[0].role == "tool":
             # A tool result whose assistant call was dropped is invalid on the
             # wire; drop it rather than sending an orphan.
@@ -202,7 +212,10 @@ class ContextWindowManager:
         if not tail:
             return None
         summary = self._summarize(older, min(self.summary_max_chars, 1_200))
-        trimmed = [Message(role="assistant", content=summary), *tail]
+        # User role, for the same gateway-alternation reason as
+        # _build_compacted: a trimmed request may not open with an assistant
+        # message, and the tail often continues with one.
+        trimmed = [Message(role="user", content=summary), *tail]
         trimmed = self._truncate_tool_payloads(trimmed)
         return trimmed
 
@@ -215,9 +228,15 @@ class ContextWindowManager:
         """Summarize the older side, keep the recent side verbatim, truncate tool payloads."""
         compacted: list[Message] = []
         if older:
+            # The summary rides in a user message, not an assistant one: the
+            # recent side usually starts with an assistant tool-call turn, and
+            # assistant-followed-by-assistant (or an assistant message first in
+            # the request) is rejected outright by strict-alternation gateways
+            # (GLM's HTTP 400 code 11133). Verified against the real gateway:
+            # assistant-role summary -> 400, user-role summary -> accepted.
             compacted.append(
                 Message(
-                    role="assistant",
+                    role="user",
                     content=self._summarize(older, self.summary_max_chars, focus=focus),
                 )
             )

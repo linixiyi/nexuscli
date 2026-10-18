@@ -60,6 +60,7 @@ def create_llm_client(
             ),
             telemetry_enabled=telemetry_enabled,
             debug_dump=config.debug_dump,
+            vision_capable=config.vision,
         )
     if provider in {"openai", "openai-compatible", "compatible"}:
         context = config.context_window or 128_000
@@ -81,6 +82,7 @@ def create_llm_client(
             ),
             telemetry_enabled=telemetry_enabled,
             debug_dump=config.debug_dump,
+            vision_capable=config.vision,
         )
     if provider in PROVIDER_BASE_URLS:
         context = config.context_window or MODEL_CONTEXT_WINDOWS.get(config.model.lower(), 128_000)
@@ -102,6 +104,7 @@ def create_llm_client(
             ),
             telemetry_enabled=telemetry_enabled,
             debug_dump=config.debug_dump,
+            vision_capable=config.vision,
         )
     if provider == "anthropic":
         # Env fallback lives here on purpose; config._apply_env's provider
@@ -146,6 +149,7 @@ def create_llm_client(
             ),
             telemetry_enabled=telemetry_enabled,
             debug_dump=config.debug_dump,
+            vision_capable=config.vision,
         )
     valid = ", ".join(["anthropic", "deepseek", "openai", "openai-compatible", *PROVIDER_BASE_URLS])
     raise ValueError(
