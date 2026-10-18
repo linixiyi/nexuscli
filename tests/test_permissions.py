@@ -195,6 +195,47 @@ def test_no_rules_keeps_legacy_behavior(tmp_path) -> None:
     assert executed == []
 
 
+def test_non_interactive_denial_reads_grammatically_and_names_the_way_out(tmp_path) -> None:
+    # No approval callback is exactly the single-prompt (-p) situation: every
+    # non-read-only call is refused. The message used to be built by appending
+    # "ed" to the decision, producing "was denyed by approval policy." — wrong
+    # English, and silent about how the caller could ever get the tool allowed.
+    config = NexusCliConfig()
+    config.policy.audit_log_path = str(tmp_path / "audit.jsonl")
+    executed: list[str] = []
+    result = _run(
+        _registry_with_mutate_tool(executed), config, ToolContext(cwd=str(tmp_path), config=config)
+    )
+
+    assert result.is_error
+    assert "was denied by approval policy." in result.content
+    assert "denyed" not in result.content
+    assert "skiped" not in result.content
+    assert "permissions.allow" in result.content
+
+
+def test_interactive_denial_does_not_lecture_about_config(tmp_path) -> None:
+    # With a human on the other end the prompt already answered the question;
+    # the message stays short instead of pointing at config.json.
+    config = NexusCliConfig()
+    executed: list[str] = []
+    context = ToolContext(cwd=str(tmp_path), config=config, approval_callback=lambda _r: "deny")
+    result = _run(_registry_with_mutate_tool(executed), config, context)
+
+    assert "was denied by approval policy." in result.content
+    assert "permissions.allow" not in result.content
+
+
+def test_skipped_call_is_reported_as_skipped(tmp_path) -> None:
+    config = NexusCliConfig()
+    executed: list[str] = []
+    context = ToolContext(cwd=str(tmp_path), config=config, approval_callback=lambda _r: "skip")
+    result = _run(_registry_with_mutate_tool(executed), config, context)
+
+    assert "was skipped by approval policy." in result.content
+    assert "skiped" not in result.content
+
+
 def test_no_rules_auto_mode_still_prompts(tmp_path) -> None:
     config = NexusCliConfig()
     config.policy.audit_log_path = str(tmp_path / "audit.jsonl")

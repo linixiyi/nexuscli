@@ -41,6 +41,17 @@ def supports_effort(client) -> bool:
     return hasattr(client, "reasoning_effort")
 
 
+# Providers whose request builder actually forwards reasoning_effort. The
+# client keeps the attribute everywhere it exists, so hasattr alone would
+# report a level as "set" on a provider that silently drops it.
+_EFFORT_WIRE_PROVIDERS = frozenset({"openai", "openai-compatible", "compatible"})
+
+
+def effort_reaches_wire(client) -> bool:
+    """True when the current provider will actually send reasoning_effort."""
+    return str(getattr(client, "provider_name", "")).lower() in _EFFORT_WIRE_PROVIDERS
+
+
 def _usage_line() -> str:
     return "Usage: /effort off|minimal|low|medium|high|xhigh|max (no arg cycles)"
 
@@ -56,7 +67,7 @@ def _effort_command(arg: str, console: Console, agent: Agent) -> None:  # noqa: 
     if not arg:
         level = next_effort_level(client.reasoning_effort)
         client.reasoning_effort = None if level == "off" else level
-        _print_set(console, client.reasoning_effort, cycled=True)
+        _print_set(console, client, cycled=True)
         return
     level = arg.strip().lower()
     if level in _ALIASES:
@@ -65,15 +76,26 @@ def _effort_command(arg: str, console: Console, agent: Agent) -> None:  # noqa: 
         console.print(f"[red]{_usage_line()}[/red]")
         return
     client.reasoning_effort = None if level == "off" else level
-    _print_set(console, client.reasoning_effort)
+    _print_set(console, client)
 
 
-def _print_set(console: Console, level: str | None, *, cycled: bool = False) -> None:
+def _print_set(console: Console, client, *, cycled: bool = False) -> None:
     verb = "cycled to" if cycled else "set to"
+    level = client.reasoning_effort
     if level is None:
         console.print(
             f"[green]Reasoning effort {verb} off[/green] (no reasoning_effort field sent)"
         )
     else:
         console.print(f"[green]Reasoning effort {verb} {level}[/green]")
+    # The client stores the level on every provider that has the field, but the
+    # request builder only forwards it for whitelisted backends. Reporting a
+    # successful switch while the field is silently dropped is a lie the user
+    # pays for in tokens and latency, so say it plainly.
+    if level is not None and not effort_reaches_wire(client):
+        console.print(
+            f"[yellow]Not sent:[/yellow] provider {client.provider_name} does not forward "
+            "reasoning_effort (only openai / openai-compatible do). The level is stored but "
+            "has no effect on requests."
+        )
     console.print("[dim]Live for this client; a /model switch resets it.[/dim]")

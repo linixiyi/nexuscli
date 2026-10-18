@@ -203,6 +203,13 @@ def main(
             raise typer.BadParameter(
                 "worker-mode must be react or plan", param_hint="--worker-mode"
             )
+        # --mode plan selects the Plan-and-Execute AGENT, which is not the same
+        # thing as the REPL's read-only plan gate. Leaving policy.plan_mode
+        # False meant '-p --mode plan' happily wrote files while README offered
+        # it as the "read a bit, then verify" example — two ideas sharing one
+        # name. Turn the gate on so the advertised guarantee holds; the flag is
+        # reset for react/team so it never leaks into those runs.
+        config.policy.plan_mode = selected_mode == "plan"
         prompt = _expand_custom_prompt(prompt, str(root))
         history, usage_baseline = _load_resume_history(
             str(root), resume=resume, continue_last=continue_session

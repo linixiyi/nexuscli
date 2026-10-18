@@ -181,3 +181,37 @@ def test_effort_command_refuses_unsupported_client(tmp_path: Path) -> None:
     _run_slash("/effort", console, tmp_path, config, agent)
 
     assert "does not support" in console.file.getvalue()[marker:]
+
+
+def test_effort_command_says_when_the_provider_drops_the_field(tmp_path: Path) -> None:
+    # The client object carries reasoning_effort for any chat-completions
+    # backend, but _build_payload only forwards it for the whitelisted ones.
+    # Reporting a bare "set to high" on deepseek would claim an effect the
+    # request never has, so the command must name the drop.
+    config = _test_config(tmp_path)
+    console = _console()
+    client = _client("deepseek")
+    agent = SimpleNamespace(llm_client=client)
+
+    _run_slash("/effort high", console, tmp_path, config, agent)
+
+    out = console.file.getvalue()
+    assert client.reasoning_effort == "high"
+    assert "set to high" in out
+    assert "Not sent:" in out
+    assert "does not forward" in out
+    assert "reasoning_effort" not in _payload(client)
+
+
+def test_effort_command_stays_quiet_when_the_field_reaches_the_wire(tmp_path: Path) -> None:
+    config = _test_config(tmp_path)
+    console = _console()
+    client = _client("openai-compatible")
+    agent = SimpleNamespace(llm_client=client)
+
+    _run_slash("/effort high", console, tmp_path, config, agent)
+
+    out = console.file.getvalue()
+    assert "set to high" in out
+    assert "Not sent:" not in out
+    assert _payload(client)["reasoning_effort"] == "high"

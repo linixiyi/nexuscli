@@ -52,6 +52,7 @@ def get_builtin_tools() -> list[Tool]:
             handler=_write_file,
             is_read_only=False,
             is_concurrency_safe=False,
+            requires_approval=True,
             danger_level="medium",
         ),
         Tool(
@@ -82,6 +83,7 @@ def get_builtin_tools() -> list[Tool]:
             handler=_edit_file,
             is_read_only=False,
             is_concurrency_safe=False,
+            requires_approval=True,
             danger_level="medium",
         ),
         Tool(
@@ -293,6 +295,7 @@ def get_builtin_tools() -> list[Tool]:
             handler=_save_memory,
             is_read_only=False,
             is_concurrency_safe=False,
+            requires_approval=True,
             danger_level="medium",
         ),
         Tool(

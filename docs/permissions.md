@@ -38,6 +38,25 @@
 
 规则与 HITL 一样按层拼接：用户级和项目级 config.json 的同名列表会合并去重，项目规则不会覆盖掉用户级 `deny`。
 
+## 单次 `-p` 模式下没有审批弹窗
+
+交互式 REPL 才有 HITL 弹窗；`nexuscli -p` 的 `ToolContext` 不带审批回调，因此**需要审批的工具在该模式下按失败关闭处理**：`bash` / `execute_command`（非只读命令）、`write_file`、`edit_file`、`task`、`save_memory`、`save_skill`、`task_stop`、`revert_turn` 都会被拒绝，模型收到的 tool 结果形如：
+
+```text
+Tool "bash" was denied by approval policy. This run has no interactive approver
+(single-prompt mode), so no human could be asked. Allow the tool beforehand with
+permissions.allow (for example {"allow": ["bash"]}) in config.json, or run the
+interactive REPL for approval prompts.
+```
+
+只读工具（`read_file`、`grep`、`glob`、`search_code`、只读 bash 命令等）不受影响。脚本化场景要真正执行写类动作，必须在 config.json 里显式声明：
+
+```json
+{ "permissions": { "allow": ["bash", "write_file"] } }
+```
+
+这条边界和 `ask` 在 `hitl_mode: "never"` 下的处理是同一姿态：**无人可问时按失败关闭，而不是静默放行**。注意 `permissions.allow` 只是放行审批层，`path_guard` 仍在生效——工作区外的写入依旧会被 `path escapes workspace` 拒绝。
+
 ## 只读 bash 直通
 
 `bash` / `execute_command` 的命令串会先做一次 argv 级只读静态判定。判定是保守的：只认单条简单命令（含 `;`、`|`、重定向、命令替换等元字符时一律视为不只读），并基于内置白名单——`ls`、`cat`、`grep`、`head` 等检查类命令，不带写动作参数的 `find`，只读子命令的 `git`（`status`、`log`、`diff`、`show` 等，`branch` / `tag` / `remote` / `config` 另有参数限制），以及 `python` / `node` / `npm` 的 `--version` / `--help` 式自述调用与 `uv` / `pip` 的列表类子命令；白名单之外的命令一律视为不只读，回落到正常审批链。

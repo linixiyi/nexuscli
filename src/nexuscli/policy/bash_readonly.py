@@ -130,6 +130,61 @@ UV_READONLY_SUBCOMMANDS = frozenset({"list", "show", "tree"})
 PIP_READONLY_SUBCOMMANDS = frozenset({"list", "show", "freeze"})
 
 
+# Credential-bearing locations under the user's home. A read-only fast path
+# that returns their contents to the model is not "read-only" in any sense the
+# user cares about: the file tools refuse these exact paths (path_guard), while
+# `head -2 ~/.ssh/id_rsa` used to sail through as "inspection" and hand the
+# private key to the transcript. Denied regardless of workspace, because the
+# point is the secret, not the location.
+SECRET_PATH_SEGMENTS = frozenset(
+    {
+        ".ssh",
+        ".aws",
+        ".gnupg",
+        ".kube",
+        ".docker",
+        ".netrc",
+        ".pgpass",
+        ".npmrc",
+        ".pypirc",
+        "id_rsa",
+        "id_ed25519",
+        "id_ecdsa",
+        ".nexuscli",
+        "credentials",
+        "credentials.json",
+        "secrets.json",
+        "secrets.yaml",
+        "secrets.yml",
+    }
+)
+
+# Anything that names a secret-ish file by suffix, wherever it lives.
+SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore", ".jks")
+SECRET_BASENAMES = frozenset(
+    {".env", ".env.local", ".env.production", "shadow", "passwd", "sudoers"}
+)
+
+
+def _looks_secret(path: str) -> bool:
+    text = str(path or "").replace("\\", "/").replace("~", "")
+    lowered = text.lower()
+    basename = lowered.rstrip("/").rpartition("/")[2]
+    if basename in SECRET_BASENAMES:
+        return True
+    if any(lowered.endswith(suffix) for suffix in SECRET_SUFFIXES):
+        return True
+    padded = f"{lowered}/"
+    return any(
+        f"/{segment}/" in padded or lowered.endswith(f"/{segment}")
+        for segment in SECRET_PATH_SEGMENTS
+    )
+
+
+def _touches_secret(args: list[str]) -> bool:
+    return any(_looks_secret(token) for token in args if not token.startswith("-"))
+
+
 def is_readonly_bash_command(command: str) -> bool:
     """Return True when *command* can be auto-approved as read-only.
 
@@ -151,6 +206,10 @@ def is_readonly_bash_command(command: str) -> bool:
         # the suffix carries no semantic, so judge the bare program name.
         program = program[: -len(".exe")]
     args = argv[1:]
+    # A read-only command pointed at a credential file is still an exfiltration
+    # of that credential; keep it on the approval chain.
+    if _touches_secret(args):
+        return False
     if program in UNCONDITIONAL_READONLY_COMMANDS:
         return _inspection_readonly(program, args)
     if program == "find":

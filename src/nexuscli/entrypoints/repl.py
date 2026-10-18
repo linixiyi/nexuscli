@@ -11,9 +11,12 @@ as re-exports.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import signal
 import sys
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -308,6 +311,15 @@ async def start_repl(
         message = user_input.strip()
         if not message:
             continue
+        # Ctrl+C must abort this turn, not the process. prompt_toolkit owns
+        # SIGINT only while prompt_async() is on screen; its teardown calls
+        # loop.remove_signal_handler(), which restores SIG_DFL rather than the
+        # handler that preceded it. During a turn the OS default is therefore
+        # back, and one Ctrl+C kills the CLI with exit 130 mid-generation
+        # (pty-verified; the turn never reaches its transcript write). Re-arm
+        # SIGINT for the turn and route it into task cancellation, which stays
+        # inside the event loop where the handlers below can see it.
+        sigint_armed = _arm_turn_sigint()
         try:
             if message.startswith("/"):
                 custom_match = await _match_custom_command(message, custom_commands, config)
@@ -355,8 +367,18 @@ async def start_repl(
         except KeyboardInterrupt:
             # Ctrl+C mid-turn aborts the turn, not the whole session.
             console.print("\n[yellow]Interrupted — turn aborted.[/yellow]")
+        except asyncio.CancelledError:
+            # Ctrl+C arrives here as a cancelled task (see _arm_turn_sigint).
+            # uncancel() clears the cancellation request so the next prompt is
+            # a normal await instead of raising immediately.
+            task = asyncio.current_task()
+            if task is not None:
+                task.uncancel()
+            console.print("\n[yellow]Interrupted — turn aborted.[/yellow]")
         except Exception as exc:  # noqa: BLE001 - an unexpected error must not kill the REPL
             console.print(f"[red]Error:[/red] {exc}")
+        finally:
+            _disarm_turn_sigint(sigint_armed)
 
 
 async def _handle_slash(
@@ -680,6 +702,36 @@ def _record_turn_usage(agent: Agent, session_id: str) -> None:
         )
     except Exception:
         return
+
+
+def _arm_turn_sigint() -> bool:
+    """Cancel the running turn on Ctrl+C instead of taking the process down.
+
+    Returns True when a loop-level SIGINT handler was installed. A signal
+    handler that raises KeyboardInterrupt does not work here: the exception
+    escapes the event loop and asyncio.run() converts it into SystemExit(130),
+    which is exactly the failure being fixed. task.cancel() keeps the
+    interrupt inside the loop, so the turn's await raises CancelledError and
+    the REPL loop handler prints the notice and prompts again.
+    """
+    loop = asyncio.get_running_loop()
+    task = asyncio.current_task()
+    if task is None:
+        return False
+    try:
+        loop.add_signal_handler(signal.SIGINT, task.cancel)
+    except (NotImplementedError, RuntimeError, ValueError):
+        # Windows proactor loops and non-main threads reject this: an
+        # uninterruptible turn beats a REPL that will not start.
+        return False
+    return True
+
+
+def _disarm_turn_sigint(armed: bool) -> None:
+    if not armed:
+        return
+    with suppress(NotImplementedError, RuntimeError, ValueError):
+        asyncio.get_running_loop().remove_signal_handler(signal.SIGINT)
 
 
 def _permission_key_bindings(permission_mode: PermissionModeController) -> KeyBindings:

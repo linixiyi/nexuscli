@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from rich.cells import cell_len
@@ -448,9 +449,64 @@ def _truncate_cells(text: str, limit: int) -> str:
     return "".join(keep) + "…"
 
 
+_FENCE = re.compile(r"^\s{0,3}(```|~~~)")
+_BLOCK_PREFIXES = ("#", ">", "|", "    ", "\t")
+_LIST_ITEM = re.compile(r"^\s*([-*+]|\d+[.)])\s")
+_TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{2,}")
+
+
+def _preserve_line_breaks(text: str) -> str:
+    """Keep ordinary line breaks in assistant speech.
+
+    Markdown treats a single newline as a soft break and renders the two
+    lines as one paragraph, so a reply containing a log excerpt, a numbered
+    walkthrough, or a diff arrived on screen as one wall of text: the model
+    sent 205 lines, the terminal showed 1 (measured through the renderer with
+    ``a\\nb\\nc`` -> ``a b c``). Single-prompt mode never showed this because
+    it streams raw text; only the Rich path collapsed.
+
+    Every line that a human meant as its own line gets a CommonMark hard
+    break (two trailing spaces) appended, except where a break is already
+    structural or would corrupt the block: blank lines, fenced code,
+    headings, list items, table rows, block quotes, indented code, and lines
+    already ending in a hard break.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    in_fence = False
+    for index, line in enumerate(lines):
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        next_line = lines[index + 1] if index + 1 < len(lines) else ""
+        stripped = line.strip()
+        structural = (
+            not stripped
+            or not next_line.strip()
+            or line.startswith(_BLOCK_PREFIXES)
+            or bool(_LIST_ITEM.match(line))
+            or bool(_TABLE_RULE.match(line))
+            or line.rstrip().endswith("  ")
+            or line.rstrip().endswith("\\")
+        )
+        if structural:
+            out.append(line)
+        else:
+            out.append(line.rstrip() + "  ")
+    return "\n".join(out)
+
+
 def _markdown(text: str) -> Markdown:
     """Markdown with a foreground-only palette that follows the terminal theme."""
-    return Markdown(text, code_theme=_CODE_THEME, inline_code_theme=_CODE_THEME)
+    return Markdown(
+        _preserve_line_breaks(text),
+        code_theme=_CODE_THEME,
+        inline_code_theme=_CODE_THEME,
+    )
 
 
 def _markdown_lines(text: str, *, width: int) -> list[Text]:

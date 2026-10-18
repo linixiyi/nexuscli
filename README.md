@@ -259,6 +259,14 @@ Agent 工具循环的回合上限由 `agent.max_turns` 控制（默认 200，加
 
 HITL 审批弹窗本身有五个键位：`y` 放行一次、`r` **run 级授权**（本次 agent run 内同工具后续本会弹窗的调用直接放行）、`a` 切 auto 模式、`s` 跳过、`n` 拒绝。run 级授权只作用于「本来就会弹人工提示」的环节——`deny` 规则、`ask` 规则与 hook 的 ask 提示不受影响；run 的语义是一次 agent run 的主代理上下文，子代理仍会独立弹审批，新一次 agent run 授权即清零。各选项的优先级与审计口径（`hitl` / `run-scope`）见 [docs/permissions.md](docs/permissions.md)。
 
+**单次 `-p` 模式没有审批弹窗**：那里不存在可以按 `y`/`r` 的人，所以需要审批的工具（`bash` 的写类命令、`write_file`、`edit_file`、`task`、`save_memory` 等）一律被拒，模型收到的是带放行指引的拒绝信息。脚本化/自动化场景要真的执行这些工具，必须先在 config.json 里显式声明放行，例如：
+
+```json
+{ "permissions": { "allow": ["bash", "write_file"] } }
+```
+
+只读工具（`read_file`、`grep`、`glob`、只读 bash 命令等）不受影响，`-p` 里照常可用。这条边界是有意为之：无人可问时按失败关闭处理，而不是静默放行。完整口径见 [docs/permissions.md](docs/permissions.md)。
+
 规则写法、通配匹配、`ask` 与 `hitl_mode` 的交互等完整说明见 [docs/permissions.md](docs/permissions.md)。
 
 ## 🪝 Hooks 生命周期钩子

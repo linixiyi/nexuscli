@@ -240,7 +240,7 @@ class ToolExecutor:
                 )
                 return ToolResult(
                     tool_use_id=tool_call_id,
-                    content=f'Tool "{tool.name}" was {decision}ed by approval policy.',
+                    content=_denial_message(tool.name, decision, context),
                     is_error=True,
                 )
             if (
@@ -386,6 +386,29 @@ class ToolExecutor:
         if asyncio.iscoroutine(result):
             result = await result
         return result
+
+
+_DECISION_PAST_TENSE = {"deny": "denied", "skip": "skipped"}
+
+
+def _denial_message(tool_name: str, decision: ToolDecision, context: ToolContext) -> str:
+    """Human-readable refusal that names how the call could have been allowed.
+
+    The bare f-string used to render the decision verb by appending "ed",
+    which produced "denyed" / "skiped". Single-prompt (-p) runs have no
+    approval callback, so every non-read-only call lands here; without a
+    pointer at the two real escape hatches the model just retries blindly.
+    """
+    verb = _DECISION_PAST_TENSE.get(decision, decision)
+    message = f'Tool "{tool_name}" was {verb} by approval policy.'
+    if context.approval_callback is None:
+        return (
+            f"{message} This run has no interactive approver (single-prompt mode), "
+            "so no human could be asked. Allow the tool beforehand with "
+            f'permissions.allow (for example {{"allow": ["{tool_name}"]}}) in '
+            "config.json, or run the interactive REPL for approval prompts."
+        )
+    return message
 
 
 def _readonly_passthrough(
