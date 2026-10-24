@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plan-and-Execute 检查点与续跑 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：Plan-and-Execute 的图级 checkpoint、续跑与协作式中断。">
+  <meta property="og:title" content="Plan-and-Execute 检查点与续跑 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/plan-execute.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul></ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧭 Plan-and-Execute 的图级 checkpoint、续跑与协作式中断</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/plan-execute.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="plan-and-execute-检查点与续跑"><a class="toclink" href="#plan-and-execute-检查点与续跑">Plan-and-Execute 检查点与续跑</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a> 深入文档索引「Plan-and-Execute 检查点与续跑」条目的完整版。</p>
+</blockquote>
+<p><code>/plan</code>（Plan-and-Execute 模式）与 team 的嵌套 plan worker 默认开启<strong>图级 checkpoint</strong>：Planner 产出计划后、每个任务执行完成后、计划到达终态（完成/失败/停滞）后各落盘一次，文件在 <code>~/.nexuscli/plan_runs/&lt;plan_id&gt;.json</code>（原子写入；checkpoint 写失败不杀运行）。plan id 带毫秒时间戳 + 随机后缀，保证并行 worker 同时产出计划也不会互相覆盖。</p>
+<p>中断后续跑：</p>
+<pre><code class="language-text">/plan --resume &lt;plan_id&gt;     # 跳过规划，直接从 checkpoint 续跑剩余任务
+</code></pre>
+<ul>
+<li>续跑只执行 PENDING 任务：已完成任务的结果从 checkpoint 原样保留并注入后续任务的上下文，<strong>不会重复烧 token</strong>；崩溃窗口内被持久化为 RUNNING 的任务在恢复时自动归一化为 PENDING 重新执行。</li>
+<li>checkpoint 存储对 plan id 做文件名安全校验（拒绝路径分隔符与 <code>..</code> 链），未知/损坏/非法 id 一律按「未找到」降级，不抛异常。</li>
+</ul>
+<p><strong>协作式中断</strong>：<code>PlanExecuteAgent.request_interrupt()</code> 置位后，执行循环在<strong>批次之间</strong>停机并落盘，产出 <code>plan_interrupted</code> 事件与续跑提示。如实边界：批内已派发的任务会跑完（检查点在批次间）；该 API 目前是 agent 编程接口，REPL 的 <code>Ctrl+C</code> 仍是中止回合而非协作式中断，team worker 侧的 interrupt 接线挂账。</p>
+<p><strong>如实边界</strong>：checkpoint JSON 以明文保存任务结果全文，普通 <code>/plan</code> 运行也会留下文件，目前<strong>没有 TTL/容量清理</strong>（体积敏感时手动清理 <code>~/.nexuscli/plan_runs</code>）；resume 语义是重入中断的运行而非新会话轮——不写入会话历史、不做 pre/post-turn 快照；<code>/workflow</code>（JSON 步骤图）与 plan 模式（Shift+Tab 只读态）是另外两套机制，均无断点续跑语义。</p><div class="pager"><a href="sessions.html" class="prev"><span class="dir">← 上一篇</span><span class="name">💾 会话、恢复与快照</span></a><a href="plugins.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧱 插件系统（本地目录 MVP）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/plan-execute.md" target="_blank" rel="noopener">docs/plan-execute.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer><script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        var light = document.documentElement.getAttribute("data-theme") === "light";
+        link.href = light ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try {
+        new MutationObserver(apply).observe(
+          document.documentElement,
+          { attributes: true, attributeFilter: ["data-theme"] }
+        );
+      } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

@@ -50,7 +50,7 @@
   <div class="content">
     <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧱 本地目录插件的发现、manifest 与组件并入链</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/plugins.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="插件系统本地目录-mvp"><a class="toclink" href="#插件系统本地目录-mvp">插件系统（本地目录 MVP）</a></h1>
 <blockquote>
-<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🧱 插件系统」章节的完整版。</p>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a> 深入文档索引「插件系统」条目的完整版。</p>
 </blockquote>
 <p>插件是一个放在项目 <code>.nexuscli/plugins/&lt;name&gt;/</code> 下的目录：一个 <code>plugin.json</code> manifest 加最多三个组件子目录（实现：<code>src/nexuscli/plugins/loader.py</code>）。启动装配时（<code>bootstrap.py</code> 第一步）只做<strong>发现</strong>——纯文件读取，无网络、无执行；三类组件的并入发生在各自的注册表加载函数里。</p>
 <h2 id="目录布局"><a class="toclink" href="#目录布局">目录布局</a></h2>
@@ -114,7 +114,7 @@
 <li>manifest 不支持显式组件路径声明（ZCode <code>collectComponentDirs</code> 的字符串/数组形式未移植）</li>
 <li>hooks / MCP servers / LSP servers / output styles 等其他组件类型不在本切片</li>
 <li>无用户配置项（userConfig）、无诊断结构（PluginDiagnostic）</li>
-</ul><div class="pager"><a href="runtime-api.html" class="prev"><span class="dir">← 上一篇</span><span class="name">📡 Runtime API</span></a><a href="slash-commands.html" class="next"><span class="dir">下一篇 →</span><span class="name">🪄 自定义斜杠命令</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/plugins.md" target="_blank" rel="noopener">docs/plugins.md</a> 构建生成 · 源文件与站点内容同步</p>
+</ul><div class="pager"><a href="plan-execute.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🧭 Plan-and-Execute 检查点与续跑</span></a><a href="slash-commands.html" class="next"><span class="dir">下一篇 →</span><span class="name">🪄 自定义斜杠命令</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/plugins.md" target="_blank" rel="noopener">docs/plugins.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>

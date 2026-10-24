@@ -1,6 +1,6 @@
 # Hooks 生命周期钩子
 
-> 本文是 [README](../README.md)「🪝 Hooks 生命周期钩子」章节的完整版。
+> 本文是 [README](../README.md) 深入文档索引「Hooks 生命周期钩子」条目的完整版。
 
 在 config.json 的 `hooks` 里给七个生命周期事件挂 shell 命令（事件键为 camelCase）：
 

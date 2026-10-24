@@ -378,7 +378,7 @@ argument-hint: &lt;文件路径&gt;
 &gt; （让 Agent 按结论修改代码，这次写操作正常走审批）
 &gt; /compact 权限评审结论  # 会话太长时手动压缩，摘要优先保留指定重点
 </code></pre>
-<p><code>Shift+Tab</code> 在 <code>Default → Auto (full access) → plan (read-only)</code> 三态间循环；<code>/compact [focus]</code> 会立即压缩历史并输出 tokens before/after 统计。各能力的完整说明见 README 的<a href="https://github.com/linixiyi/nexuscli/blob/main/README.md#-权限规则">权限规则</a>、<a href="https://github.com/linixiyi/nexuscli/blob/main/README.md#-hooks-生命周期钩子">Hooks</a>、<a href="https://github.com/linixiyi/nexuscli/blob/main/README.md#-plan-模式">Plan 模式</a>与<a href="https://github.com/linixiyi/nexuscli/blob/main/README.md#-自定义斜杠命令">自定义斜杠命令</a>章节。</p>
+<p><code>Shift+Tab</code> 在 <code>Default → Auto (full access) → plan (read-only)</code> 三态间循环；<code>/compact [focus]</code> 会立即压缩历史并输出 tokens before/after 统计。各能力的完整说明见 README 的<a href="https://github.com/linixiyi/nexuscli/blob/main/README.md#-权限与会话模式">权限与会话模式</a>章节、<a href="docs/hooks.html">Hooks</a>、<a href="docs/permissions.html#会话权限模式default--auto--plan">会话权限模式</a>与<a href="docs/slash-commands.html">自定义斜杠命令</a>文档。</p>
 <h2 id="6-把-agent-用起来下一步建议"><a class="toclink" href="#6-把-agent-用起来下一步建议">6. 把 Agent 用起来（下一步建议)</a></h2>
 <ul>
 <li>在项目里放一个 <code>NEXUS.md</code>（或 <code>AGENTS.md</code>）写清工程约定，Agent 每次运行都会读它作为长期上下文</li>

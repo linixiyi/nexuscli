@@ -50,7 +50,7 @@
   <div class="content">
     <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>⏰ 离线任务注册表与外部调度器驱动方式</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/cron.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="定时任务cron"><a class="toclink" href="#定时任务cron">定时任务（cron）</a></h1>
 <blockquote>
-<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「⏰ 定时任务（cron）」章节的完整版。</p>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a> 深入文档索引「定时任务（cron）」条目的完整版。</p>
 </blockquote>
 <p><code>nexuscli cron</code> 是<strong>离线形态</strong>的定时提示词注册表（实现：<code>src/nexuscli/runtime/cron.py</code> + <code>entrypoints/cli.py</code> 的 <code>cron_app</code>）：任务表就是一个 JSON 文件，CLI 只做解析与读取面，<strong>没有常驻守护进程、没有调度循环、模块内也不做任何 LLM/网络调用</strong>。真正到点触发由你或外部调度器驱动。</p>
 <h2 id="任务表"><a class="toclink" href="#任务表">任务表</a></h2>

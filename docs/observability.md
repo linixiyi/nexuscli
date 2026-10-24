@@ -1,6 +1,6 @@
 # 可观测性与调试
 
-> 本文是 [README](../README.md)「🔭 可观测性与调试」章节的完整版。
+> 本文是 [README](../README.md) 深入文档索引「可观测性与调试」条目的完整版。
 
 本文覆盖四块彼此独立、可单独开关的观测能力：trace_id 关联、OpenTelemetry 遥测、模型 IO 调试落盘、本地 usage 落库。
 

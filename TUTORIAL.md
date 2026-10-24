@@ -279,7 +279,7 @@ uv run nexuscli
 > /compact 权限评审结论  # 会话太长时手动压缩，摘要优先保留指定重点
 ```
 
-`Shift+Tab` 在 `Default → Auto (full access) → plan (read-only)` 三态间循环；`/compact [focus]` 会立即压缩历史并输出 tokens before/after 统计。各能力的完整说明见 README 的[权限规则](README.md#-权限规则)、[Hooks](README.md#-hooks-生命周期钩子)、[Plan 模式](README.md#-plan-模式)与[自定义斜杠命令](README.md#-自定义斜杠命令)章节。
+`Shift+Tab` 在 `Default → Auto (full access) → plan (read-only)` 三态间循环；`/compact [focus]` 会立即压缩历史并输出 tokens before/after 统计。各能力的完整说明见 README 的[权限与会话模式](README.md#-权限与会话模式)章节、[Hooks](docs/hooks.md)、[会话权限模式](docs/permissions.md#会话权限模式default--auto--plan)与[自定义斜杠命令](docs/slash-commands.md)文档。
 
 ## 6. 把 Agent 用起来（下一步建议)
 

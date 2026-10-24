@@ -1,6 +1,6 @@
 # 权限规则
 
-> 本文是 [README](../README.md)「🔐 权限规则」章节的完整版。
+> 本文是 [README](../README.md)「🔐 权限与会话模式」章节的完整版。
 
 在 config.json 的 `permissions` 里声明 `allow` / `deny` / `ask` 三组规则，就能在 HITL 之前自动放行安全操作、追问可疑调用或直接拦截高危动作：
 
@@ -99,3 +99,20 @@ config.json 的 `policy.env_sanitization` 开关（默认 `true`）控制该护�
 | slash 命令 `` !`cmd` `` 注入执行器 | 继承全量 `os.environ` | 待接入 |
 
 OS 级沙箱（容器、受限令牌）是更大体量的外部依赖，同样挂账；在它落地之前，不要把宿主机上不可泄露的机密放在子进程可读取的环境里并放开 HITL。
+
+## 会话权限模式（Default / Auto / plan）
+
+交互模式下按 `Shift+Tab` 可在三种会话权限模式间循环切换（`Default → Auto (full access) → plan (read-only) → Default`）：
+
+- `Default`：使用启动时的 HITL、工作区路径和命令安全策略。
+- `Auto (full access)`：当前会话内不再请求审批，并关闭路径与命令守卫。
+- `plan (read-only)`：只读约束态，非只读工具被硬拒绝；再次按 `Shift+Tab` 回到默认策略。
+
+plan 态不是免审批态：它会恢复启动时的 HITL 与安全策略，同时打开只读闸门——
+
+- 执行器在权限规则、Hooks、审批之前硬拒一切非只读工具（`write_file`、`task` 等），错误信息会提示按 `Shift+Tab` 切回默认模式再执行
+- `bash` / `execute_command` 按命令级判定参与该闸门：判定为只读的命令（`git status`、`ls` 等）放行，写操作命令仍被硬拒
+- 只读工具（`read_file`、`grep`、`glob_files` 等）正常放行，其上的 deny 权限规则依然生效
+- 被拒绝的调用不产生审批决策、不写审计、不触发 Hooks
+
+典型用法：先切到 plan 态让 Agent 只读地调研并给出方案，审阅满意后再切回 Default 让它落地执行。

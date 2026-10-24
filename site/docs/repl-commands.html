@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>内置斜杠命令参考 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：内置斜杠命令参考：/model 选择器、usage 双口径与会话增强。">
+  <meta property="og:title" content="内置斜杠命令参考 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/repl-commands.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#model-交互式模型选择器">/model 交互式模型选择器</a></li>
+<li><a href="#skill-load-与一次性注入">/skill load 与一次性注入</a></li>
+<li><a href="#usage-双口径">/usage 双口径</a></li>
+<li><a href="#history-跨会话检索">/history 跨会话检索</a></li>
+<li><a href="#fork-分叉会话">/fork 分叉会话</a></li>
+<li><a href="#goal-会话长程目标">/goal 会话长程目标</a></li>
+<li><a href="#effort-推理力度">/effort 推理力度</a></li>
+<li><a href="#workflow-与-expert">/workflow 与 /expert</a></li>
+<li><a href="#compact-手动压缩">/compact 手动压缩</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>💬 内置斜杠命令参考：/model 选择器、usage 双口径与会话增强</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/repl-commands.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="内置斜杠命令参考"><a class="toclink" href="#内置斜杠命令参考">内置斜杠命令参考</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「💬 交互命令」章节的完整版。</p>
+</blockquote>
+<p>进入 <code>uv run nexuscli</code> 后，可以使用这些 slash commands：</p>
+<pre><code class="language-text">/help
+/exit
+/clear
+/resume
+/resume &lt;index-or-id&gt;
+/history &lt;query&gt; [--all]
+/context
+/compact [focus]
+/init [notes]
+/memory
+/memory search &lt;query&gt;
+/memory stats
+/memory delete &lt;id&gt;
+/memory clear
+/save &lt;fact&gt;
+/config
+/tools
+/hitl default|auto
+/policy
+/audit [N]
+/index [path]
+/search &lt;query&gt;
+/plan &lt;task&gt;
+/plan --resume &lt;plan_id&gt;
+/team &lt;task&gt;
+/team --plan &lt;task&gt;
+/model
+/model &lt;model-id&gt;
+/model &lt;provider&gt; &lt;model-id&gt;
+/usage
+/usage stats [N天]
+/fork [title]
+/goal set &lt;text&gt;
+/goal show
+/goal clear
+/effort off|minimal|low|medium|high|xhigh|max
+/skill
+/skill list
+/skill show &lt;name&gt;
+/skill load &lt;name&gt;
+/skill on &lt;name&gt;
+/skill off &lt;name&gt;
+/skill reload
+/mcp
+/task
+/task add [--mode react|plan|team] &lt;task&gt;
+/task cancel &lt;task_id&gt;
+/task log &lt;task_id&gt;
+/workflow run &lt;file&gt;.json
+/expert &lt;topic&gt;
+/snapshot
+/snapshot save [label]
+/snapshot clean
+/restore &lt;snapshot-id-or-index&gt;
+</code></pre>
+<h2 id="model-交互式模型选择器"><a class="toclink" href="#model-交互式模型选择器">/model 交互式模型选择器</a></h2>
+<p><code>/model</code> 会打开交互式模型选择器：<code>Tab</code> 或左右方向键在 <code>Default</code>、<code>Custom</code>、<code>API 拉取</code> 之间切换，上下方向键选择模型，<code>Enter</code> 立即切换当前 Agent。<code>Custom</code> 中可以选择已保存的 BYOK 模型、创建新的 DeepSeek/GLM/OpenAI-compatible 配置，或按 <code>d</code> 删除配置。自定义配置保存在权限为 <code>0600</code> 的 <code>~/.nexuscli/models.json</code>；建议填写 API Key 环境变量名，只有显式输入 API Key 时才会把密钥写入该文件。</p>
+<p><code>API 拉取</code> tab 面向 OpenAI Chat Completions 协议的自建网关/中转站（例如 <code>http://localhost:20128/v1</code>）：首次进入会提示输入 API 地址（缺省用当前 provider 的 base_url），确认后 CLI 向 <code>{地址}/models</code> 发起 <code>GET</code>（当前 provider 已配置密钥时自动携带 <code>Authorization: Bearer</code>），把返回的模型列表渲染成勾选清单。交互：上下方向键移动、输入字母实时过滤模型、<code>空格</code> 勾选/取消、<code>a</code> 全选、<code>n</code> 取消全选、<code>r</code> 重新输入地址拉取、<code>Enter</code> 添加所选、<code>Esc</code> 退出。<code>Enter</code> 后所选模型写入 <code>~/.nexuscli/models.json</code> 的 Custom 列表（同名同地址自动去重）并立即切换到第一个选中模型；模型的上下文窗口优先取响应里的 <code>context_length</code> 字段，缺省 128K。地址不可达、HTTP 错误或响应不是标准 <code>{"data": [...]}</code> 格式时在选择器内给出可读错误，按 <code>r</code> 可重试。</p>
+<h2 id="skill-load-与一次性注入"><a class="toclink" href="#skill-load-与一次性注入">/skill load 与一次性注入</a></h2>
+<p><code>/skill load &lt;name&gt;</code> 把指定 Skill 的正文强制注入你的下一条消息（一次性消费）：下一回合模型会先读到该 Skill 再继续任务，适合主动确保某个技能被加载。</p>
+<h2 id="usage-双口径"><a class="toclink" href="#usage-双口径">/usage 双口径</a></h2>
+<p><code>/usage stats [N天]</code> 汇总本地 SQLite 用量库 <code>~/.nexuscli/usage.db</code>：近 N 天（缺省 7 天）的回合数、总 Token、总成本（USD/CNY）、按模型分布与按来源分布（By source）。落库为 best-effort：普通 REPL 回合（含自定义命令回合）记为 <code>source=repl</code>，值为该回合主代理自身的用量；<code>task</code> 工具委派的子代理与 <code>/workflow</code>、<code>/expert</code> 派发的工作流步骤，只要真实产出了 token，也各自落一行 <code>source=subagent</code>（记录器在 <code>run_subagent</code> 的 done 事件处，零 token 的空跑不落行），所以统计值覆盖 REPL 直连对话与委派回合两类；team/plan-and-execute 模式的 worker 回合与单次 <code>-p</code> 模式不落库。</p>
+<p>不带参数的 <code>/usage</code> 打印一张四行状态表而不是 JSON dump：<code>turn</code>（本回合 input/output）、<code>session</code>（历史累计回合数与总 Token）、<code>cost</code>（有成本数据时按币种列出）与 <code>note</code>（内置价格表为带日期的默认值）。底层仍是 <code>session_usage</code> 双口径：<code>historical_total</code>（恢复基线 + 本进程累计，两者之和等于当前转录的 usage 台账）与 <code>current_process</code>（仅本进程记录的回合），并附 <code>sources</code> 标注来源，供 SDK 与单次 <code>--json</code> 消费。<code>/clear</code>、<code>/resume</code>、<code>/fork</code> 都会同步重置基线与本进程累计，保证双口径始终对应当前转录。</p>
+<h2 id="history-跨会话检索"><a class="toclink" href="#history-跨会话检索">/history 跨会话检索</a></h2>
+<p><code>/history &lt;query&gt; [--all]</code> 在会话转录正文里做大小写不敏感的关键词检索，按更新时间倒序、每会话最多一条命中（取最早命中的消息片段），缺省只搜当前项目，<code>--all</code> 搜全部项目；结果表附会话 id 与片段，可 <code>/resume &lt;id&gt;</code> 直接跳回。检索基于转录内的消息正文，usage 记录行与损坏行会被跳过；空参数只打印用法提示。</p>
+<h2 id="fork-分叉会话"><a class="toclink" href="#fork-分叉会话">/fork 分叉会话</a></h2>
+<p><code>/fork [title]</code> 把当前会话转录复制为一个新会话并切换过去继续：新会话携带全部历史消息，元数据记录来源 <code>forked_from</code>，原会话保持不变；省略 title 时继承源会话标题。两点如实说明：会话目标（<code>/goal</code>）按 session id 存储且不随 fork 复制；fork 时会清空排队中的一次性注入（<code>/skill load</code> 的正文），新会话从干净状态开始。</p>
+<h2 id="goal-会话长程目标"><a class="toclink" href="#goal-会话长程目标">/goal 会话长程目标</a></h2>
+<p><code>/goal set &lt;text&gt;</code> 给当前会话设置一句长程目标，之后每个回合开始前都会把 <code>[session goal] &lt;目标&gt;</code> 注入用户消息，直到 <code>/goal clear</code>；<code>/goal show</code> 查看。目标按会话存储在 <code>~/.nexuscli/goals/&lt;session_id&gt;.json</code>，只存文本。</p>
+<h2 id="effort-推理力度"><a class="toclink" href="#effort-推理力度">/effort 推理力度</a></h2>
+<p><code>/effort off|minimal|low|medium|high|xhigh|max</code> 在会话内即时切换推理力度：带参数直接设定，无参数循环切到下一档（未设置时从 <code>low</code> 起步），当前档位以 <code>模型名:档位</code> 的形式显示在状态栏。<code>off</code> 表示完全不带 <code>reasoning_effort</code> 字段发送。该字段只对白名单内的 chat-completions provider（<code>openai</code>、<code>openai-compatible</code>、<code>compatible</code>）随请求发送 <code>reasoning_effort</code>；deepseek / glm / kimi 等其他 provider 不支持、不会发送该字段，anthropic provider 会提示不支持。切换模型（<code>/model</code>）会创建新客户端并重置 effort。</p>
+<h2 id="workflow-与-expert"><a class="toclink" href="#workflow-与-expert">/workflow 与 /expert</a></h2>
+<p><code>/workflow run &lt;file&gt;.json</code> 加载 JSON 步骤图并按依赖批次并行派发子代理执行（上界 <code>workflow.max_parallel_steps</code>，默认 3）；<code>/expert &lt;topic&gt;</code> 是同一引擎的内置三步专家流程（调研 → 实施 → 复核）。JSON schema、校验规则与执行边界见 <a href="workflows.html">workflows.md</a>。</p>
+<h2 id="compact-手动压缩"><a class="toclink" href="#compact-手动压缩">/compact 手动压缩</a></h2>
+<pre><code class="language-text">/compact                 # 立即压缩一次当前会话历史
+/compact 权限规则的实现细节  # 指定保留重点，摘要会优先保留相关内容
+</code></pre>
+<p><code>/compact</code> 走与自动压缩相同的确定性流程（不额外调用 LLM）：近端消息原样保留、旧轮次汇总为摘要，并输出压缩统计（tokens before/after 与被摘要的消息条数），方便确认压缩收益。历史为空时会友好提示，不会报错。自动压缩的触发阈值、microcompact 与 provider 超限重试的完整口径见 <a href="memory-context.html">memory-context.md</a>。</p><div class="pager"><a href="config.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔧 配置</span></a><a href="tools.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧰 内置工具与输入面补充口径</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/repl-commands.md" target="_blank" rel="noopener">docs/repl-commands.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer><script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        var light = document.documentElement.getAttribute("data-theme") === "light";
+        link.href = light ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try {
+        new MutationObserver(apply).observe(
+          document.documentElement,
+          { attributes: true, attributeFilter: ["data-theme"] }
+        );
+      } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>
