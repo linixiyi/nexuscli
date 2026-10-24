@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from nexuscli import __version__
 from nexuscli.config import load_config
+from nexuscli.net_guards import is_loopback_origin as _is_loopback_origin
 from nexuscli.tools import ToolRegistry, get_builtin_tools
 from nexuscli.tools.base import ToolContext
 
@@ -107,23 +108,12 @@ async def serve_stdio(cwd: str | None = None) -> None:
 # 任何未知 URL 当成 JSON-RPC 端点（修复前 POST /random/path 也返回 200）。
 _ALLOWED_PATHS = ("/", "/mcp")
 
-# 浏览器发起的跨源请求必须带 Origin；非浏览器客户端（curl、SDK）通常不带。
-# 只放行本机来源，其余一律拒绝——否则本机任意网页都能 POST 到 127.0.0.1 跑 bash。
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+# 浏览器发起的跨源请求必须带 Origin；判定逻辑提取至 net_guards 与 Runtime API 共用。
 
 _SSE_UNSUPPORTED = (
     "This endpoint speaks JSON-RPC over POST only. "
     "SSE streaming (GET) is not supported by the NexusCLI MCP server.\n"
 )
-
-
-def _is_loopback_origin(origin: str) -> bool:
-    try:
-        hostname = urlsplit(origin).hostname
-    except ValueError:
-        return False
-    # urlsplit strips the IPv6 brackets, so the set holds the bare "::1".
-    return hostname is not None and hostname.lower() in _LOOPBACK_HOSTS
 
 
 def _handler_class(root: str) -> type[BaseHTTPRequestHandler]:
