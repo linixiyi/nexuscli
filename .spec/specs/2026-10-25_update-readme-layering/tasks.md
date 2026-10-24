@@ -20,7 +20,7 @@
 
 ## 阶段二：README 重写
 
-- [ ] README 重排为三段式分层 + TUTORIAL.md 链接修补（03 映射表第 3 步）
+- [x] README 重排为三段式分层 + TUTORIAL.md 链接修补（03 映射表第 3 步）
   - depends-on: task_0002
   - boundary: 只改 README.md 与 TUTORIAL.md（TUTORIAL.md:282 的 4 个失效锚点改指 README 新锚点或对应 docs 文件，目标由实现者按重排后结构定，用例 3 机械把关）；README 按 03「目标结构」骨架重排：TL;DR + 特性速览表 → 快速上手 → 核心概念（9 节）→ 深入专题（文档索引 20 篇口径）；下沉小节保留一行「详见 docs/x.md#节」链接（节级锚点按 03 slug 规则）；行数收敛 360-440；不动 NEXUS.md、不动 .github/、不改能力宣称语义
   - verify: `uv run python -c "import pathlib; n=len(pathlib.Path('README.md').read_text(encoding='utf-8').splitlines()); print(n); assert 360 <= n <= 440, n"`（期望打印行数且断言通过）
