@@ -26,22 +26,22 @@
 
 ## 阶段二：前端
 
-- [ ] frontend/ 工程脚手架与 dist 入库
+- [x] frontend/ 工程脚手架与 dist 入库
   - depends-on: task_0002, task_0003
   - boundary: 新建 frontend/（package.json、package-lock.json、vite.config.ts dev proxy /v1、tsconfig strict、index.html、.gitignore、src/ 最小骨架）+ 根 .gitignore 加 !frontend/dist/；构建产物 frontend/dist 提交；tests/test_runtime_static.py 增「已提交 dist」用例（dist 缺失时 pytest.skip）
   - verify: `cd frontend && npm ci && npm run build && cd .. && test -z "$(git status --porcelain -- frontend/dist)" && echo "dist in sync"`
-- [ ] 前端视图：外壳 + 会话/回放/任务/usage
+- [x] 前端视图：外壳 + 会话/回放/任务/usage
   - depends-on: task_0004, task_0005
   - boundary: 只写 frontend/src/（App 外壳 key 门+tab、api/ 客户端与 TS 类型对齐 01 契约、sse/useEventStream、views/ 四视图）；不改 Python 侧
   - verify: `cd frontend && npm run build`（tsc -b 类型检查随构建通过）
 
 ## 阶段三：收口
 
-- [ ] 全量回归 + 真实进程 smoke
+- [x] 全量回归 + 真实进程 smoke
   - depends-on: task_0006
   - boundary: 不改产品文件；跑 CI 三步与 serve --workbench 真实 smoke（SSE 回放/心跳、reads、静态首页），结果记入验收证据
   - verify: `uv run ruff check . && uv run ruff format --check . && uv run python -m pytest`
-- [ ] 计划同步：勾选 master F2-F5 + .spec/autorun/ 摘要
+- [x] 计划同步：勾选 master F2-F5 + .spec/autorun/ 摘要
   - depends-on: task_0007
   - boundary: 只改 .spec/plans/2026-10-25_workbench-and-readme/master.md（F2/F3/F4/F5 置 [x]）与新增 .spec/autorun/ 摘要
   - verify: `grep -c "\[x\] F[2-5] " .spec/plans/2026-10-25_workbench-and-readme/master.md`（期望输出 4）

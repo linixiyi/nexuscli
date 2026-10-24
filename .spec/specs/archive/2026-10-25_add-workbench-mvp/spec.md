@@ -62,18 +62,18 @@
 - 变更对象：Runtime API 端点面、serve 入口、mcp/server.py 的 Origin 函数、frontend/ 新工程、相关测试
 - 快速检查：`uv run python -m pytest -q tests/test_runtime.py tests/test_runtime_sse.py tests/test_runtime_static.py tests/test_runtime_reads.py`
 - 集成检查：`cd frontend && npm ci && npm run build` + dist 同步门禁 `test -z "$(git status --porcelain -- frontend/dist)"`
-- 全项目检查：适用外——与 CI 一致的三步回归由收口任务执行；升级条件见「升级触发」行
+- 全项目检查：适用外——本包不改共享数据契约；与 CI 一致的三步回归已由 task_0007 真实执行并全绿（1083 passed），升级条件见「升级触发」行
 - 升级触发：本包改 mcp/server.py（Origin 函数提取，跨模块共享面）与 entrypoints/cli.py——若 MCP/server 或 CLI 既有测试暴露回归，就地修复并记录；不改行为语义
 
 ## 6. 成功标准与验证方式
-- [ ] `_build_http_server` 提取与 Origin 共用函数为纯重构，既有 MCP/runtime 测试不回归 -> verify: task_0001
-- [ ] SSE 端点回放+实时+心跳+断开+鉴权扩展（仅本路径）+16 连接上限全有测试 -> verify: task_0002
-- [ ] 静态托管（映射/穿越防护/SPA 回退/空态页/Content-Type 表）+ `--workbench` 开关有测试 -> verify: task_0003
-- [ ] /v1/sessions、/v1/sessions/{id}/transcript、/v1/usage/summary 三读端点有测试（id 校验/cwd 过滤/stats 形状） -> verify: task_0004
-- [ ] frontend/ 工程落地：npm ci + npm run build 通过，dist 入库，静态托管托管真实 dist -> verify: task_0005
-- [ ] 前端视图（外壳/会话/回放/任务/usage）随构建通过交付，视图消费的端点契约与 01 一致 -> verify: task_0006
-- [ ] 全量回归（CI 三步）+ 真实进程 smoke（serve --workbench + SSE + reads） -> verify: task_0007
-- [ ] master F2-F5 勾选、.spec/autorun/ 摘要写入 -> verify: task_0008
+- [x] `_build_http_server` 提取与 Origin 共用函数为纯重构，既有 MCP/runtime 测试不回归 -> verify: task_0001
+- [x] SSE 端点回放+实时+心跳+断开+鉴权扩展（仅本路径）+16 连接上限全有测试 -> verify: task_0002
+- [x] 静态托管（映射/穿越防护/SPA 回退/空态页/Content-Type 表）+ `--workbench` 开关有测试 -> verify: task_0003
+- [x] /v1/sessions、/v1/sessions/{id}/transcript、/v1/usage/summary 三读端点有测试（id 校验/cwd 过滤/stats 形状） -> verify: task_0004
+- [x] frontend/ 工程落地：npm ci + npm run build 通过，dist 入库，静态托管托管真实 dist -> verify: task_0005
+- [x] 前端视图（外壳/会话/回放/任务/usage）随构建通过交付，视图消费的端点契约与 01 一致 -> verify: task_0006
+- [x] 全量回归（CI 三步）+ 真实进程 smoke（serve --workbench + SSE + reads） -> verify: task_0007
+- [x] master F2-F5 勾选、.spec/autorun/ 摘要写入 -> verify: task_0008
 
 ## 7. 风险与约束
 - 风险点：SSE 在 ThreadingHTTPServer 每连接一线程模型下的线程泄漏 -> 缓解：BoundedSemaphore(16) + 写失败/超时即退出并释放槽位（01 数据流定稿）+ 测试覆盖

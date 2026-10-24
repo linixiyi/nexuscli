@@ -55,9 +55,7 @@ def _request(
     return response.status, result_headers, data
 
 
-def _stream_lines(
-    port: int, path: str, *, seconds: float, use_header: bool = True
-) -> list[str]:
+def _stream_lines(port: int, path: str, *, seconds: float, use_header: bool = True) -> list[str]:
     """有界读取一条 SSE 连接：看门狗线程在 seconds 后 shutdown socket 解除阻塞。
 
     getresponse() 之后 http.client 会把 conn.sock 置 None（close-delimited 响应），
