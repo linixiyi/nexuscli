@@ -45,13 +45,13 @@ NexusCLI 的引擎。可移植的是它的**架构模式**——「一个 Core�
 
 ### 第 2 轮：工作台 MVP
 
-- [ ] F2 服务端工作台面：Runtime API 新增 SSE 事件流端点（thread/turn 事件实时推送）与静态资源
+- [x] F2 服务端工作台面：Runtime API 新增 SSE 事件流端点（thread/turn 事件实时推送）与静态资源
       托管（`serve --workbench` 或等价入口，默认绑定 localhost）；零新增 Python 依赖
-- [ ] F3 React + Vite 前端工程：`frontend/` 目录（Vite + React + TypeScript），构建产物
+- [x] F3 React + Vite 前端工程：`frontend/` 目录（Vite + React + TypeScript），构建产物
       `frontend/dist` 提交并由服务端托管；dev 模式经 Vite proxy 指向 Runtime API；构建与运行方式写入文档
-- [ ] F4 会话视图：会话列表 + 转录回放（读会话 JSONL 与 thread events），消息/工具调用时间线呈现，
+- [x] F4 会话视图：会话列表 + 转录回放（读会话 JSONL 与 thread events），消息/工具调用时间线呈现，
       刷新后仍可继续观察（SSE 或轮询续看）
-- [ ] F5 任务面板 + usage 统计视图：/v1/tasks 列表/状态/取消操作呈现 + `~/.nexuscli/usage.db`
+- [x] F5 任务面板 + usage 统计视图：/v1/tasks 列表/状态/取消操作呈现 + `~/.nexuscli/usage.db`
       汇总（回合数、Token、成本）呈现
 
 ### 第 3 轮：交互闭环

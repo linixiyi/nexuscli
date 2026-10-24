@@ -376,6 +376,9 @@ def runtime_serve(
         typer.Option("--api-key", help="Runtime API key. Defaults to NEXUSCLI_RUNTIME_API_KEY."),
     ] = None,
     cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
+    workbench: Annotated[
+        bool, typer.Option("--workbench", help="Serve the static workbench UI at /")
+    ] = False,
 ) -> None:
     """Start the durable task runtime server (HTTP API)."""
     _ = http
@@ -386,7 +389,9 @@ def runtime_serve(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-    server = RuntimeApiServer(cwd=str(root), config=config, api_key=key, port=port)
+    server = RuntimeApiServer(
+        cwd=str(root), config=config, api_key=key, port=port, workbench=workbench
+    )
     _serve_or_exit(server.serve_forever, port)
 
 

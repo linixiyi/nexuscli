@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import mimetypes
 import os
+import posixpath
 import sqlite3
 import threading
 import time
@@ -12,13 +15,19 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from nexuscli.agent import QueryEngine
 from nexuscli.bootstrap import build_tool_registry
 from nexuscli.config import NexusCliConfig
 from nexuscli.llm import create_llm_client
+from nexuscli.net_guards import is_loopback_origin
+from nexuscli.runtime import reads
 from nexuscli.runtime.tasks import TASK_MODES, DurableTaskManager, TaskRecord
 from nexuscli.types import Message
+
+MAX_SSE_CLIENTS = 16
+SSE_HEARTBEAT_SECONDS = 15
 
 
 class TaskCanceledError(RuntimeError):
@@ -34,11 +43,17 @@ class RuntimeApiServer:
         api_key: str | None = None,
         port: int = 8080,
         workers: int = 2,
+        workbench: bool = False,
     ):
         self.cwd = str(Path(cwd).resolve())
         self.config = config
         self.api_key = api_key
         self.port = port
+        self.workbench = workbench
+        # SSE 客户端槽位与事件唤醒信号（DB 仍是唯一事实源，Condition 只消除轮询延迟）
+        self._sse_slots = threading.BoundedSemaphore(MAX_SSE_CLIENTS)
+        self._event_cond = threading.Condition()
+        self._server: ThreadingHTTPServer | None = None
         self.db_path = Path.home() / ".nexuscli" / "runtime" / "runtime.db"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.task_manager = DurableTaskManager(
@@ -72,8 +87,12 @@ class RuntimeApiServer:
             def log_message(self, _format: str, *args: Any) -> None:
                 return
 
-        server = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
-        print(f"NexusCLI Runtime API listening on http://127.0.0.1:{self.port}", flush=True)
+        server = _build_http_server(Handler, self.port)
+        self._server = server
+        bound_port = server.server_address[1]
+        print(f"NexusCLI Runtime API listening on http://127.0.0.1:{bound_port}", flush=True)
+        if self.workbench:
+            print(f"Workbench: http://127.0.0.1:{bound_port}/", flush=True)
         try:
             server.serve_forever()
         finally:
@@ -103,11 +122,25 @@ class RuntimeApiServer:
             thread.start()
 
     def _handle(self, request: BaseHTTPRequestHandler) -> None:
-        if not self._authorized(request):
-            _send_json(request, 401, {"error": "unauthorized"})
-            return
         method = request.command
         path = request.path.split("?", 1)[0]
+        # 静态资源（仅 --workbench）在鉴权门之前分流：构建产物不含用户数据，
+        # /v1/* 一律不走此分支。
+        if method == "GET" and self.workbench and not path.startswith("/v1/"):
+            self._serve_static(request, path)
+            return
+        stream_request = (
+            method == "GET" and path.startswith("/v1/threads/") and path.endswith("/events/stream")
+        )
+        authorized = self._authorized(request) or self._stream_query_authorized(
+            request, method, path
+        )
+        if not authorized:
+            _send_json(request, 401, {"error": "unauthorized"})
+            return
+        if stream_request and not self._stream_origin_allowed(request):
+            _send_json(request, 403, {"error": "cross-origin requests are rejected"})
+            return
         body = _read_json(request)
         try:
             if method == "POST" and path == "/v1/threads":
@@ -128,6 +161,44 @@ class RuntimeApiServer:
                 with self._thread_lock(thread_id):
                     result = asyncio.run(self._run_turn(thread_id, message, mode=mode))
                 _send_json(request, 200, result)
+            elif stream_request:
+                thread_id = path[len("/v1/threads/") : -len("/events/stream")]
+                if not self._thread_exists(thread_id):
+                    _send_json(request, 404, {"error": f"thread not found: {thread_id}"})
+                    return
+                query = parse_qs(urlsplit(request.path).query)
+                since = _int_query(query, "since", 0)
+                self._send_event_stream(request, thread_id, since)
+            elif method == "GET" and path == "/v1/sessions":
+                query = parse_qs(urlsplit(request.path).query)
+                _send_json(
+                    request,
+                    200,
+                    reads.list_sessions(
+                        cwd=self.cwd,
+                        limit=_int_query(query, "limit", 20),
+                        all_projects=(query.get("all") or ["0"])[0] in {"1", "true"},
+                    ),
+                )
+            elif (
+                method == "GET"
+                and path.startswith("/v1/sessions/")
+                and path.endswith("/transcript")
+            ):
+                session_id = path[len("/v1/sessions/") : -len("/transcript")]
+                query = parse_qs(urlsplit(request.path).query)
+                result = reads.read_transcript(
+                    session_id,
+                    offset=_int_query(query, "offset", 0),
+                    limit=_int_query(query, "limit", 200),
+                )
+                if result is None:
+                    _send_json(request, 404, {"error": f"session not found: {session_id}"})
+                else:
+                    _send_json(request, 200, result)
+            elif method == "GET" and path == "/v1/usage/summary":
+                query = parse_qs(urlsplit(request.path).query)
+                _send_json(request, 200, reads.usage_summary(days=_int_query(query, "days", 7)))
             elif method == "GET" and path.startswith("/v1/threads/") and path.endswith("/events"):
                 thread_id = path.split("/")[3]
                 if not self._thread_exists(thread_id):
@@ -329,6 +400,8 @@ class RuntimeApiServer:
                     datetime.now(UTC).isoformat(),
                 ),
             )
+        with self._event_cond:
+            self._event_cond.notify_all()
 
     def _append_thread_message(self, thread_id: str, role: str, content: str) -> None:
         with self._connect() as conn:
@@ -374,7 +447,129 @@ class RuntimeApiServer:
         request.end_headers()
         request.wfile.write(body)
 
+    # ------------------------------------------------------------------
+    # Workbench extensions (F2/F4/F5): SSE stream, static hosting, reads.
+    # ------------------------------------------------------------------
+
+    def _stream_query_authorized(
+        self, request: BaseHTTPRequestHandler, method: str, path: str
+    ) -> bool:
+        """api_key 查询参数只对 SSE stream 路径生效（浏览器 EventSource 带不了自定义头）。"""
+
+        if method != "GET" or not self.api_key:
+            return False
+        if not path.startswith("/v1/threads/") or not path.endswith("/events/stream"):
+            return False
+        query = parse_qs(urlsplit(request.path).query)
+        supplied = (query.get("api_key") or [""])[0]
+        return bool(supplied) and hmac.compare_digest(supplied, self.api_key)
+
+    def _stream_origin_allowed(self, request: BaseHTTPRequestHandler) -> bool:
+        origin = request.headers.get("origin")
+        if origin is None:
+            return True
+        return is_loopback_origin(origin)
+
+    def _send_event_stream(
+        self, request: BaseHTTPRequestHandler, thread_id: str, since: int
+    ) -> None:
+        acquired = self._sse_slots.acquire(timeout=0)
+        if not acquired:
+            request.send_response(503)
+            request.send_header("retry-after", "5")
+            request.send_header("content-length", "0")
+            request.end_headers()
+            return
+        try:
+            request.connection.settimeout(SSE_HEARTBEAT_SECONDS)
+            request.send_response(200)
+            request.send_header("content-type", "text/event-stream")
+            request.send_header("cache-control", "no-store")
+            request.send_header("connection", "close")
+            request.end_headers()
+            last_id = max(0, since)
+            while not self._stop.is_set():
+                rows = self._events_since(thread_id, last_id)
+                if rows:
+                    payload = "".join(
+                        f"id: {row_id}\nevent: {event_type}\ndata: {row_payload}\n\n"
+                        for row_id, event_type, row_payload in rows
+                    ).encode("utf-8")
+                    request.wfile.write(payload)
+                    request.wfile.flush()
+                    last_id = rows[-1][0]
+                    continue
+                with self._event_cond:
+                    self._event_cond.wait(SSE_HEARTBEAT_SECONDS)
+                if not self._events_since(thread_id, last_id):
+                    request.wfile.write(b": ping\n\n")
+                    request.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+            pass  # 客户端断开/半死：清理退出，finally 释放槽位
+        finally:
+            self._sse_slots.release()
+            with suppress(Exception):
+                request.connection.close()
+
+    def _events_since(self, thread_id: str, last_id: int) -> list[tuple[int, str, str]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select id, type, payload
+                from events
+                where thread_id = ? and id > ?
+                order by id
+                """,
+                (thread_id, last_id),
+            ).fetchall()
+        return [(int(row[0]), str(row[1]), str(row[2])) for row in rows]
+
+    def _workbench_dist_root(self) -> Path:
+        override = os.environ.get("NEXUSCLI_WORKBENCH_DIST")
+        if override:
+            return Path(override)
+        return Path(self.cwd) / "frontend" / "dist"
+
+    def _serve_static(self, request: BaseHTTPRequestHandler, path: str) -> None:
+        dist_root = self._workbench_dist_root()
+        index = dist_root / "index.html"
+        # raw 与 decode 后的路径段里出现 ".." 一律 404：normpath 会把 /a/../../x
+        # 折叠成根内路径，让攻击请求落入 SPA 回退而非显式拒绝。
+        from urllib.parse import unquote
+
+        if ".." in path.split("/") or ".." in unquote(path).split("/"):
+            _send_bytes(request, 404, b"not found", "text/plain; charset=utf-8")
+            return
+        rel = posixpath.normpath(path).lstrip("/")
+        if rel.startswith(".."):
+            _send_bytes(request, 404, b"not found", "text/plain; charset=utf-8")
+            return
+        target: Path | None = None
+        if not rel or rel == ".":
+            target = index if index.is_file() else None
+        else:
+            candidate = dist_root / rel
+            try:
+                resolved = candidate.resolve()
+                resolved.relative_to(dist_root.resolve())
+            except (ValueError, OSError):
+                _send_bytes(request, 404, b"not found", "text/plain; charset=utf-8")
+                return
+            if resolved.is_file():
+                target = resolved
+            elif not candidate.suffix:
+                target = index if index.is_file() else None
+            else:
+                _send_bytes(request, 404, b"not found", "text/plain; charset=utf-8")
+                return
+        if target is None:
+            # dist 缺失（F2 交付时 F3 未落地 / wheel 检出形态）：空态页 + 构建指引
+            _send_bytes(request, 200, _EMPTY_STATE_HTML.encode("utf-8"), "text/html; charset=utf-8")
+            return
+        _send_file(request, target)
+
     def _ensure_schema(self) -> None:
+
         with self._connect() as conn:
             conn.execute(
                 """
@@ -412,6 +607,76 @@ class RuntimeApiServer:
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
+
+
+def _build_http_server(handler: type[BaseHTTPRequestHandler], port: int) -> ThreadingHTTPServer:
+    """Bind the loopback server without serving; port 0 picks a free port (test seam)."""
+
+    return ThreadingHTTPServer(("127.0.0.1", port), handler)
+
+
+def _int_query(query: dict[str, list[str]], name: str, default: int) -> int:
+    raw = (query.get(name) or [str(default)])[0]
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+_STATIC_CONTENT_TYPES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".map": "application/json",
+    ".woff2": "font/woff2",
+    ".wasm": "application/wasm",
+}
+
+
+def _content_type_for(name: str) -> str:
+    suffix = Path(name).suffix.lower()
+    if suffix in _STATIC_CONTENT_TYPES:
+        ctype = _STATIC_CONTENT_TYPES[suffix]
+    else:
+        guessed = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        ctype = guessed
+    if ctype.startswith(("text/", "application/json")) and "charset" not in ctype:
+        ctype = f"{ctype}; charset=utf-8"
+    return ctype
+
+
+def _send_bytes(
+    request: BaseHTTPRequestHandler, status: int, body: bytes, content_type: str
+) -> None:
+    request.send_response(status)
+    request.send_header("content-type", content_type)
+    request.send_header("content-length", str(len(body)))
+    request.send_header("cache-control", "no-store")
+    request.end_headers()
+    request.wfile.write(body)
+
+
+def _send_file(request: BaseHTTPRequestHandler, path: Path) -> None:
+    body = path.read_bytes()
+    _send_bytes(request, 200, body, _content_type_for(path.name))
+
+
+_EMPTY_STATE_HTML = """<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>NexusCLI Workbench</title></head>
+<body>
+<h1>NexusCLI 工作台 UI 未构建</h1>
+<p>当前部署不包含已构建的前端产物（frontend/dist）。</p>
+<p>构建指引：<code>cd frontend &amp;&amp; npm run build</code>（Node.js 20.19+）。</p>
+<p><code>/v1/*</code> Runtime API 不受影响，照常可用。</p>
+</body>
+</html>
+"""
 
 
 def _read_json(request: BaseHTTPRequestHandler) -> dict[str, Any]:
