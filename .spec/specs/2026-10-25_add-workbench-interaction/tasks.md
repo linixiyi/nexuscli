@@ -21,7 +21,7 @@
 
 ## 阶段二：前端
 
-- [ ] ApprovalCard + 2s 轮询 + Composer 状态机
+- [x] ApprovalCard + 2s 轮询 + Composer 状态机
   - depends-on: task_0003
   - boundary: 只写 frontend/src/（api/approvals.ts 消费 GET /v1/approvals 与 decision、App 外壳常驻审批轮询与卡片区、views/Composer.tsx 提交状态机 + 线程记忆写入、TranscriptView 支持 F7 提交态）；frontend/dist 重建；不改 Python 侧
   - verify: `cd frontend && npm run build && cd .. && test -z "$(git status --porcelain -- frontend/dist)" && echo "dist in sync"`

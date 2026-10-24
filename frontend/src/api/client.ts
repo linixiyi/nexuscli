@@ -22,7 +22,7 @@ export function getApiKey(): string {
   return raw === null ? "" : raw;
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   init?: { method?: string; body?: unknown },
 ): Promise<T> {

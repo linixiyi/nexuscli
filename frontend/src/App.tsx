@@ -1,7 +1,10 @@
 import type { JSX } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { getApiKey } from "./api/client";
+import { listApprovals, type PendingApproval } from "./api/approvals";
+import { ApprovalCard } from "./views/ApprovalCard";
+import { Composer } from "./views/Composer";
 import { SessionsView } from "./views/SessionsView";
 import { TasksView } from "./views/TasksView";
 import { TranscriptView } from "./views/TranscriptView";
@@ -28,6 +31,32 @@ export function App(): JSX.Element {
   const [draftKey, setDraftKey] = useState("");
   const [tab, setTab] = useState<Tab>(() => readHash().tab);
   const [sessionId, setSessionId] = useState<string | null>(() => readHash().session);
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+
+  // 常驻审批轮询（2s，01 定稿节奏）：审批挂起/解决的 SSE 推送为挂账②，MVP 用轮询
+  useEffect(() => {
+    if (apiKey === null) {
+      return;
+    }
+    let cancelled = false;
+    const poll = (): void => {
+      listApprovals()
+        .then((payload) => {
+          if (!cancelled) {
+            setApprovals(payload.approvals);
+          }
+        })
+        .catch(() => {
+          // 轮询失败静默重试
+        });
+    };
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [apiKey]);
 
   if (apiKey === null) {
     return (
@@ -83,9 +112,21 @@ export function App(): JSX.Element {
           </button>
         </nav>
       </header>
+      {approvals.length > 0 && (
+        <section className="approvals">
+          {approvals.map((approval) => (
+            <ApprovalCard
+              key={approval.id}
+              approval={approval}
+              onResolved={(id) => setApprovals((list) => list.filter((item) => item.id !== id))}
+            />
+          ))}
+        </section>
+      )}
       <main>
         {tab === "sessions" && (
           <>
+            <Composer onOpenThread={openSession} />
             <SessionsView activeKey={apiKey} onOpenSession={openSession} />
             {sessionId !== null && (
               <section>
