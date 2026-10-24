@@ -27,11 +27,11 @@
 
 ## 阶段三：机械收口
 
-- [ ] 落地 tests/test_docs_integrity.py 四用例（03「校验面」定稿）
+- [x] 落地 tests/test_docs_integrity.py 四用例（03「校验面」定稿）
   - depends-on: task_0003
   - boundary: 只新增 tests/test_docs_integrity.py（四用例：README 目录锚点解析、相对链接存在性（README+docs+TUTORIAL，排除 http/mailto/#）、`path.md#frag` fragment 命中目标 slug 集合、行数预算 360-440 + ast 解析 site/build.py 断言 set(DOC_META)==set(PAGER_ORDER)==docs/*.md stems）；纯仓库文件检查不触碰 Path.home()，conftest 重定向照常；不改其他测试
   - verify: `uv run python -m pytest -q tests/test_docs_integrity.py`（期望 4 用例全绿）
-- [ ] 全量回归（与 CI 一致的三步）
+- [x] 全量回归（与 CI 一致的三步）
   - depends-on: task_0004
   - boundary: 不改任何文件，只跑回归；若有失败，修复限于本包 boundary 内文件后重跑
   - verify: `uv run ruff check . && uv run ruff format --check . && uv run python -m pytest`（期望全绿）
