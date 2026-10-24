@@ -154,3 +154,41 @@ button.active {
 .status-failed {
   font-weight: 700;
 }
+
+.approvals {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.approval-card {
+  border: 2px solid currentColor;
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+}
+
+.approval-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.reason {
+  margin: 0.3rem 0;
+  font-weight: 600;
+}
+
+.composer {
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.composer textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  resize: vertical;
+}

@@ -56,9 +56,9 @@ NexusCLI 的引擎。可移植的是它的**架构模式**——「一个 Core�
 
 ### 第 3 轮：交互闭环
 
-- [ ] F6 Web 审批卡片：Runtime API 任务审批挂起的 Web 呈现与批准/拒绝动作，与 REPL 审批同一语义
+- [x] F6 Web 审批卡片：Runtime API 任务审批挂起的 Web 呈现与批准/拒绝动作，与 REPL 审批同一语义
       （同一审计口径），审批提示带 Reason 行
-- [ ] F7 Web 端发起 turn：工作台输入框提交 prompt 建 thread/turn，SSE 实时观察流式输出与工具调用
+- [x] F7 Web 端发起 turn：工作台输入框提交 prompt 建 thread/turn，SSE 实时观察流式输出与工具调用
 
 ### 第 4 轮：CI 与文档收尾
 
