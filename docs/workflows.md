@@ -1,6 +1,6 @@
 # 动态工作流与 /expert
 
-> 本文是 [README](../README.md)「🔀 动态工作流与 /expert」章节的完整版。
+> 本文是 [README](../README.md) 深入文档索引「动态工作流与 /expert」条目的完整版。
 
 NexusCLI 提供一个 JSON 步骤图引擎（实现：`src/nexuscli/workflow/graph.py`，纯 schema 层，无网络无执行）和 REPL 侧的依赖批次并行派发器（`workflow_cmds._run_workflow_graph`）。两个入口共用同一引擎与提示词层：
 

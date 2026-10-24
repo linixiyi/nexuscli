@@ -1,6 +1,6 @@
 # 定时任务（cron）
 
-> 本文是 [README](../README.md)「⏰ 定时任务（cron）」章节的完整版。
+> 本文是 [README](../README.md) 深入文档索引「定时任务（cron）」条目的完整版。
 
 `nexuscli cron` 是**离线形态**的定时提示词注册表（实现：`src/nexuscli/runtime/cron.py` + `entrypoints/cli.py` 的 `cron_app`）：任务表就是一个 JSON 文件，CLI 只做解析与读取面，**没有常驻守护进程、没有调度循环、模块内也不做任何 LLM/网络调用**。真正到点触发由你或外部调度器驱动。
 

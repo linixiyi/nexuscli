@@ -1,6 +1,6 @@
 # 插件系统（本地目录 MVP）
 
-> 本文是 [README](../README.md)「🧱 插件系统」章节的完整版。
+> 本文是 [README](../README.md) 深入文档索引「插件系统」条目的完整版。
 
 插件是一个放在项目 `.nexuscli/plugins/<name>/` 下的目录：一个 `plugin.json` manifest 加最多三个组件子目录（实现：`src/nexuscli/plugins/loader.py`）。启动装配时（`bootstrap.py` 第一步）只做**发现**——纯文件读取，无网络、无执行；三类组件的并入发生在各自的注册表加载函数里。
 
