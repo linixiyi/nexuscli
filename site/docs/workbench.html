@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工作台（Workbench） · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：浏览器可视化工作台：会话回放、实时事件流、任务面板与用量统计。">
+  <meta property="og:title" content="工作台（Workbench） · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/workbench.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#快速开始">快速开始</a></li>
+<li><a href="#功能面">功能面</a></li>
+<li><a href="#端点与-api">端点与 API</a></li>
+<li><a href="#部署边界与安全">部署边界与安全</a></li>
+<li><a href="#如实边界">如实边界</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🖥️ 浏览器可视化工作台：会话回放、实时事件流、任务面板与用量统计</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/workbench.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="工作台workbench"><a class="toclink" href="#工作台workbench">工作台（Workbench）</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🖥️ 可视化工作台」章节的完整版。</p>
+</blockquote>
+<p>工作台是 NexusCLI 的浏览器入口：「一个 Core、多种入口」中的 Web 形态。服务端 = 现有
+Runtime API（标准库 <code>http.server</code>，零新增 Python 依赖）+ SSE 事件流 + 静态资源托管；
+前端 = <code>frontend/</code>（Vite + React + TypeScript），构建产物 <code>frontend/dist</code> 由服务端托管。</p>
+<h2 id="快速开始"><a class="toclink" href="#快速开始">快速开始</a></h2>
+<p>仓库检出自带已构建的 <code>frontend/dist</code>，直接可用：</p>
+<pre><code class="language-bash">NEXUSCLI_RUNTIME_API_KEY=dev-key uv run nexuscli serve --workbench --port 8080
+# 打开 http://127.0.0.1:8080/
+</code></pre>
+<p>自行构建前端（需要 Node.js 22 LTS 与 npm）：</p>
+<pre><code class="language-bash">cd frontend &amp;&amp; npm ci &amp;&amp; npm run build
+</code></pre>
+<p><code>frontend/dist</code> 缺失时首页显示空态页与构建指引，<code>/v1/*</code> API 不受影响。开发模式下
+<code>cd frontend &amp;&amp; npm run dev</code> 经 Vite proxy 同源转发 <code>/v1</code> 到 Runtime API（默认 8080，
+可用 <code>NEXUSCLI_WORKBENCH_API_PORT</code> 覆盖）。</p>
+<h2 id="功能面"><a class="toclink" href="#功能面">功能面</a></h2>
+<ul>
+<li><strong>会话视图</strong>：会话列表（服务端枚举 + 本浏览器线程记忆 + 手动 ID）与转录回放——线程走
+  SSE <code>since=0</code> 全量回放并可继续观察进行中的 turn，REPL 会话走 <code>/v1/sessions/{id}/transcript</code>
+  静态渲染</li>
+<li><strong>发起 turn</strong>：输入框建线程提交（react/plan/team 三模式），POST 作为后台提交发出，
+  SSE 实时观察流式输出与工具调用</li>
+<li><strong>任务面板</strong>：后台任务列表 2s 轮询、详情展开、取消（与 <code>/v1/tasks</code> 数据一致）</li>
+<li><strong>usage 统计</strong>：近 N 天回合数/Token/成本汇总卡与按模型、按来源两张拆分表</li>
+<li><strong>审批卡片</strong>：Runtime 任务挂起的审批在页顶出现（Reason 行 + 批准/拒绝），2s 轮询</li>
+</ul>
+<h2 id="端点与-api"><a class="toclink" href="#端点与-api">端点与 API</a></h2>
+<p>工作台消费的端点（鉴权：<code>x-api-key</code> 头，SSE 额外支持 <code>api_key</code> 查询参数）：</p>
+<table>
+<thead>
+<tr>
+<th>方法与路径</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET <code>/v1/threads/{id}/events/stream?since=N</code></td>
+<td>SSE 事件流：回放 + 实时 + 15s 心跳，16 连接上限</td>
+</tr>
+<tr>
+<td>GET <code>/v1/sessions</code></td>
+<td>REPL 会话列表（JSONL 首行 meta，updated_at 倒序，cwd 过滤）</td>
+</tr>
+<tr>
+<td>GET <code>/v1/sessions/{id}/transcript</code></td>
+<td>会话转录分页读取（id 仅 <code>[0-9a-zA-Z-]+</code>）</td>
+</tr>
+<tr>
+<td>GET <code>/v1/usage/summary?days=N</code></td>
+<td>usage 聚合（<code>UsageStore.stats</code> 原样形状）</td>
+</tr>
+<tr>
+<td>GET <code>/v1/approvals</code></td>
+<td>挂起审批列表</td>
+</tr>
+<tr>
+<td>POST <code>/v1/approvals/{id}/decision</code></td>
+<td>审批决策（仅 <code>approve</code>/<code>deny</code>）</td>
+</tr>
+<tr>
+<td>GET <code>/</code> 与非 <code>/v1/*</code></td>
+<td>静态资源 / SPA 回退 / 空态页</td>
+</tr>
+</tbody>
+</table>
+<p>既有 threads / turns / tasks 端点见 <a href="runtime-api.html">runtime-api.md</a>，不在此重复。</p>
+<h2 id="部署边界与安全"><a class="toclink" href="#部署边界与安全">部署边界与安全</a></h2>
+<ul>
+<li>服务端硬绑定 <code>127.0.0.1</code>；无多用户认证、不做公网部署（与 MCP server 边界一致）</li>
+<li>静态资源免鉴权（无用户数据的构建产物）；<code>/v1/*</code> 全走 key</li>
+<li>SSE 的 <code>api_key</code> 查询参数会出现在本机浏览器历史（浏览器 <code>EventSource</code> 无法设置自定义
+  请求头，这是唯一出口）；缓解是仅绑定 localhost 且该端点只读</li>
+<li>会话转录端点返回用户对话正文（本机敏感数据），与 <code>nexuscli sessions</code> CLI 同暴露级别</li>
+<li>审批挂起 300s 无决策按 deny 失败关闭；执行器把超时 deny 也记为 <code>approver="hitl"</code>
+  （词表无 <code>approval-timeout</code> 值，桥在 <code>resolved_by</code> 里留存真相）</li>
+</ul>
+<h2 id="如实边界"><a class="toclink" href="#如实边界">如实边界</a></h2>
+<ul>
+<li>MVP 无前端单元测试（vitest 挂账）；质量门槛 = <code>tsc -b</code> 构建通过 + Python 侧端点测试 +
+  真实进程 smoke</li>
+<li><code>frontend/dist</code> 已入库但未打进 wheel（检出仓库或设置 <code>NEXUSCLI_WORKBENCH_DIST</code> 使用）</li>
+<li>Windows 下的前端构建不被 CI 覆盖（frontend job 仅 ubuntu）</li>
+<li>截图待补（README 章节内为 HTML 注释占位）</li>
+<li>审批挂起/解决的 SSE 推送未做（MVP 用轮询）；Web 端不提供 <code>approve_run</code> / <code>approve_auto</code></li>
+</ul><div class="pager"><a href="runtime-api.html" class="prev"><span class="dir">← 上一篇</span><span class="name">📡 Runtime API</span></a><a href="sessions.html" class="next"><span class="dir">下一篇 →</span><span class="name">💾 会话、恢复与快照</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/workbench.md" target="_blank" rel="noopener">docs/workbench.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer><script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        var light = document.documentElement.getAttribute("data-theme") === "light";
+        link.href = light ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try {
+        new MutationObserver(apply).observe(
+          document.documentElement,
+          { attributes: true, attributeFilter: ["data-theme"] }
+        );
+      } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>
