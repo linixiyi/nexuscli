@@ -31,8 +31,8 @@
 ## 3. 功能范围
 
 ### 3.1 核心功能（MVP）
-- [ ] F6 Web 审批卡片：服务端 ApprovalBridge + GET /v1/approvals + POST /v1/approvals/{id}/decision；前端卡片渲染（description 作 Reason 行）与 2s 轮询
-- [ ] F7 Web 端发起 turn：Composer 输入框 → POST threads/turns → SSE 实时观察；线程记忆写入 localStorage
+- [x] F6 Web 审批卡片：服务端 ApprovalBridge + GET /v1/approvals + POST /v1/approvals/{id}/decision；前端卡片渲染（description 作 Reason 行）与 2s 轮询
+- [x] F7 Web 端发起 turn：Composer 输入框 → POST threads/turns → SSE 实时观察；线程记忆写入 localStorage
 
 ### 3.2 扩展功能
 - 无
@@ -58,18 +58,18 @@
 - 变更对象：Runtime API 审批面（新 approvals 模块与两端点）、_run_turn/_run_task 接线、前端 Composer/卡片
 - 快速检查：`uv run python -m pytest -q tests/test_runtime_approvals.py`
 - 集成检查：`cd frontend && npm ci && npm run build` + dist in sync
-- 全项目检查：适用外——审批门序零改动，无跨模块契约变化；与 CI 一致的三步回归由收口任务执行
+- 全项目检查：适用外——审批门序零改动；与 CI 一致的三步回归已由 task_0005 真实执行并全绿（1101 passed），升级条件见「升级触发」行
 - 升级触发：若实现需触碰 tools/executor.py（门序/审计词表）即升级为 integration 并记录理由
 
 ## 6. 成功标准与验证方式
-- [ ] ApprovalBridge 单元语义：登记/查询/决策/二次决策 404/非法动词 400/超时 deny(resolved_by=timeout) -> verify: task_0001
-- [ ] 决策端点 Origin 语义与 MCP A3 口径一致（非 loopback Origin 403、无 Origin 放行） -> verify: task_0002
-- [ ] 执行器集成：write_file 挂起 → approve 落盘 + 审计 approver=hitl；deny 拒绝；deny 规则下桥登记表恒空 -> verify: task_0003
-- [ ] Reason 契约：两个调用点的审批请求 description 键存在且非空 -> verify: task_0004
-- [ ] _run_turn/_run_task 接入审批回调（既有 runtime 测试不回归） -> verify: task_0005
-- [ ] 前端 ApprovalCard + 2s 轮询 + Composer 状态机交付，构建通过 -> verify: task_0006
-- [ ] 全量回归（CI 三步）+ 端到端 smoke -> verify: task_0007
-- [ ] master F6/F7 勾选、.spec/autorun/ 摘要写入 -> verify: task_0008
+- [x] ApprovalBridge 单元语义：登记/查询/决策/二次决策 404/非法动词 400/超时 deny(resolved_by=timeout) -> verify: task_0001
+- [x] 决策端点 Origin 语义与 MCP A3 口径一致（非 loopback Origin 403、无 Origin 放行） -> verify: task_0002
+- [x] 执行器集成：write_file 挂起 → approve 落盘 + 审计 approver=hitl；deny 拒绝；deny 规则下桥登记表恒空 -> verify: task_0003
+- [x] Reason 契约：两个调用点的审批请求 description 键存在且非空 -> verify: task_0004
+- [x] _run_turn/_run_task 接入审批回调（既有 runtime 测试不回归） -> verify: task_0005
+- [x] 前端 ApprovalCard + 2s 轮询 + Composer 状态机交付，构建通过 -> verify: task_0006
+- [x] 全量回归（CI 三步）+ 端到端 smoke -> verify: task_0007
+- [x] master F6/F7 勾选、.spec/autorun/ 摘要写入 -> verify: task_0008
 
 ## 7. 风险与约束
 - 风险点：审批挂起占死 worker 槽位 -> 缓解：300s 超时 deny 失败关闭（默认 2 worker）

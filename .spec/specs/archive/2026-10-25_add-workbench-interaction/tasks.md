@@ -28,11 +28,11 @@
 
 ## 阶段三：收口
 
-- [ ] 全量回归 + 端到端 smoke
+- [x] 全量回归 + 端到端 smoke
   - depends-on: task_0004
   - boundary: 不改产品文件；CI 三步 + serve --workbench 端到端（无 LLM key 环境按 02 口径做错误路径断言并如实标注）
   - verify: `uv run ruff check . && uv run ruff format --check . && uv run python -m pytest`
-- [ ] 计划同步：勾选 master F6/F7 + .spec/autorun/ 摘要
+- [x] 计划同步：勾选 master F6/F7 + .spec/autorun/ 摘要
   - depends-on: task_0005
   - boundary: 只改 master（F6/F7 置 [x]）与 .spec/autorun/ 摘要
   - verify: `grep -c "\[x\] F[67] " .spec/plans/2026-10-25_workbench-and-readme/master.md`（期望输出 2）

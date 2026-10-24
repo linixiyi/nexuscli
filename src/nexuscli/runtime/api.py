@@ -209,8 +209,10 @@ class RuntimeApiServer:
                 self._send_events(request, thread_id)
             elif method == "GET" and path == "/v1/approvals":
                 _send_json(request, 200, {"approvals": self.approval_bridge.list_pending()})
-            elif method == "POST" and path.startswith("/v1/approvals/") and path.endswith(
-                "/decision"
+            elif (
+                method == "POST"
+                and path.startswith("/v1/approvals/")
+                and path.endswith("/decision")
             ):
                 approval_id = path[len("/v1/approvals/") : -len("/decision")]
                 decision = str(body.get("decision") or "")

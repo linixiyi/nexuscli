@@ -49,9 +49,7 @@ class ApprovalBridge:
         self._guard = threading.Lock()
         self._pending: dict[str, PendingApproval] = {}
 
-    def callback_for(
-        self, *, thread_id: str | None = None, task_id: str | None = None
-    ) -> Any:
+    def callback_for(self, *, thread_id: str | None = None, task_id: str | None = None) -> Any:
         """返回绑定上下文的审批回调闭包（执行器 approval_callback 合同）。"""
 
         scope_type: Literal["thread", "task"] = "thread" if thread_id is not None else "task"
@@ -70,9 +68,7 @@ class ApprovalBridge:
 
         return callback
 
-    def _register(
-        self, request: dict[str, Any], scope_type: str, scope_id: str
-    ) -> PendingApproval:
+    def _register(self, request: dict[str, Any], scope_type: str, scope_id: str) -> PendingApproval:
         approval = PendingApproval(
             id=_new_approval_id(),
             request=dict(request),
