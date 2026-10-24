@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>记忆、动态 Prompt 与上下文压缩 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：记忆三层、动态召回、压缩预算与 provider 超限重试。">
+  <meta property="og:title" content="记忆、动态 Prompt 与上下文压缩 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/memory-context.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul></ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧠 记忆三层、动态召回、压缩预算与 provider 超限重试</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/memory-context.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="记忆动态-prompt-与上下文压缩"><a class="toclink" href="#记忆动态-prompt-与上下文压缩">记忆、动态 Prompt 与上下文压缩</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a> 深入文档索引「记忆、动态 Prompt 与上下文压缩」条目的完整版。</p>
+</blockquote>
+<p>NexusCLI 把记忆分成三层：</p>
+<ul>
+<li>短期记忆：当前 thread/session 的原始消息、工具调用和工具结果</li>
+<li>静态长期记忆：<code>AGENTS.md</code>、<code>NEXUS.md</code>、<code>.nexuscli/NEXUS.md</code> 及自定义 prompt 文件；人工维护、可版本控制；<code>/init [notes]</code> 可让 Agent 检查工作区并生成或增量更新根 <code>AGENTS.md</code>，写入经 write_file 审批</li>
+<li>动态长期记忆：按项目 scope 隔离的 SQLite 记录；包含 kind、source、importance、confidence、TTL、访问次数和内容哈希</li>
+</ul>
+<p>动态记忆不会再无条件取"最近 8 条"。每个请求会按当前问题自动召回 Top-K，并把结果放进明确标注为 untrusted data 的动态 Prompt；模型觉得候选不足时，还可以调用 <code>search_memory</code> 深搜。写入端会拒绝空值/超长值，通过规范化哈希去重，并按项目容量淘汰低价值记录。</p>
+<p>Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态前缀承载身份、规则和项目指令；动态后缀承载当前时间、cwd、模型、工具以及与当前问题相关的记忆。</p>
+<p>可用输入预算按 <code>context_window - max_output_tokens - reserve_tokens</code> 计算。默认在该预算的 80% 触发压缩，压到 55% 左右，为后续输出、工具结果和无 tokenizer 估算误差留出空间。压缩摘要只属于短期会话，不会自动晋升为长期记忆。</p>
+<p>达到压缩阈值时，压缩流程会先做一步无损的微压缩（microcompact）：把较旧回合的工具结果内容就地替换为固定占位符，消息条数与结构保持不变，最近 5 条工具结果原文保留；若清除后已回到预算内且节省达标，就不再产生摘要。清除后仍超限或节省不足时，才会继续走上述有损摘要路径。该行为随自动压缩启用，不新增配置项。</p>
+<p>压缩摘要的角色约束：摘要必须放 <strong>user</strong> 角色——严格交替网关会 outright 拒绝 assistant 开头或 assistant 连续的请求（GLM 实测 HTTP 400 code 11133）。</p>
+<p>除了自动压缩，REPL 里可随时手动压缩（<code>/compact [focus]</code>，见 <a href="repl-commands.html">repl-commands.md</a>）。</p>
+<p><strong>provider 超限自动压缩重试</strong>：压缩阈值基于无 tokenizer 的估算，恢复的长会话或超大工具结果可能让请求越过估算直接撞上 provider 的真实 context 上限。这种报错（<code>llm/base.py</code> 的 <code>is_context_overflow_error</code> 按短语识别，覆盖 OpenAI「maximum context length」/<code>context_length_exceeded</code> 与 Anthropic「prompt is too long」等主流报文）不会立刻让回合失败：主循环先用与 <code>/compact</code> 相同的手动压缩器压一次历史并重试同一回合，只重试一次，通知以 <code>text_delta</code> 流出（「Provider reported a context-length overflow; compacting …」）。两种情况仍照常报错：历史已无可压内容（<code>compact_now</code> 报告未压缩），或重试后二次溢出。该行为随 <code>features.context_compression</code> 开关；如实边界：只接在主 Agent 的 ReAct 循环上，<code>task</code> 委派的子代理路径未接——子代理撞超限仍直接报错。新 provider 的报文措辞不在短语表里时不会触发重试，需要按需补充短语。</p><div class="pager"><a href="skills.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🎯 Skill 匹配与沉淀</span></a><a href="subagents.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧩 子代理 task 工具</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/memory-context.md" target="_blank" rel="noopener">docs/memory-context.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer><script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        var light = document.documentElement.getAttribute("data-theme") === "light";
+        link.href = light ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try {
+        new MutationObserver(apply).observe(
+          document.documentElement,
+          { attributes: true, attributeFilter: ["data-theme"] }
+        );
+      } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

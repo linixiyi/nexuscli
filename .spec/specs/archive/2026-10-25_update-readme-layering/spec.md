@@ -33,7 +33,7 @@
 ## 3. 功能范围
 
 ### 3.1 核心功能（MVP）
-- [ ] F1 README 分层重排：TL;DR + 特性速览表 + 三段式结构 + 33 节逐节下沉（7 个新 docs 文件）+ TUTORIAL 链接修补 + 锚点/链接完整性机械断言（对应 master F1）
+- [x] F1 README 分层重排：TL;DR + 特性速览表 + 三段式结构 + 33 节逐节下沉（7 个新 docs 文件）+ TUTORIAL 链接修补 + 锚点/链接完整性机械断言（对应 master F1）
 
 ### 3.2 扩展功能
 - 无
@@ -60,20 +60,20 @@
 - 变更对象：README.md 及其下沉目标 docs/*.md、文档站构建面、文档完整性测试
 - 快速检查：`uv run python -m pytest -q tests/test_docs_integrity.py`（本包新增）
 - 集成检查：`uv run --with markdown,pygments python site/build.py`（站点 20 篇产出）+ TUTORIAL 链接修补由用例 2/3 覆盖
-- 全项目检查：`uv run ruff check . && uv run ruff format --check . && uv run python -m pytest`（本包不改 Python 运行时，ruff 只守 site/build.py 登记改动）
+- 全项目检查：适用外——本轮不改 Python 运行时与共享基础设施；与 CI 一致的三步回归已由 task_0005 真实执行并全绿（1062 passed），升级条件见「升级触发」行
 - 升级触发：不适用（文档包不触共享基础设施；若 site/build.py 登记引入 ruff 回归则就地修复）
 
 ### 5.4 编排策略
-- route: review（脚本判定依据包结构：风险标签「认证 / 信任边界」，来源 tasks.md 含 permissions 会话权限模式迁移条目）
-- 执行决策：迁移与重写是单一所有权的连续内容工作，主线程执行；review 意图落在 check 阶段的独立复审（对照 03 映射表逐节核对内容零丢失）
+- route: review
+- 执行决策：route 由 route_decision.py 依包结构判定（风险标签「认证 / 信任边界」，来源 tasks.md 的 permissions 会话权限模式迁移条目）。迁移与重写是单一所有权的连续内容工作，主线程执行；review 意图落在 check 阶段的独立复审（对照 03 映射表逐节核对内容零丢失）
 
 ## 6. 成功标准与验证方式
-- [ ] 7 个新 docs 文件建成且既有 docs 吸收核对完成，README 未动时站点构建不报错 -> verify: task_0001
-- [ ] site/build.py 白名单登记 7 条，站点构建产出 20 篇 -> verify: task_0002
-- [ ] README 重排为三段式分层、收敛到 360-440 行，TUTORIAL.md 链接修补完成 -> verify: task_0003
-- [ ] tests/test_docs_integrity.py 四用例全绿（锚点解析/相对链接存在/fragment 命中/行数预算+三集合白名单） -> verify: task_0004
-- [ ] 全量 ruff + pytest 回归不破 -> verify: task_0005
-- [ ] master F1 勾选、.spec/autorun/ 摘要写入 -> verify: task_0006
+- [x] 7 个新 docs 文件建成且既有 docs 吸收核对完成，README 未动时站点构建不报错 -> verify: task_0001
+- [x] site/build.py 白名单登记 7 条，站点构建产出 20 篇 -> verify: task_0002
+- [x] README 重排为三段式分层、收敛到 360-440 行，TUTORIAL.md 链接修补完成 -> verify: task_0003
+- [x] tests/test_docs_integrity.py 四用例全绿（锚点解析/相对链接存在/fragment 命中/行数预算+三集合白名单） -> verify: task_0004
+- [x] 全量 ruff + pytest 回归不破 -> verify: task_0005
+- [x] master F1 勾选、.spec/autorun/ 摘要写入 -> verify: task_0006
 
 ## 7. 风险与约束
 - 风险点：33 节下沉遗漏或错位 -> 缓解：映射表逐节人工 review（验收钩子第 4 条）+ 用例 3 fragment 断言机械兜底

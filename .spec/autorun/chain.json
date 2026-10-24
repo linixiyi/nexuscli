@@ -1,0 +1,39 @@
+{
+  "chain": "autorun",
+  "chain_id": "autorun-20261025-workbench",
+  "client_surface": "desktop",
+  "completed_step_ids": [],
+  "execution_mode": "current",
+  "feature_fingerprint": "7547acd9a3801597afd4b526bf5ff731fa438d24fbdc7464489a4cfc36e18869",
+  "host": "zcode",
+  "lifecycle": "active",
+  "max_rounds": 5,
+  "model": null,
+  "model_control": "host",
+  "permission_effective": "host",
+  "plan_docs": [
+    ".spec/plans/2026-10-25_workbench-and-readme/master.md"
+  ],
+  "revision": 2,
+  "round": 1,
+  "schema_version": 3,
+  "step": {
+    "id": "pkg-readme-layering",
+    "kind": "package",
+    "outcome": "passed",
+    "proof": {
+      "archive": ".spec/specs/archive/2026-10-25_update-readme-layering",
+      "archive_hashes": {
+        "completion-summary.md": "270822cd8250c6dd3370866a72c2253e657160d7cf52e9696aac1bce315d4464",
+        "runs.jsonl": "71b453903a44c9f43b578d883c099bc11a53a02871d129c58b6933b5e6b12455",
+        "spec.md": "64a86510f351fbc3be473f234155a58e3a93ae580d82ffa6e68b964b261ff3f8",
+        "tasks.md": "9bc4410203b0bd05a0d68505112347f133918ff6daa6aa7e6e72bc7720105765"
+      },
+      "slug": "2026-10-25_update-readme-layering"
+    },
+    "slug": "2026-10-25_update-readme-layering",
+    "status": "complete",
+    "target": null
+  },
+  "updated_at": "2026-10-24T20:30:06Z"
+}

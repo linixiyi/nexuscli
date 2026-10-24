@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>会话、恢复与快照 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：会话持久化、恢复与 usage 台账续算、快照与回放。">
+  <meta property="og:title" content="会话、恢复与快照 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/sessions.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#快照">快照</a></li>
+<li><a href="#会话持久化">会话持久化</a></li>
+<li><a href="#恢复的-usage-续算">恢复的 usage 续算</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>💾 会话持久化、恢复与 usage 台账续算、快照与回放</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/sessions.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="会话恢复与快照"><a class="toclink" href="#会话恢复与快照">会话、恢复与快照</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「💾 会话与快照」章节的完整版。</p>
+</blockquote>
+<h2 id="快照"><a class="toclink" href="#快照">快照</a></h2>
+<p>快照是<strong>按需</strong>的：<code>features.auto_snapshot</code> 默认关闭，因为每回合两次全量复制在工作区大时能吃掉十几秒。打开后每次 Agent run 会尽力创建：</p>
+<ul>
+<li><code>pre-turn</code></li>
+<li><code>post-turn</code></li>
+</ul>
+<pre><code class="language-json">{ &quot;features&quot;: { &quot;auto_snapshot&quot;: true } }
+</code></pre>
+<p>快照保存在 <code>~/.nexuscli/snapshots/</code>，不会写入项目 <code>.git</code>。无论开关如何，手动的 <code>/snapshot</code> 与 <code>/restore</code> 始终可用。</p>
+<p>REPL 中可以使用：</p>
+<pre><code class="language-text">/snapshot
+/restore 1
+/snapshot clean
+</code></pre>
+<p>Agent 侧也可以经 <code>vfs_ls</code> / <code>vfs_read</code> 把快照挂载为只读视图做改前对比，无需整体 <code>restore</code>（见 <a href="tools.html">tools.md</a>）。</p>
+<h2 id="会话持久化"><a class="toclink" href="#会话持久化">会话持久化</a></h2>
+<p>REPL 的每轮对话会自动追加到 <code>~/.nexuscli/sessions/&lt;id&gt;.jsonl</code>（首行为会话元信息，之后每行一条消息）。只打开不对话不会产生会话文件；<code>/clear</code> 会开启一个新会话。</p>
+<p>恢复方式：</p>
+<pre><code class="language-bash">uv run nexuscli sessions            # 列出当前项目的会话（--all 查看全部项目）
+uv run nexuscli -c                  # 继续本工程最近一次会话
+uv run nexuscli --resume &lt;id&gt;       # 按会话 id（或 id 前缀）恢复
+</code></pre>
+<p>会话内切换：</p>
+<pre><code class="language-text">/resume                             # 列出最近会话
+/resume 2                           # 按序号切换，后续对话继续追加到该会话
+/resume &lt;id-前缀&gt;
+/fork [title]                       # 分叉当前会话为新会话并切换过去（原会话不变）
+</code></pre>
+<p>单次模式也支持恢复：<code>uv run nexuscli -p "继续刚才的任务" -c</code> 会把历史会话注入 react 模式（plan/team 单次模式不支持注入历史）。</p>
+<h2 id="恢复的-usage-续算"><a class="toclink" href="#恢复的-usage-续算">恢复的 usage 续算</a></h2>
+<p>每个完成的普通回合都会把一条 <code>type: usage</code> 记录追加进会话 JSONL（model/provider、input/output/total/cache hit/miss、成本估算），恢复时把这些记录求和为历史基线，<code>/usage</code> 的 <code>historical_total</code> 即「基线 + 本进程累计」，两者之和等于该转录的 usage 台账。<code>/clear</code> 与 <code>/fork</code> 切换到新转录时会同步清零基线与本进程累计（fork 的转录只拷贝消息、不拷贝 usage 行，所以基线从零开始）；历史收缩重写转录时 usage 行会保留，不丢账。单次 <code>-p</code> 模式不写转录，其 <code>--json</code> 的 <code>session_usage</code> 是「恢复基线 + 本次运行」的提示性口径，不会持久化。</p><div class="pager"><a href="runtime-api.html" class="prev"><span class="dir">← 上一篇</span><span class="name">📡 Runtime API</span></a><a href="plan-execute.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧭 Plan-and-Execute 检查点与续跑</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/sessions.md" target="_blank" rel="noopener">docs/sessions.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer><script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        var light = document.documentElement.getAttribute("data-theme") === "light";
+        link.href = light ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try {
+        new MutationObserver(apply).observe(
+          document.documentElement,
+          { attributes: true, attributeFilter: ["data-theme"] }
+        );
+      } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

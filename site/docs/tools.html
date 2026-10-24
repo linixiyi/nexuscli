@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>内置工具与输入面补充口径 · NexusCLI 文档</title>
+  <meta name="description" content="NexusCLI 文档：内置工具补充口径：pdf/rg 差异、vfs 视图、BM25 检索与图片输入。">
+  <meta property="og:title" content="内置工具与输入面补充口径 · NexusCLI 文档">
+  <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/tools.html">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../style.css">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("nexuscli-theme");
+        if (!t) t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html"><span class="brand-logo">N</span>Nexus<b>CLI</b></a>
+      <div class="nav-links">
+        <a href="../index.html#features">功能</a>
+        <a href="../index.html#docs">文档</a>
+        <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
+      <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
+    </div>
+  </nav>
+<div class="layout">
+  <aside class="toc">
+    <div class="toc-title">目录</div>
+    <div class="toc">
+<ul>
+<li><a href="#read_file-的-pdf-支持">read_file 的 PDF 支持</a></li>
+<li><a href="#grep-的-rg-加速与语义差异">grep 的 rg 加速与语义差异</a></li>
+<li><a href="#task-后台委派与收尾播报">task 后台委派与收尾播报</a></li>
+<li><a href="#vfs_ls--vfs_read-只读快照视图">vfs_ls / vfs_read 只读快照视图</a></li>
+<li><a href="#代码索引与检索">代码索引与检索</a></li>
+<li><a href="#联网工具">联网工具</a></li>
+<li><a href="#图片输入">图片输入</a></li>
+<li><a href="#任务清单">任务清单</a></li>
+</ul>
+</div>
+
+  </aside>
+  <div class="content">
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧰 内置工具补充口径：pdf/rg 差异、vfs 视图、BM25 检索与图片输入</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/tools.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="内置工具与输入面补充口径"><a class="toclink" href="#内置工具与输入面补充口径">内置工具与输入面补充口径</a></h1>
+<blockquote>
+<p>本文是 <a href="https://github.com/linixiyi/nexuscli">README</a>「🧰 内置工具」章节的完整版。</p>
+</blockquote>
+<p>NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具（速查表见 README「🧰 内置工具」节）。写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作，会经过 policy、HITL 和 audit 处理。<code>save_skill</code> 也必须经过 HITL；模型可以提议沉淀，但不会静默改变后续行为。本文记录 README 速查表之外的补充说明与如实边界（均以实现为准）。</p>
+<h2 id="read_file-的-pdf-支持"><a class="toclink" href="#read_file-的-pdf-支持">read_file 的 PDF 支持</a></h2>
+<p><code>read_file</code> 对 <code>.pdf</code> 后缀走 pypdf 整篇文本提取（不做分页范围），再套用与文本文件相同的行窗口。pypdf 是可选依赖，缺失时返回带安装指引的错误：<code>uv sync --extra pdf</code>（或 <code>pip install "nexuscli[pdf]"</code>）。</p>
+<h2 id="grep-的-rg-加速与语义差异"><a class="toclink" href="#grep-的-rg-加速与语义差异">grep 的 rg 加速与语义差异</a></h2>
+<p><code>grep</code> 对目录搜索先探测 PATH 上的 rg：命中则由 rg 子进程加速并映射回同一 <code>路径:行号: 内容</code> 格式，rg 缺失或失败时回退纯 Python 扫描。已知语义差异：rg 会跳过二进制文件，纯 Python 路径以 <code>errors="ignore"</code> 读取一切，文本文件结果一致。</p>
+<h2 id="task-后台委派与收尾播报"><a class="toclink" href="#task-后台委派与收尾播报">task 后台委派与收尾播报</a></h2>
+<p><code>task</code> 的 <code>run_in_background: true</code> 立即返回后台任务 id 与落盘报告路径（<code>~/.nexuscli/bg-subagents/&lt;task_id&gt;.md</code>），不阻塞当前回合；回合结束时 REPL 会把<strong>已</strong>完成的后台子代理一次性播报给用户（<code>[bg-subagent] completed/failed ...</code>，不进入模型上下文）。后台子代理是进程内状态：未完成任务随 REPL 退出而终止，已完成的报告文件保留在磁盘上；<code>task_stop</code> 可终止仍在跑的后台子代理（状态记为 <code>stopped</code>，不再回播），对已到终态的任务是 no-op。子代理工具（含 <code>mailbox_post</code> / <code>mailbox_read</code> 邮箱）的完整口径见 <a href="subagents.html">subagents.md</a>。</p>
+<h2 id="vfs_ls--vfs_read-只读快照视图"><a class="toclink" href="#vfs_ls--vfs_read-只读快照视图">vfs_ls / vfs_read 只读快照视图</a></h2>
+<p><code>vfs_ls</code> / <code>vfs_read</code> 把历史快照挂载为只读虚拟文件系统（逻辑路径 <code>/</code> 即快照根），snapshot 引用接受与 <code>/restore</code> 相同的 id 或 1-based 序号。<strong>只读是结构保证</strong>：视图类上不存在任何写/改/删方法，路径解析强制 resolve 后留在快照根内（<code>..</code> 链与盘符/UNC 真实绝对路径一律拒绝）。<code>vfs_read</code> 与工作区 <code>read_file</code> 语义一致（整文件读取 + 行窗口，无快照专属大小上限）——快照创建时已剔除 <code>build</code>/<code>dist</code>/<code>node_modules</code> 等目录。如实边界：这两个工具只注册进主 agent 的工具表；子代理（自建 registry）、SDK 与 <code>mcp serve</code> 路径不经由它们暴露——全路径接入挂账。可写视图、多快照 diff 与审计层均未做。快照的创建与恢复见 <a href="sessions.html">sessions.md</a>。</p>
+<h2 id="代码索引与检索"><a class="toclink" href="#代码索引与检索">代码索引与检索</a></h2>
+<p><code>/index [path]</code> 扫描工作区中的文本文件，把逐行内容写入 <code>.nexuscli/code_index.sqlite3</code> 的 <code>code_chunks</code> 表建立本地代码索引，默认跳过 <code>.git</code>、<code>.venv</code>、<code>node_modules</code> 等目录。<code>/search &lt;query&gt;</code> 与内置 <code>search_code</code> 工具基于同一索引做关键词检索：多个关键词按 AND 匹配，命中行按 <strong>BM25 相关性排序</strong>（纯 Python 实现，k1=1.5、b=0.75，无第三方依赖；词频按大小写不敏感子串计数，CJK 关键词同口径工作），按分降序返回 Top-N（N 即 <code>limit</code> 参数，默认 20，同分按路径与行号稳定并列）。<code>search_code</code> 工具输出末尾附一行命中统计（命中行数、候选窗口、检索词）；代码变动后重新运行 <code>/index</code> 即可刷新。如实边界：这是词法检索不是 embedding 语义检索——索引不做向量化、不联网；BM25 的语料统计在候选窗口（首词 LIKE 预筛的 500 行）内计算，窗口外的行不参与排序。</p>
+<pre><code class="language-text">/index .
+/search 权限评估
+</code></pre>
+<h2 id="联网工具"><a class="toclink" href="#联网工具">联网工具</a></h2>
+<p><code>web_search</code> 使用 DuckDuckGo HTML 搜索，返回标题、URL 和摘要。</p>
+<p><code>web_fetch</code> 可以抓取公开 HTTP/HTTPS 页面，并做基础正文提取。它会拒绝 <code>file://</code>、loopback、私有网络和内网地址，降低 SSRF 风险。</p>
+<p>如果需要登录态、浏览器状态或 JS 渲染页面，建议使用 Chrome DevTools MCP。</p>
+<h2 id="图片输入"><a class="toclink" href="#图片输入">图片输入</a></h2>
+<p>NexusCLI 支持在 prompt 里引用图片：</p>
+<pre><code class="language-text">分析这张截图 @image:./screenshots/page.png
+</code></pre>
+<p>也支持绝对路径和远程图片：</p>
+<pre><code class="language-text">解释这张图 @image:/Users/me/Desktop/diagram.png
+看看这个图片 @image:https://example.com/image.png
+</code></pre>
+<p>本地图片会自动压缩、缩放，并在需要时把透明底铺成白底，再转为 data URL。如果当前 provider/model 不支持多模态输入，NexusCLI 会自动降级为文本元信息，不会把不支持的图片 payload 发给模型。</p>
+<h2 id="任务清单"><a class="toclink" href="#任务清单">任务清单</a></h2>
+<p>Agent 处理多步任务时可以通过内置工具 <code>todo_write</code> 维护一份任务清单：每次提交完整列表，标记 <code>pending / in_progress / completed</code> 与优先级。清单保存在项目 <code>.nexuscli/todo.json</code>，可用 <code>todo_read</code> 读取，工具返回值即格式化后的清单状态，跨会话仍然有效。</p><div class="pager"><a href="repl-commands.html" class="prev"><span class="dir">← 上一篇</span><span class="name">💬 内置斜杠命令参考</span></a><a href="skills.html" class="next"><span class="dir">下一篇 →</span><span class="name">🎯 Skill 匹配与沉淀</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/tools.md" target="_blank" rel="noopener">docs/tools.md</a> 构建生成 · 源文件与站点内容同步</p>
+  </div>
+</div>
+<footer>
+  <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
+  <p><a href="../index.html">← 返回首页</a></p>
+</footer><script src="../site.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+    (function () {
+      var LIGHT = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css";
+      var DARK = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css";
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      var apply = function () {
+        var light = document.documentElement.getAttribute("data-theme") === "light";
+        link.href = light ? LIGHT : DARK;
+      };
+      apply();
+      document.head.appendChild(link);
+      window.addEventListener("nexuscli-themechange", apply);
+      try {
+        new MutationObserver(apply).observe(
+          document.documentElement,
+          { attributes: true, attributeFilter: ["data-theme"] }
+        );
+      } catch (e) {}
+    })();
+  </script>
+  <script>
+    hljs.highlightAll();
+  </script>
+</body>
+</html>

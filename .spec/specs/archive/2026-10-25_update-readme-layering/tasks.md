@@ -35,7 +35,7 @@
   - depends-on: task_0004
   - boundary: 不改任何文件，只跑回归；若有失败，修复限于本包 boundary 内文件后重跑
   - verify: `uv run ruff check . && uv run ruff format --check . && uv run python -m pytest`（期望全绿）
-- [ ] 计划同步：勾选 master F1 + 写 .spec/autorun/ 摘要
+- [x] 计划同步：勾选 master F1 + 写 .spec/autorun/ 摘要
   - depends-on: task_0005
   - boundary: 只改 .spec/plans/2026-10-25_workbench-and-readme/master.md（F1 复选框置 [x]）与新增 .spec/autorun/ 摘要记录；不改任何产品文件
   - verify: `grep -c "\[x\] F1 README" .spec/plans/2026-10-25_workbench-and-readme/master.md`（期望输出 1）+ .spec/autorun/ 下存在本包摘要文件
