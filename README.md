@@ -11,7 +11,7 @@
 
 [架构总览](#-架构总览) · [文档站点](https://linixiyi.github.io/nexuscli/) · [运行教程](TUTORIAL.md) · [快速开始](#-快速开始)
 
-> 🖥️ **文档站点**：[linixiyi.github.io/nexuscli](https://linixiyi.github.io/nexuscli/) —— 带导航与侧边目录的文档中心，收录本仓库全部 20 篇深度文档与运行教程；还有[交互式架构图](https://linixiyi.github.io/nexuscli/architecture.html)（节点搜索、路径追踪、深浅色主题）。站点页面由 `docs/*.md` 与 `TUTORIAL.md` 经 `site/build.py` 构建生成，内容与源文件同步。
+> 🖥️ **文档站点**：[linixiyi.github.io/nexuscli](https://linixiyi.github.io/nexuscli/) —— 带导航与侧边目录的文档中心，收录本仓库全部 21 篇深度文档与运行教程；还有[交互式架构图](https://linixiyi.github.io/nexuscli/architecture.html)（节点搜索、路径追踪、深浅色主题）。站点页面由 `docs/*.md` 与 `TUTORIAL.md` 经 `site/build.py` 构建生成，内容与源文件同步。
 
 **TL;DR**：NexusCLI 不是一个空壳 Demo，而是按真实 CLI 产品来做——核心路径有测试覆盖，也经过本地 smoke 和真实终端运行验证。最近一轮外围真实 LLM 冒烟全部通过：team 模式多 worker 协作（真实 token 消耗与两个 worker 迹象）、`mcp serve --transport http` 的 tools/list 返回完整工具表、`serve --http` 的 Runtime API 带 key 200 / 错 key 401。`uv run nexuscli` 进交互模式，`uv run nexuscli -p "..."` 跑单次查询；能力速览看下面的[特性速览表](#-特性速览)，细节按专题看[深入文档索引](#-深入文档索引)。第一次部署请从 [TUTORIAL.md](TUTORIAL.md) 开始：从安装依赖、配置模型 API 到第一次跑通 Agent 任务的完整运行教程。
 
@@ -36,6 +36,7 @@
 | 快照 | 按需快照与恢复，Agent 可经 `vfs_ls` / `vfs_read` 挂载只读视图做改前对比 | [docs/sessions.md](docs/sessions.md#快照) |
 | 安全与治理 | HITL 人工确认（五键位 + run 级授权）、deny>ask>allow 权限规则、七个生命周期 Hooks、JSONL 审计日志、环境清洗护栏 | [docs/permissions.md](docs/permissions.md) |
 | Runtime API | 有历史的 thread / turn / 事件日志 HTTP 接入，持久化后台任务队列（lease/heartbeat、原子抢占、项目隔离） | [docs/runtime-api.md](docs/runtime-api.md) |
+| 可视化工作台 | 浏览器入口：会话回放、SSE 实时事件流、任务面板、usage 统计、Web 审批与发起 turn | [docs/workbench.md](docs/workbench.md) |
 | 定时任务 | `nexuscli cron` 离线任务注册表，触发由外部调度器驱动 | [docs/cron.md](docs/cron.md) |
 | 上下文压缩 | 80% 预算触发，先无损 microcompact 再有损摘要；provider 真实超限自动压缩重试一次 | [docs/memory-context.md](docs/memory-context.md) |
 | 会话增强 | `/fork` 分叉、`/goal` 长程目标、`/effort` 推理力度、`/history` 跨会话检索、usage 双口径 | [docs/repl-commands.md](docs/repl-commands.md) |
@@ -62,6 +63,7 @@
 - [💰 模型与费用](#-模型与费用)
 - [🔌 MCP](#-mcp)
 - [📡 Runtime API](#-runtime-api)
+- [🖥️ 可视化工作台](#-可视化工作台)
 - [🐍 SDK](#-sdk)
 
 **深入专题**
@@ -86,6 +88,7 @@
 - 可选：rg（ripgrep）——PATH 上装有 rg 时，内置 `grep` 工具对目录的搜索自动改由 rg 子进程加速并映射回同一结果格式；没有 rg 时自动回退纯 Python 扫描，功能不受影响
 - 可选：Chrome DevTools MCP 需要 Node.js 20.19.0 LTS 或更新版本、npm/npx 和 Chrome
 - 可选：读取 PDF 需要 `uv sync --extra pdf`（pypdf）
+- 可选：构建工作台前端需要 Node.js 22 LTS 与 npm（直接使用已提交的 dist 不需要）
 
 安装与依赖细节见 [TUTORIAL.md](TUTORIAL.md)。
 
@@ -283,6 +286,23 @@ HTTP 类 MCP server 支持 OAuth 2.0 授权码 + PKCE（令牌落盘 `~/.nexuscl
 
 完整端点与 curl 示例见 [docs/runtime-api.md](docs/runtime-api.md)。
 
+## 🖥️ 可视化工作台
+
+浏览器里的工作台：会话回放、实时事件流（SSE）、任务面板、usage 统计、Web 审批与发起 turn。
+
+```bash
+NEXUSCLI_RUNTIME_API_KEY=dev-key uv run nexuscli serve --workbench --port 8080
+# 打开 http://127.0.0.1:8080/
+```
+
+`frontend/dist` 已随仓库提交、开箱即用；自行构建 `cd frontend && npm ci && npm run build`（Node.js 22 LTS + npm）。服务端零新增 Python 依赖。
+
+> ⚠️ 部署边界：默认只绑定 127.0.0.1、无多用户认证，不要开放公网。
+
+<!-- TODO(截图): 用真实运行的工作台截取一张提交为 docs/workbench.png，然后把本注释替换为图片引用。占位期间不放死链。 -->
+
+详见 [docs/workbench.md](docs/workbench.md#部署边界与安全)。
+
 ## 🐍 SDK
 
 ```python
@@ -298,7 +318,7 @@ team_result = engine.team_complete("让多个 Agent 并行检查核心模块")
 
 ## 📖 深入文档索引
 
-全部 20 篇深度文档按主题排列；`docs/architecture.{json,png,html}` 是架构图源文件与交互版静态资产，不在本表。docs 文档与 README 摘要同源同步：实现细节以 docs 为准，README 摘要句跟随核对。
+全部 21 篇深度文档按主题排列；`docs/architecture.{json,png,html}` 是架构图源文件与交互版静态资产，不在本表。docs 文档与 README 摘要同源同步：实现细节以 docs 为准，README 摘要句跟随核对。
 
 | 专题 | 文档 | 一句话 |
 |---|---|---|
@@ -315,6 +335,7 @@ team_result = engine.team_complete("让多个 Agent 并行检查核心模块")
 | 子代理 | [docs/subagents.md](docs/subagents.md) | 后台委派、自定义代理定义与文件邮箱 |
 | 动态工作流 | [docs/workflows.md](docs/workflows.md) | JSON 步骤图 DAG、依赖批次并行与内置专家流程 |
 | Runtime API | [docs/runtime-api.md](docs/runtime-api.md) | 线程、turn、事件流与后台任务的 HTTP 接入面 |
+| 可视化工作台 | [docs/workbench.md](docs/workbench.md) | 浏览器可视化工作台：会话回放、实时事件流、任务面板与用量统计 |
 | 插件系统 | [docs/plugins.md](docs/plugins.md) | 本地目录插件的发现、manifest 与组件并入链 |
 | 自定义斜杠命令 | [docs/slash-commands.md](docs/slash-commands.md) | markdown 提示词、frontmatter 与占位符注入 |
 | 定时任务 | [docs/cron.md](docs/cron.md) | 离线任务注册表与外部调度器驱动方式 |
@@ -337,6 +358,7 @@ uv sync --extra dev --frozen
 uv run ruff check .
 uv run ruff format --check .
 uv run python -m pytest
+cd frontend && npm ci && npm run build
 ```
 
 ### 构建

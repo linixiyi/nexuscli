@@ -62,7 +62,7 @@ NexusCLI 的引擎。可移植的是它的**架构模式**——「一个 Core�
 
 ### 第 4 轮：CI 与文档收尾
 
-- [ ] F8 工作台 CI 与文档：CI 增加 frontend 构建校验；新增 docs/workbench.md（架构、端点、边界）；
+- [x] F8 工作台 CI 与文档：CI 增加 frontend 构建校验；新增 docs/workbench.md（架构、端点、边界）；
       README 增加工作台章节与截图占位
 
 ### 第 5 轮：工具副作用日志（恢复底座）

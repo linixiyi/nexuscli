@@ -77,7 +77,7 @@ curl -sS http://127.0.0.1:8080/v1/tasks \
 <p>也可以只启动队列消费者，不暴露 HTTP：</p>
 <pre><code class="language-bash">uv run nexuscli worker --workers 2 --cwd .
 </code></pre>
-<p>任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。</p><div class="pager"><a href="workflows.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔀 动态工作流与 /expert</span></a><a href="sessions.html" class="next"><span class="dir">下一篇 →</span><span class="name">💾 会话、恢复与快照</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/runtime-api.md" target="_blank" rel="noopener">docs/runtime-api.md</a> 构建生成 · 源文件与站点内容同步</p>
+<p>任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。</p><div class="pager"><a href="workflows.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔀 动态工作流与 /expert</span></a><a href="workbench.html" class="next"><span class="dir">下一篇 →</span><span class="name">🖥️ 工作台（Workbench）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/runtime-api.md" target="_blank" rel="noopener">docs/runtime-api.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>
