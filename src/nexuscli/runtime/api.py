@@ -23,6 +23,7 @@ from nexuscli.config import NexusCliConfig
 from nexuscli.llm import create_llm_client
 from nexuscli.net_guards import is_loopback_origin
 from nexuscli.runtime import reads
+from nexuscli.runtime.approvals import ApprovalBridge
 from nexuscli.runtime.tasks import TASK_MODES, DurableTaskManager, TaskRecord
 from nexuscli.types import Message
 
@@ -50,6 +51,7 @@ class RuntimeApiServer:
         self.api_key = api_key
         self.port = port
         self.workbench = workbench
+        self.approval_bridge = ApprovalBridge()
         # SSE 客户端槽位与事件唤醒信号（DB 仍是唯一事实源，Condition 只消除轮询延迟）
         self._sse_slots = threading.BoundedSemaphore(MAX_SSE_CLIENTS)
         self._event_cond = threading.Condition()
@@ -205,6 +207,29 @@ class RuntimeApiServer:
                     _send_json(request, 404, {"error": f"thread not found: {thread_id}"})
                     return
                 self._send_events(request, thread_id)
+            elif method == "GET" and path == "/v1/approvals":
+                _send_json(request, 200, {"approvals": self.approval_bridge.list_pending()})
+            elif method == "POST" and path.startswith("/v1/approvals/") and path.endswith(
+                "/decision"
+            ):
+                approval_id = path[len("/v1/approvals/") : -len("/decision")]
+                decision = str(body.get("decision") or "")
+                if decision not in ("approve", "deny"):
+                    _send_json(request, 400, {"error": "decision must be approve or deny"})
+                    return
+                origin = request.headers.get("origin")
+                if origin is not None and not is_loopback_origin(origin):
+                    _send_json(request, 403, {"error": "cross-origin requests are rejected"})
+                    return
+                resolved = self.approval_bridge.resolve(approval_id, decision)
+                if resolved is None:
+                    _send_json(request, 404, {"error": f"approval not found: {approval_id}"})
+                else:
+                    _send_json(
+                        request,
+                        200,
+                        {"ok": True, "id": approval_id, "resolved_by": resolved.resolved_by},
+                    )
             elif method == "POST" and path == "/v1/tasks":
                 prompt = str(body.get("message") or body.get("prompt") or "")
                 if not prompt:
@@ -244,6 +269,7 @@ class RuntimeApiServer:
             tool_registry=registry,
             config=self.config,
             cwd=self.cwd,
+            approval_callback=self.approval_bridge.callback_for(thread_id=thread_id),
         )
         history = self._thread_history(thread_id) if mode == "react" else []
         text = ""
@@ -341,6 +367,7 @@ class RuntimeApiServer:
             tool_registry=registry,
             config=self.config,
             cwd=self.cwd,
+            approval_callback=self.approval_bridge.callback_for(task_id=task.id),
         )
         text = ""
         async for event in _engine_events(engine, task.mode, task.prompt):
