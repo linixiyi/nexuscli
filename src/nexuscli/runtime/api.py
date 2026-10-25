@@ -24,9 +24,17 @@ from nexuscli.config import NexusCliConfig
 from nexuscli.llm import create_llm_client
 from nexuscli.net_guards import is_loopback_origin
 from nexuscli.runtime import reads
-from nexuscli.runtime.approvals import ApprovalBridge
+from nexuscli.runtime.approvals import (
+    APPROVAL_INPUT_MAX_BYTES,
+    ApprovalBridge,
+    ApprovalConflictError,
+    ApprovalInputTooLargeError,
+    UnknownApprovalError,
+)
 from nexuscli.runtime.tasks import TASK_MODES, DurableTaskManager, TaskRecord
 from nexuscli.runtime.websession import (
+    RevisionConflict,
+    SessionPermissions,
     WebSession,
     cookie_value_from_header,
     session_cookie_header,
@@ -91,9 +99,18 @@ class RuntimeApiServer:
         self.approval_bridge = ApprovalBridge()
         # F14 工作台会话：一次性口令 + HttpOnly cookie + csrf（kitagent 模型）
         self.web_session = WebSession()
+        # A6 会话权限模式（Ported from kitagent (MIT, zed123214/kitagent)
+        # core/permissions/manager.py:66-108）：仅内存，单会话单实例；执行器
+        # 审批回调经 callback_for(permissions=...) 与本实例接线。
+        self.session_permissions = SessionPermissions()
         # SSE 客户端槽位与事件唤醒信号（DB 仍是唯一事实源，Condition 只消除轮询延迟）
         self._sse_slots = threading.BoundedSemaphore(MAX_SSE_CLIENTS)
         self._event_cond = threading.Condition()
+        # A7 事件续号（Ported from kitagent (MIT, zed123214/kitagent)
+        # src/agent_runtime/core/events/bus.py:66-104）：_append_event 是唯一
+        # 持久事件汇，在锁内推导线程内单调 seq（自 1 起，跨 turn 不重置），
+        # 对应 kitagent bus 持有 _event_seq 计数器的角色。
+        self._event_seq_guard = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
         self.db_path = Path.home() / ".nexuscli" / "runtime" / "runtime.db"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +145,9 @@ class RuntimeApiServer:
                 outer._handle(self)
 
             def do_GET(self) -> None:  # noqa: N802
+                outer._handle(self)
+
+            def do_PATCH(self) -> None:  # noqa: N802
                 outer._handle(self)
 
             def log_message(self, _format: str, *args: Any) -> None:
@@ -227,11 +247,12 @@ class RuntimeApiServer:
             _send_json(request, 401, {"error": "unauthorized"})
             return
         # F14 CSRF：cookie 通道的变更请求必须带 x-csrf-token（api_key 通道豁免——
-        # 外部程序无 cookie，凭证本身就是凭据）。
+        # 外部程序无 cookie，凭证本身就是凭据）。A6 的 PATCH /v1/workbench/
+        # permissions 同为变更请求，与 POST 一并纳入。
         if (
             cookie_authorized
             and not header_authorized
-            and method == "POST"
+            and method in ("POST", "PATCH")
             and not self.web_session.csrf_matches(request.headers.get("x-csrf-token"))
         ):
             _send_json(request, 403, {"error": "csrf token missing or invalid"})
@@ -340,15 +361,85 @@ class RuntimeApiServer:
                 if origin is not None and not is_loopback_origin(origin):
                     _send_json(request, 403, {"error": "cross-origin requests are rejected"})
                     return
-                resolved = self.approval_bridge.resolve(approval_id, decision)
-                if resolved is None:
+                # A5 五态决策（Ported from kitagent (MIT, zed123214/kitagent)
+                # web/session.py:183-232）：pending 落定；同动词重复决策幂等重放
+                # 首次结果；异动词翻转 / expired / unknown 拒绝变更；参数截断禁
+                # allow。类型化错误 → 状态码映射见各异常。
+                try:
+                    resolved = self.approval_bridge.decide(approval_id, decision)  # type: ignore[arg-type]
+                except UnknownApprovalError:
                     _send_json(request, 404, {"error": f"approval not found: {approval_id}"})
+                except ApprovalConflictError:
+                    # 与既有口径一致：不区分从未存在与已解决（F6 回归锚）。
+                    _send_json(
+                        request,
+                        404,
+                        {"error": f"approval not found or already resolved: {approval_id}"},
+                    )
+                except ApprovalInputTooLargeError as exc:
+                    _send_json(
+                        request,
+                        413,
+                        {
+                            "error": str(exc),
+                            "code": "approval_input_too_large",
+                            "size": exc.size,
+                            "max_bytes": APPROVAL_INPUT_MAX_BYTES,
+                        },
+                    )
                 else:
                     _send_json(
                         request,
                         200,
-                        {"ok": True, "id": approval_id, "resolved_by": resolved.resolved_by},
+                        {
+                            "ok": True,
+                            "id": approval_id,
+                            "resolved_by": resolved.resolved_by,
+                            "decision": decision,
+                            "status": resolved.status,
+                        },
                     )
+            elif method == "GET" and path == "/v1/workbench/permissions":
+                # A6 会话权限读面（kitagent session.get_permissions rpc 同位，
+                # web/session.py:228）：客户端据此取 expected_revision。
+                _send_json(request, 200, self.session_permissions.snapshot())
+            elif method == "PATCH" and path == "/v1/workbench/permissions":
+                # A6 权限变更（Ported from kitagent (MIT, zed123214/kitagent)
+                # core/permissions/manager.py:66-108 configure_session）：revision
+                # 乐观锁——不匹配 → 409（客户端刷新后重试）；mode 切 read_only/
+                # auto 清空授权；revoke_tool 单项撤销。变更成功后即时重判全部
+                # 挂起审批（manager.py:99-108 _recheck_pending 同款）。
+                expected = body.get("expected_revision")
+                if isinstance(expected, bool) or not isinstance(expected, int):
+                    _send_json(request, 400, {"error": "expected_revision (int) is required"})
+                    return
+                mode = body.get("mode")
+                if mode is not None and not isinstance(mode, str):
+                    _send_json(request, 400, {"error": "mode must be a string"})
+                    return
+                revoke_tool = body.get("revoke_tool")
+                if revoke_tool is not None and (
+                    not isinstance(revoke_tool, str) or not revoke_tool
+                ):
+                    _send_json(request, 400, {"error": "revoke_tool must be a non-empty string"})
+                    return
+                try:
+                    state = self.session_permissions.configure(
+                        expected_revision=expected,
+                        mode=mode,  # type: ignore[arg-type]
+                        revoke_tool=revoke_tool,
+                    )
+                except RevisionConflict as exc:
+                    _send_json(
+                        request,
+                        409,
+                        {"error": str(exc), "current_revision": exc.current_revision},
+                    )
+                except ValueError as exc:
+                    _send_json(request, 400, {"error": str(exc)})
+                else:
+                    rechecked = self.approval_bridge.recheck_pending(self.session_permissions)
+                    _send_json(request, 200, {**state, "rechecked": rechecked})
             elif method == "POST" and path == "/v1/tasks":
                 prompt = str(body.get("message") or body.get("prompt") or "")
                 if not prompt:
@@ -408,7 +499,9 @@ class RuntimeApiServer:
             tool_registry=registry,
             config=self.config,
             cwd=self.cwd,
-            approval_callback=self.approval_bridge.callback_for(thread_id=thread_id),
+            approval_callback=self.approval_bridge.callback_for(
+                thread_id=thread_id, permissions=self.session_permissions
+            ),
         )
         history = self._thread_history(thread_id) if mode == "react" else []
         text = ""
@@ -506,7 +599,9 @@ class RuntimeApiServer:
             tool_registry=registry,
             config=self.config,
             cwd=self.cwd,
-            approval_callback=self.approval_bridge.callback_for(task_id=task.id),
+            approval_callback=self.approval_bridge.callback_for(
+                task_id=task.id, permissions=self.session_permissions
+            ),
         )
         text = ""
         async for event in _engine_events(engine, task.mode, task.prompt, run_id=task.run_id):
@@ -591,7 +686,32 @@ class RuntimeApiServer:
             self._idempotency_cond.notify_all()
 
     def _append_event(self, thread_id: str, event_type: str, payload: dict[str, Any]) -> None:
-        with self._connect() as conn:
+        """写入一条线程事件，并在 payload 内盖线程内单调 ``seq`` 后落库。
+
+        A7 事件续号（Ported from kitagent (MIT, zed123214/kitagent)
+        src/agent_runtime/core/events/bus.py:66-104 的 EventBus.publish /
+        resume_event_seq 语义）：
+
+        - 同一 thread 每个事件在写入 events 表时获得 ``seq``：自 1 起、严格
+          +1；turn 边界（turn.started）不重置——线程生命周期单调（对应
+          kitagent bus 对同 correlation/run 事件的单调分配）。
+        - 续号游标每次落库前从 events 表该线程的持久行数推导，等价于
+          kitagent ``resume_event_seq``：换实例/重启后下一个事件自动越过
+          已持久化游标继续编号，不需要显式调用。
+        - 选 payload 内增字段而非复用 events 自增 id：id 是全库共享游标
+          （非每线程自 1 起，且与 SSE ``id:`` 重放游标重复）；per-thread
+          seq 才对齐 kitagent 的 per-run 计数，也便于前端做丢帧检测。
+          SSE ``data:`` 就是落库 payload 原文，seq 随之透出（前端不读无影响）。
+        - 事件类型集不变；调用方 payload 若自带 ``seq`` 以落库游标为准
+          （覆盖写入，sink 权威，对应 bus 对 event_seq 的收口位置）。
+        """
+
+        with self._event_seq_guard, self._connect() as conn:
+            row = conn.execute(
+                "select count(*) from events where thread_id = ?", (thread_id,)
+            ).fetchone()
+            stored = dict(payload)
+            stored["seq"] = int(row[0]) + 1
             conn.execute(
                 """
                 insert into events(thread_id, type, payload, created_at)
@@ -600,7 +720,7 @@ class RuntimeApiServer:
                 (
                     thread_id,
                     event_type,
-                    json.dumps(payload, ensure_ascii=False),
+                    json.dumps(stored, ensure_ascii=False),
                     datetime.now(UTC).isoformat(),
                 ),
             )
