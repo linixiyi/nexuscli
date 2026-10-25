@@ -245,6 +245,7 @@ class SessionStore:
         cwd: str,
         model: str = "",
         provider: str = "",
+        fsync: bool = False,
     ) -> SessionWriter:
         """Create an in-memory session that only touches disk on first append."""
         now = time.time()
@@ -256,11 +257,17 @@ class SessionStore:
             model=model,
             provider=provider,
         )
-        return SessionWriter(self, meta)
+        return SessionWriter(self, meta, fsync=fsync)
 
-    def writer_for(self, meta: SessionMeta, messages: list[Message]) -> SessionWriter:
+    def writer_for(
+        self,
+        meta: SessionMeta,
+        messages: list[Message],
+        *,
+        fsync: bool = False,
+    ) -> SessionWriter:
         """Continue an existing session, appending past ``messages``."""
-        writer = SessionWriter(self, meta)
+        writer = SessionWriter(self, meta, fsync=fsync)
         writer.persisted = len(messages)
         return writer
 
@@ -497,10 +504,13 @@ class SessionWriter:
     is rewritten to stay in sync instead of appending past the truncation.
     """
 
-    def __init__(self, store: SessionStore, meta: SessionMeta) -> None:
+    def __init__(self, store: SessionStore, meta: SessionMeta, *, fsync: bool = False) -> None:
         self.store = store
         self.meta = meta
         self.persisted = 0
+        # Ported from kitagent (MIT, zed123214/kitagent) core/events/writer.py:
+        # 每次写盘后 flush；fsync 为可选开关（默认关闭，不改变既有性能特征）。
+        self.fsync = fsync
 
     @property
     def path(self) -> Path:
@@ -604,7 +614,17 @@ class SessionWriter:
         return lines
 
     def _atomic_write(self, text: str) -> None:
-        """Write via temp file + rename so a crash never truncates the transcript."""
+        """Write via temp file + rename so a crash never truncates the transcript.
+
+        Flush 纪律 ported from kitagent (MIT, zed123214/kitagent)
+        core/events/writer.py：写后先 ``flush()`` 把载荷推到 OS，再原子替换落地；
+        ``os.fsync`` 仅当 writer 以 ``fsync=True`` 构建时执行（默认关闭，保持
+        既有性能特征）。临时文件 + ``os.replace`` 的原子替换语义不变。
+        """
         tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            if self.fsync:
+                os.fsync(handle.fileno())
         os.replace(tmp, self.path)

@@ -1,10 +1,14 @@
 """README/docs 文档完整性机械校验（spec 2026-10-25_update-readme-layering）。
 
-四个用例对应 03 规划文档「校验面」的定稿：
+前四个用例对应 03 规划文档「校验面」的定稿：
 1. README 目录锚点解析（剔除 fenced code block 后的标题 slug 集合）
 2. README / docs / TUTORIAL 相对链接目标文件存在
 3. `path.md#frag` 形态链接的 fragment 命中目标文件标题 slug 集合
 4. README 行数预算 + site/build.py 白名单三集合断言（DOC_META == PAGER_ORDER == docs/*.md stems）
+
+第 5 个为 lane A3「文档鉴权滞后修复」增补（spec 2026-10-25_port-alignment-quick-wins）：
+5. docs/workbench.md 与 docs/runtime-api.md 必须包含 bootstrap / csrf / cookie
+   关键词——F14 鉴权改三件套后两篇文档仍只写 x-api-key 的腐烂防护
 
 锚点算法与 site/build.py 的 CJKSlugify 同一口径（GitHub 规则）：
 小写 → 删除非（Unicode 词字符/空白/连字符）→ 空格逐一替换为连字符 → 重复标题 -N 去重。
@@ -147,3 +151,25 @@ def test_readme_line_budget_and_site_registry() -> None:
         f"仅 PAGER_ORDER={sorted(set(pager_order) - stems)}, "
         f"仅 docs={sorted(stems - set(doc_meta))}"
     )
+
+
+def test_workbench_auth_keywords_present() -> None:
+    """文档腐烂机械防护：两篇 API 文档必须提及 F14 浏览器会话鉴权三件套。
+
+    F14 把工作台鉴权改为「一次性 #bootstrap 口令 → HttpOnly SameSite=strict cookie
+    → 变更请求 x-csrf-token → Origin 白名单；x-api-key 头与 SSE api_key 查询参数
+    保留为外部通道」（src/nexuscli/runtime/api.py 的 _handle/_handle_bootstrap 与
+    src/nexuscli/runtime/websession.py）后，两篇文档仍只写 x-api-key 滞后过一次——
+    关键词断言防复发。大小写不敏感：文档中 cookie 以 Set-Cookie、csrf 以
+    x-csrf-token 等形态出现。
+    """
+
+    keywords = ("bootstrap", "csrf", "cookie")
+    paths = [ROOT / "docs" / "workbench.md", ROOT / "docs" / "runtime-api.md"]
+    for path in paths:
+        text = path.read_text(encoding="utf-8").lower()
+        missing = [kw for kw in keywords if kw not in text]
+        assert not missing, (
+            f"{path.name} 缺少浏览器会话鉴权关键词 {missing}；"
+            "鉴权语义见 src/nexuscli/runtime/websession.py"
+        )
