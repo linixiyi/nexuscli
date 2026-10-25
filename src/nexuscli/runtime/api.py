@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import mimetypes
@@ -34,10 +35,41 @@ from nexuscli.types import Message
 
 MAX_SSE_CLIENTS = 16
 SSE_HEARTBEAT_SECONDS = 15
+# A2 幂等登记表容量（kitagent Gateway._record 同款 1000；满则 429）
+IDEMPOTENCY_CAPACITY = 1000
+
+# A1 安全壳 CSP（Ported from kitagent (MIT, zed123214/kitagent)
+# src/agent_runtime/web/app.py:125-128）
+_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+)
 
 
 class TaskCanceledError(RuntimeError):
     pass
+
+
+class IdempotencyError(Exception):
+    """A2 幂等门的拒绝响应（kitagent GatewayError 的同位形态：status + message）。"""
+
+    def __init__(self, status: int, message: str) -> None:
+        self.status = status
+        super().__init__(message)
+
+
+class _ResponseCapture(threading.local):
+    """A2 首次结果捕获位：`_send_json` 写，`_handle` 的 finally 读。
+
+    线程本地位——ThreadingHTTPServer 每个连接一个线程、连接内请求串行，
+    `_handle` 开头复位即可避免上一请求的残留串扰。
+    """
+
+    def __init__(self) -> None:
+        self.last_json: tuple[int, dict[str, Any]] | None = None
+
+
+_response_capture = _ResponseCapture()
 
 
 class RuntimeApiServer:
@@ -75,6 +107,11 @@ class RuntimeApiServer:
         # messages table, so the next turn read a scrambled history.
         self._thread_locks: dict[str, threading.Lock] = {}
         self._thread_locks_guard = threading.Lock()
+        # A2 幂等登记表（Ported from kitagent (MIT, zed123214/kitagent)
+        # src/agent_runtime/web/gateway.py:72-93）：x-request-id → payload 摘要
+        # + 首次响应；Condition 用于在飞重放等待首请求完成。
+        self._idempotency: dict[str, dict[str, Any]] = {}
+        self._idempotency_cond = threading.Condition()
         self._ensure_schema()
 
     def serve_forever(self) -> None:
@@ -136,8 +173,27 @@ class RuntimeApiServer:
             thread.start()
 
     def _handle(self, request: BaseHTTPRequestHandler) -> None:
+        # A2 捕获位复位：同一连接线程串行处理多个请求，清掉上一请求的残留。
+        _response_capture.last_json = None
         method = request.command
         path = request.path.split("?", 1)[0]
+        # A1 前置门（Ported from kitagent (MIT, zed123214/kitagent)
+        # src/agent_runtime/web/app.py:106-128 的请求体门）：非 GET 请求体必须
+        # 有界（> 64 KiB → 413）且为 application/json（→ 415）；bootstrap 端点
+        # 同样受限（门在凭证判断之前）。无 content-length 的无体请求按 0 处理
+        # 照旧放行，保持既有零适配行为。
+        if method != "GET":
+            length = request.headers.get("content-length", "")
+            if length.isdigit() and int(length) > 65536:
+                _send_json(request, 413, {"error": "request body must stay below 64 KiB"})
+                return
+            if (
+                length.isdigit()
+                and int(length)
+                and request.headers.get("content-type", "").split(";")[0] != "application/json"
+            ):
+                _send_json(request, 415, {"error": "request body must be application/json"})
+                return
         # 静态资源（仅 --workbench）在鉴权门之前分流：构建产物不含用户数据，
         # /v1/* 一律不走此分支。
         if method == "GET" and self.workbench and not path.startswith("/v1/"):
@@ -184,6 +240,27 @@ class RuntimeApiServer:
             _send_json(request, 403, {"error": "cross-origin requests are rejected"})
             return
         body = _read_json(request)
+        # A2 幂等门（Ported from kitagent (MIT, zed123214/kitagent)
+        # src/agent_runtime/web/gateway.py:72-93 的 Gateway._record）：POST 带
+        # x-request-id 才进门（缺失则零适配直通）。同 ID 同 payload 摘要 → 重放
+        # 首次结果；同 ID 异 payload → 409；首见 → 登记摘要放行，dispatch 结束后
+        # 回填首次结果；登记表满（1000）→ 429。bootstrap 在此之前已分流，不在
+        # 幂等门内（kitagent 同款：bootstrap 一次性语义本身不幂等）。
+        idem_key: str | None = None
+        idem_fresh = False
+        if method == "POST":
+            idem_key = request.headers.get("x-request-id")
+            if idem_key:
+                try:
+                    replay = self._idempotency_gate(idem_key, _payload_digest(path, body))
+                except IdempotencyError as exc:
+                    _send_json(request, exc.status, {"error": str(exc)})
+                    return
+                if replay is not None:
+                    replay_status, replay_payload = replay
+                    _send_json(request, replay_status, replay_payload)
+                    return
+                idem_fresh = True
         try:
             if method == "POST" and path == "/v1/threads":
                 thread_id = self._create_thread()
@@ -295,6 +372,11 @@ class RuntimeApiServer:
             _send_json(request, 400, {"error": str(exc)})
         except Exception as exc:  # noqa: BLE001 - API boundary
             _send_json(request, 500, {"error": str(exc)})
+        finally:
+            # A2：首见登记的请求无论走哪个出口（分支响应 / 400 / 500）都把本次
+            # 首次结果回填登记表，供同 ID 重放。重放与 409/429 不登记（fresh=False）。
+            if idem_fresh and idem_key is not None:
+                self._idempotency_complete(idem_key, _response_capture.last_json)
 
     def _handle_bootstrap(self, request: BaseHTTPRequestHandler) -> None:
         body = _read_json(request)
@@ -307,6 +389,7 @@ class RuntimeApiServer:
         request.send_header("content-type", "application/json")
         request.send_header("content-length", str(len(body_bytes)))
         request.send_header("set-cookie", session_cookie_header(self.web_session.cookie))
+        _apply_security_headers(request)
         request.end_headers()
         request.wfile.write(body_bytes)
 
@@ -469,6 +552,44 @@ class RuntimeApiServer:
         with self._thread_locks_guard:
             return self._thread_locks.setdefault(thread_id, threading.Lock())
 
+    def _idempotency_gate(self, request_id: str, digest: str) -> tuple[int, dict[str, Any]] | None:
+        """A2 幂等登记门（Ported from kitagent (MIT, zed123214/kitagent)
+        src/agent_runtime/web/gateway.py:72-93 的 Gateway._record）。
+
+        返回 None = 首见（已登记，放行执行）；返回 (status, payload) = 重放首次
+        结果；同 ID 异 payload 抛 409；登记表满抛 429。首请求在飞时，同 ID 重放
+        在 Condition 上等它完成（kitagent 语义：绝不重复执行）。
+        """
+
+        with self._idempotency_cond:
+            entry = self._idempotency.get(request_id)
+            if entry is not None:
+                if entry["digest"] != digest:
+                    raise IdempotencyError(409, "same x-request-id with different payload")
+                while not entry["done"]:
+                    self._idempotency_cond.wait()
+                response = entry["response"]
+                if response is None:  # 防御：首请求未产出响应即终止，绝不重执行
+                    return 500, {"error": "first request did not produce a response"}
+                return response
+            if len(self._idempotency) >= IDEMPOTENCY_CAPACITY:
+                raise IdempotencyError(429, "idempotency registry is full")
+            self._idempotency[request_id] = {"digest": digest, "done": False, "response": None}
+            return None
+
+    def _idempotency_complete(
+        self, request_id: str, response: tuple[int, dict[str, Any]] | None
+    ) -> None:
+        """回填首次结果并唤醒在飞重放（对应 kitagent record 状态收敛的位置）。"""
+
+        with self._idempotency_cond:
+            entry = self._idempotency.get(request_id)
+            if entry is None or entry["done"]:
+                return
+            entry["response"] = response or (500, {"error": "internal error before response"})
+            entry["done"] = True
+            self._idempotency_cond.notify_all()
+
     def _append_event(self, thread_id: str, event_type: str, payload: dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -527,6 +648,7 @@ class RuntimeApiServer:
         request.send_response(200)
         request.send_header("content-type", "text/event-stream")
         request.send_header("content-length", str(len(body)))
+        _apply_security_headers(request)
         request.end_headers()
         request.wfile.write(body)
 
@@ -561,6 +683,7 @@ class RuntimeApiServer:
             request.send_response(503)
             request.send_header("retry-after", "5")
             request.send_header("content-length", "0")
+            _apply_security_headers(request)
             request.end_headers()
             return
         try:
@@ -569,6 +692,7 @@ class RuntimeApiServer:
             request.send_header("content-type", "text/event-stream")
             request.send_header("cache-control", "no-store")
             request.send_header("connection", "close")
+            _apply_security_headers(request, no_store_sent=True)
             request.end_headers()
             last_id = max(0, since)
             while not self._stop.is_set():
@@ -733,6 +857,32 @@ def _content_type_for(name: str) -> str:
     return ctype
 
 
+def _apply_security_headers(
+    request: BaseHTTPRequestHandler, *, no_store_sent: bool = False
+) -> None:
+    """A1 安全壳：所有响应统一追加（Ported from kitagent (MIT, zed123214/kitagent)
+    src/agent_runtime/web/app.py:121-128 的响应头段）。
+
+    响应已自带 cache-control: no-store 时不再重复追加（no_store_sent 由各
+    发送点如实传入）。
+    """
+
+    if not no_store_sent:
+        request.send_header("Cache-Control", "no-store")
+    request.send_header("X-Content-Type-Options", "nosniff")
+    request.send_header("Referrer-Policy", "no-referrer")
+    request.send_header("Content-Security-Policy", _CSP)
+
+
+def _payload_digest(path: str, body: dict[str, Any]) -> str:
+    """A2 摘要（kitagent Gateway._record 的 [操作, payload] 规范化形态）。
+
+    端点路径参与摘要：同一 request-id 打到不同端点视为异 payload（409）。
+    """
+
+    return hashlib.sha256(json.dumps([path, body], sort_keys=True).encode()).hexdigest()
+
+
 def _send_bytes(
     request: BaseHTTPRequestHandler, status: int, body: bytes, content_type: str
 ) -> None:
@@ -740,6 +890,7 @@ def _send_bytes(
     request.send_header("content-type", content_type)
     request.send_header("content-length", str(len(body)))
     request.send_header("cache-control", "no-store")
+    _apply_security_headers(request, no_store_sent=True)
     request.end_headers()
     request.wfile.write(body)
 
@@ -777,10 +928,15 @@ def _read_json(request: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 
 def _send_json(request: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
+    # A2 捕获点：幂等门首见请求的首次结果从这里带回 _handle 的 finally（先记
+    # 后发——写响应半途断连时，登记表里仍是真实执行结果）。
+    if _response_capture.last_json is None:
+        _response_capture.last_json = (status, payload)
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request.send_response(status)
     request.send_header("content-type", "application/json")
     request.send_header("content-length", str(len(body)))
+    _apply_security_headers(request)
     request.end_headers()
     request.wfile.write(body)
 

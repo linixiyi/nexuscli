@@ -19,13 +19,13 @@
 ## 本轮特性（autorun 分轮实现）
 
 ### 第 1 轮：零耦合小件照搬（3 lane 并行）
-- [ ] A1 HTTP 安全壳照搬：统一响应头 CSP/no-store/nosniff/no-referrer + 64KiB 体长上限(413) +
+- [x] A1 HTTP 安全壳照搬：统一响应头 CSP/no-store/nosniff/no-referrer + 64KiB 体长上限(413) +
   非 GET JSON content-type 门(415)（kitagent web/app.py:106-128 直接照搬，出处注释）
-- [ ] A2 写端点幂等门照搬：request_id+payload 摘要幂等登记（同 ID 异内容 409、容量满 429），
+- [x] A2 写端点幂等门照搬：request_id+payload 摘要幂等登记（同 ID 异内容 409、容量满 429），
   接入 approvals/decision 等写端点（kitagent web/gateway.py:72-93）
-- [ ] A3 文档鉴权滞后修复 + 机械断言：docs/workbench.md 与 runtime-api.md 补 bootstrap/csrf/cookie
+- [x] A3 文档鉴权滞后修复 + 机械断言：docs/workbench.md 与 runtime-api.md 补 bootstrap/csrf/cookie
   鉴权面；test_docs_integrity 增「runtime 文档覆盖当前鉴权面关键词」断言
-- [ ] A4 事件日志 repair_tail 移植：崩溃半行截回 + 严格 seq 校验，并入 SessionWriter 写路径与
+- [x] A4 事件日志 repair_tail 移植：崩溃半行截回 + 严格 seq 校验，并入 SessionWriter 写路径与
   reads.read_transcript（kitagent core/graph/event_log.py:29-50）
 
 ### 第 2 轮：审批与会话语义对齐

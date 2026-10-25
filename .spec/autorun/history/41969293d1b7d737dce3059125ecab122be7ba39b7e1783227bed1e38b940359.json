@@ -1,0 +1,44 @@
+{
+  "closed_at": "2026-10-25T09:37:27Z",
+  "execution_mode": "current",
+  "previous_state": {
+    "chain": "autorun",
+    "chain_id": "autorun-20261025-workbench-auth",
+    "client_surface": "desktop",
+    "completed_step_ids": [],
+    "execution_mode": "current",
+    "feature_fingerprint": "73b5644679f52828dbf6c001d34c54ef233e3a51b1c7a1cecea80392245f40d5",
+    "host": "zcode",
+    "lifecycle": "complete",
+    "max_rounds": 5,
+    "model": null,
+    "model_control": "host",
+    "permission_effective": "host",
+    "plan_docs": [
+      ".spec/plans/2026-10-25_workbench-auth/master.md"
+    ],
+    "revision": 2,
+    "round": 1,
+    "schema_version": 3,
+    "step": {
+      "id": "pkg-workbench-auth",
+      "kind": "package",
+      "outcome": "passed",
+      "proof": {
+        "archive": ".spec/specs/archive/2026-10-25_update-workbench-auth",
+        "archive_hashes": {
+          "completion-summary.md": "8433183aa682fc8aa411e93e1ef299d21b6d47b51a3fe4781f489131e75bd2d1",
+          "runs.jsonl": "b649f28ecc0b3b3c5a5a4e7e02cfd969b9e81320c7afb8693eca1ef770f2370f",
+          "spec.md": "82759cb1f2e7fb38fac9b425c24e8b3426ee0391e776bcf8510a892e89c55f81",
+          "tasks.md": "86d3213c87c6c3c92b5e1e5d171ed8d93c427c4fdb1fc4ac0cf0e861bd63f9fa"
+        },
+        "slug": "2026-10-25_update-workbench-auth"
+      },
+      "slug": "2026-10-25_update-workbench-auth",
+      "status": "complete",
+      "target": null
+    },
+    "updated_at": "2026-10-25T09:10:31Z"
+  },
+  "previous_state_text": "{\n  \"chain\": \"autorun\",\n  \"chain_id\": \"autorun-20261025-workbench-auth\",\n  \"client_surface\": \"desktop\",\n  \"completed_step_ids\": [],\n  \"execution_mode\": \"current\",\n  \"feature_fingerprint\": \"73b5644679f52828dbf6c001d34c54ef233e3a51b1c7a1cecea80392245f40d5\",\n  \"host\": \"zcode\",\n  \"lifecycle\": \"complete\",\n  \"max_rounds\": 5,\n  \"model\": null,\n  \"model_control\": \"host\",\n  \"permission_effective\": \"host\",\n  \"plan_docs\": [\n    \".spec/plans/2026-10-25_workbench-auth/master.md\"\n  ],\n  \"revision\": 2,\n  \"round\": 1,\n  \"schema_version\": 3,\n  \"step\": {\n    \"id\": \"pkg-workbench-auth\",\n    \"kind\": \"package\",\n    \"outcome\": \"passed\",\n    \"proof\": {\n      \"archive\": \".spec/specs/archive/2026-10-25_update-workbench-auth\",\n      \"archive_hashes\": {\n        \"completion-summary.md\": \"8433183aa682fc8aa411e93e1ef299d21b6d47b51a3fe4781f489131e75bd2d1\",\n        \"runs.jsonl\": \"b649f28ecc0b3b3c5a5a4e7e02cfd969b9e81320c7afb8693eca1ef770f2370f\",\n        \"spec.md\": \"82759cb1f2e7fb38fac9b425c24e8b3426ee0391e776bcf8510a892e89c55f81\",\n        \"tasks.md\": \"86d3213c87c6c3c92b5e1e5d171ed8d93c427c4fdb1fc4ac0cf0e861bd63f9fa\"\n      },\n      \"slug\": \"2026-10-25_update-workbench-auth\"\n    },\n    \"slug\": \"2026-10-25_update-workbench-auth\",\n    \"status\": \"complete\",\n    \"target\": null\n  },\n  \"updated_at\": \"2026-10-25T09:10:31Z\"\n}\n"
+}

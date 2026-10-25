@@ -1,39 +1,39 @@
 {
   "chain": "autorun",
-  "chain_id": "autorun-20261025-workbench-auth",
+  "chain_id": "autorun-20261025-kitagent-alignment",
   "client_surface": "desktop",
   "completed_step_ids": [],
   "execution_mode": "current",
-  "feature_fingerprint": "73b5644679f52828dbf6c001d34c54ef233e3a51b1c7a1cecea80392245f40d5",
+  "feature_fingerprint": "638a1165309c15a8b56c8fa94aab0ff2935c13746cc2a985239420026a8e4166",
   "host": "zcode",
-  "lifecycle": "complete",
+  "lifecycle": "active",
   "max_rounds": 5,
   "model": null,
   "model_control": "host",
   "permission_effective": "host",
   "plan_docs": [
-    ".spec/plans/2026-10-25_workbench-auth/master.md"
+    ".spec/plans/2026-10-25_kitagent-alignment/master.md"
   ],
   "revision": 2,
   "round": 1,
   "schema_version": 3,
   "step": {
-    "id": "pkg-workbench-auth",
+    "id": "pkg-alignment-quick-wins",
     "kind": "package",
     "outcome": "passed",
     "proof": {
-      "archive": ".spec/specs/archive/2026-10-25_update-workbench-auth",
+      "archive": ".spec/specs/archive/2026-10-25_port-alignment-quick-wins",
       "archive_hashes": {
-        "completion-summary.md": "8433183aa682fc8aa411e93e1ef299d21b6d47b51a3fe4781f489131e75bd2d1",
-        "runs.jsonl": "b649f28ecc0b3b3c5a5a4e7e02cfd969b9e81320c7afb8693eca1ef770f2370f",
-        "spec.md": "82759cb1f2e7fb38fac9b425c24e8b3426ee0391e776bcf8510a892e89c55f81",
-        "tasks.md": "86d3213c87c6c3c92b5e1e5d171ed8d93c427c4fdb1fc4ac0cf0e861bd63f9fa"
+        "completion-summary.md": "54a43f4098ea5f91eac980a70901ba5442405afe72f3b62ea7fabf5c798bd079",
+        "runs.jsonl": "436d9dcd6f269dc4d5a37e3035c0d5f6f1b3af6457cf33508863ae6d63ccf392",
+        "spec.md": "1d99e9a3f59a6d1a0ba6c26100264088b12be57eecae647eb4e5181772d35bdd",
+        "tasks.md": "bd1bc03543732271906874734753669f4b9be3818b6de8ba01f36b83eb281212"
       },
-      "slug": "2026-10-25_update-workbench-auth"
+      "slug": "2026-10-25_port-alignment-quick-wins"
     },
-    "slug": "2026-10-25_update-workbench-auth",
+    "slug": "2026-10-25_port-alignment-quick-wins",
     "status": "complete",
     "target": null
   },
-  "updated_at": "2026-10-25T09:10:31Z"
+  "updated_at": "2026-10-25T10:27:17Z"
 }
