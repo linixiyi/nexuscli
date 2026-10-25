@@ -27,6 +27,7 @@ from nexuscli.agent.loop_guard import (
 )
 from nexuscli.agent.orchestrator import AgentOrchestrator
 from nexuscli.agent.plan_execute import PlanExecuteAgent
+from nexuscli.agent.turn_checkpoint import TurnCheckpointStore
 from nexuscli.config import NexusCliConfig
 from nexuscli.context import ContextBudget, ContextWindowManager
 from nexuscli.hooks import fire_event, has_hooks
@@ -42,6 +43,16 @@ from nexuscli.tools.registry import ToolRegistry
 from nexuscli.types import Message, Usage
 
 AgentMode = Literal["react", "plan", "team"]
+
+
+def _message_snapshot(message: Message) -> dict[str, Any]:
+    """Message → JSON 安全 dict（dataclass 字段过滤，tool_calls 本就是 dict 列表）。"""
+
+    from dataclasses import asdict, is_dataclass
+
+    if is_dataclass(message):
+        return asdict(message)
+    return {"role": str(getattr(message, "role", "")), "content": message.content}
 
 
 class Agent:
@@ -81,6 +92,7 @@ class Agent:
         session_id: str | None = None,
         use_journal: bool = False,
         run_id: str | None = None,
+        turn_checkpoints: bool = False,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -93,6 +105,8 @@ class Agent:
         # REPL/引擎路径显式开启。run_id 每次 Agent 实例一份（一次 run 一份）。
         self._journal = get_tool_journal() if use_journal else None
         self._run_id = run_id or uuid4().hex
+        # F10 回合级 checkpoint：opt-in（REPL 开启；eval 直构默认关闭保离线承诺）
+        self._turn_ckpt_store = TurnCheckpointStore() if turn_checkpoints else None
         self.max_plan_depth = max_plan_depth
         # Recursion guard threaded into every ToolContext this agent builds
         # (see run_subagent / SUBAGENT_DEPTH_LIMIT).
@@ -242,17 +256,34 @@ class Agent:
     # Mode runners
     # ------------------------------------------------------------------
 
-    async def _run_react(self, message: str) -> AsyncIterator[dict[str, Any]]:
+    async def continue_run(self) -> AsyncIterator[dict[str, Any]]:
+        """F10：从已恢复的历史继续循环（不追加用户消息、不注入技能候选）。
+
+        /turn-resume 重建历史并重放在途调用后，以此从本轮继续。仅限构造时开启
+        turn_checkpoints 的 agent（恢复路径的护栏）。
+        """
+
+        if self._turn_ckpt_store is None:
+            raise RuntimeError("continue_run requires an agent built with turn_checkpoints=True")
+        async for event in self._run_react(None):
+            yield event
+
+    async def _run_react(self, message: str | None) -> AsyncIterator[dict[str, Any]]:
         """Standard ReAct loop (the default and most common mode)."""
         # Prepend skill candidates that match the user message.
-        original = message
-        message = _prepend_skill_candidates(message, self.cwd, self.config)
-        message = _prepend_skill_context(message, self.skill_context_buffer)
+        original = ""
+        if message is None:
+            # continue_run：历史已就位（含重放的工具结果），直接进入下一模型轮。
+            messages = [*(self.history or [])]
+        else:
+            original = message
+            message = _prepend_skill_candidates(message, self.cwd, self.config)
+            message = _prepend_skill_context(message, self.skill_context_buffer)
 
-        messages = [
-            *(self.history or []),
-            Message(role="user", content=parse_image_references(message, self.cwd)),
-        ]
+            messages = [
+                *(self.history or []),
+                Message(role="user", content=parse_image_references(message, self.cwd)),
+            ]
 
         tool_defs = self.tool_registry.definitions()
         executor = ToolExecutor(self.tool_registry)
@@ -401,7 +432,7 @@ class Agent:
                     ),
                 }
             if stream_error is not None:
-                yield {"type": "error", "error": stream_error}
+                yield {"type": "error", "error": stream_error, "error_code": "llm_error"}
                 return
 
             total_usage = total_usage + turn_usage
@@ -460,6 +491,20 @@ class Agent:
             pending_calls = [
                 call for call in tool_calls if str(call.get("id") or "") not in blocked_results
             ]
+            if self._turn_ckpt_store is not None:
+                # (a) in-flight 快照：assistant tool_use 已入 messages、分发未开始。
+                # 崩溃后 /turn-resume 按原始 id 经 journal 重派（05 F10 双快照点定稿）。
+                self._turn_ckpt_store.save(
+                    cwd=self.cwd,
+                    run_id=self._run_id,
+                    model=self.llm_client.model_name,
+                    provider=self.llm_client.provider_name,
+                    turn=turn,
+                    messages=[_message_snapshot(item) for item in messages],
+                    pending_tool_calls=list(pending_calls),
+                    usage_so_far=total_usage.to_dict(),
+                    cost_so_far=_calculate_costs(self.llm_client, total_usage) or {},
+                )
             tool_results = await executor.execute_all(pending_calls, context)
             tool_results = [*tool_results, *blocked_results.values()]
             loaded_skill_context = _drain_skill_context(self.skill_context_buffer)
@@ -501,6 +546,20 @@ class Agent:
                     )
                 )
 
+            if self._turn_ckpt_store is not None:
+                # (b) 轮末快照：pending 为空，覆盖 (a)——该轮完整。
+                self._turn_ckpt_store.save(
+                    cwd=self.cwd,
+                    run_id=self._run_id,
+                    model=self.llm_client.model_name,
+                    provider=self.llm_client.provider_name,
+                    turn=turn,
+                    messages=[_message_snapshot(item) for item in messages],
+                    pending_tool_calls=[],
+                    usage_so_far=total_usage.to_dict(),
+                    cost_so_far=_calculate_costs(self.llm_client, total_usage) or {},
+                )
+
             if loop_aborted:
                 break
 
@@ -511,6 +570,7 @@ class Agent:
         if hit_limit and not loop_aborted:
             yield {
                 "type": "warning",
+                "kind": "budget_exhausted",  # F11：类型化预算耗尽标记（折叠层不做字符串匹配）
                 "message": (
                     f"Reached the agent.max_turns limit ({self.max_turns}); the task "
                     "may be unfinished. Raise agent.max_turns in config.json to "
@@ -521,6 +581,7 @@ class Agent:
         if loop_aborted:
             yield {
                 "type": "warning",
+                "kind": "budget_exhausted",  # F11：loop guard 中止同为预算耗尽语义
                 "message": loop_abort_warning(turn, self.config.agent.loop_detection_threshold),
             }
 

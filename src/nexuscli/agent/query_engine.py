@@ -6,6 +6,7 @@ import sys
 from nexuscli.agent.agent import Agent
 from nexuscli.agent.orchestrator import AgentOrchestrator
 from nexuscli.agent.plan_execute import PlanExecuteAgent
+from nexuscli.agent.results import EngineRunResult
 from nexuscli.config import NexusCliConfig
 from nexuscli.llm.base import LlmClient
 from nexuscli.prompt import PromptAssembler
@@ -71,6 +72,31 @@ class QueryEngine:
         )
         async for event in agent.run(message):
             yield event
+
+    async def ask_result_async(
+        self,
+        message: str,
+        history: list[Message] | None = None,
+        *,
+        run_id: str | None = None,
+    ) -> EngineRunResult:
+        """F11：事件流折叠为 EngineResult（终态|挂起）。既有 raise 语义经 ask() 原样保留。"""
+
+        from nexuscli.agent.results import fold_engine_result
+
+        return await fold_engine_result(self.ask(message, history=history, run_id=run_id))
+
+    async def plan_result_async(self, message: str) -> EngineRunResult:
+        from nexuscli.agent.results import fold_engine_result
+
+        return await fold_engine_result(self.plan(message))
+
+    async def team_result_async(
+        self, message: str, *, worker_mode: str = "react"
+    ) -> EngineRunResult:
+        from nexuscli.agent.results import fold_engine_result
+
+        return await fold_engine_result(self.team(message, worker_mode=worker_mode))
 
     async def team(self, message: str, *, worker_mode: str = "react"):
         orchestrator = AgentOrchestrator(

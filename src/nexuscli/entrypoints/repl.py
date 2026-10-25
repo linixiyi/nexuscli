@@ -32,6 +32,7 @@ from rich.table import Table
 
 from nexuscli import __version__
 from nexuscli.agent import Agent, AgentOrchestrator, PlanExecuteAgent
+from nexuscli.agent.turn_checkpoint import TurnCheckpointStore
 from nexuscli.bootstrap import build_tool_registry
 from nexuscli.config import NexusCliConfig, config_to_public_dict
 from nexuscli.context import ContextBudget, ContextWindowManager
@@ -82,6 +83,7 @@ from nexuscli.session import SessionStore, SessionUsageTotals, SessionWriter
 from nexuscli.skill import SkillRegistry
 from nexuscli.snapshot import SnapshotService
 from nexuscli.tools import ToolRegistry
+from nexuscli.types import Message, Usage
 from nexuscli.workflow import WorkflowError, load_workflow_file
 
 SLASH_COMMANDS = [
@@ -642,6 +644,94 @@ async def _handle_slash(
                     RichRenderer(),
                     agent.llm_client.max_context_window,
                 )
+    elif command == "/turn-resume":
+        # F10 回合级恢复：列出候选或按 id 接续（重建历史、沿用 run_id、
+        # pending 按原 id 经 journal 重派，随后 continue_run 从本轮继续）。
+        store = TurnCheckpointStore()
+        if not arg:
+            candidates = store.list_checkpoints(cwd=cwd)
+            if not candidates:
+                console.print(
+                    "[yellow]没有可用的回合 checkpoint"
+                    "（turn_checkpoints 随 REPL 默认开启）[/yellow]"
+                )
+            else:
+                table = Table.grid(padding=(0, 2))
+                table.add_column(style="cyan", no_wrap=True)
+                table.add_column()
+                for item in candidates[:10]:
+                    pending_flag = (
+                        f" · {len(item.pending_tool_calls)} 个在途调用"
+                        if item.pending_tool_calls
+                        else ""
+                    )
+                    table.add_row(
+                        item.checkpoint_id, f"turn {item.turn} · {item.updated_at}{pending_flag}"
+                    )
+                console.print(table)
+            return False
+        checkpoint = store.load(arg.strip())
+        cwd_matches = checkpoint is not None and os.path.realpath(
+            checkpoint.cwd
+        ) == os.path.realpath(cwd)
+        if checkpoint is None or not cwd_matches:
+            console.print("[red]checkpoint 不存在、损坏或不属于当前工作区[/red]")
+            return False
+        restored_agent = Agent(
+            llm_client=agent.llm_client,
+            tool_registry=registry,
+            system_prompt=agent.system_prompt,
+            cwd=cwd,
+            config=config,
+            approval_callback=agent.approval_callback,
+            max_turns=config.agent.max_turns,
+            use_journal=True,
+            run_id=checkpoint.run_id,
+            turn_checkpoints=True,
+        )
+        from dataclasses import fields as dc_fields
+
+        valid_fields = {f.name for f in dc_fields(Message)}
+        restored_agent.history = [
+            Message(**{k: v for k, v in item.items() if k in valid_fields})
+            for item in checkpoint.messages
+        ]
+
+        restored_agent.last_usage = Usage.from_mapping(checkpoint.usage_so_far)
+        restored_agent.last_cost = dict(checkpoint.cost_so_far)
+        if checkpoint.pending_tool_calls:
+            from nexuscli.tools.base import ToolContext
+            from nexuscli.tools.executor import ToolExecutor
+
+            replay_context = ToolContext(
+                cwd=cwd,
+                config=config,
+                approval_callback=agent.approval_callback,
+                journal=restored_agent._journal,
+                run_id=checkpoint.run_id,
+            )
+            replay_executor = ToolExecutor(registry)
+            console.print(
+                f"[yellow]重放 {len(checkpoint.pending_tool_calls)} 个在途调用"
+                "（journal 分流）…[/yellow]"
+            )
+            for call in checkpoint.pending_tool_calls:
+                results = await replay_executor.execute_all([call], replay_context)
+                for result in results:
+                    kind = result.error_type or ("reuse" if not result.is_error else "error")
+                    console.print(f"  {result.tool_use_id}: {kind}")
+                    restored_agent.history.append(
+                        Message(
+                            role="tool", content=result.content, tool_call_id=result.tool_use_id
+                        )
+                    )
+        else:
+            console.print("[yellow]最近一轮完整（无在途调用），从下一轮继续[/yellow]")
+        await _run_events(
+            restored_agent.continue_run(),
+            RichRenderer(),
+            agent.llm_client.max_context_window,
+        )
     elif command == "/init":
         # Unlike /plan (which spawns a fresh PlanExecuteAgent), /init runs on
         # the current agent so the react loop and session context carry over.

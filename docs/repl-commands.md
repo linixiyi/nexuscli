@@ -105,3 +105,12 @@
 ```
 
 `/compact` 走与自动压缩相同的确定性流程（不额外调用 LLM）：近端消息原样保留、旧轮次汇总为摘要，并输出压缩统计（tokens before/after 与被摘要的消息条数），方便确认压缩收益。历史为空时会友好提示，不会报错。自动压缩的触发阈值、microcompact 与 provider 超限重试的完整口径见 [memory-context.md](memory-context.md)。
+
+## /turn-resume 回合级恢复
+
+`/turn-resume`（无参数）列出当前工作区的回合 checkpoint；`/turn-resume <id>` 接续一个被
+中止的 react 回合：从 checkpoint 重建对话历史并**沿用原 run_id**，在途工具调用按原始 id
+经工具日志分流（已完成 → 复用结果；结果未知 → fail-closed 不自动重放），随后从本轮继续。
+checkpoint 每 react 轮写两次（执行前 in-flight / 轮末覆盖）；明文落盘于
+`~/.nexuscli/turn_checkpoints/`，可能含工具结果中的文件内容。REPL 的 Ctrl+C 仍是中止——
+本命令的价值是中止后可从最近完整轮接续。

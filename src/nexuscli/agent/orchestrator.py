@@ -379,7 +379,9 @@ class AgentOrchestrator:
                 Message(role="assistant", content=final_text),
             ]
         except Exception as exc:  # noqa: BLE001
-            yield {"type": "error", "error": exc}
+            from nexuscli.agent.results import classify_error
+
+            yield {"type": "error", "error": exc, "error_code": classify_error(exc)}
             return
         finally:
             if snapshot is not None:
