@@ -20,7 +20,7 @@
 - 现状：F6 同步阻塞回调（event.wait 300s）；F15 后 Web 决策走 POST decision → decide() 唤醒
 - 依赖设施已就位：turn_checkpoint（双快照点）、journal（原 id 重派）、EngineResult sum type
 
-## 2.2 关键假设
+### 2.2 关键假设
 - 同步阻塞回调（REPL 路径）保留不动；异步挂起是 **Runtime API 任务/工作台路径的新增模式**
   （mode 可选），两条路径并存
 - 挂起期间任务保持 running（心跳保活 lease——F6 已验证该机制）
