@@ -46,8 +46,8 @@
 - [x] A12 前端 seq-patch 应用器 + pending 幂等恢复 + Playwright e2e（kitagent frontend state.ts/useWorkbench/e2e）
 
 ### 第 5 轮：medium 收尾
-- [ ] A13 运行报告冻结 + markdown 导出（kitagent projection.py:315-380）
-- [ ] A14 协议文档生成链（kitagent scripts/generate_wire_protocol.py 模式）
+- [x] A13 运行报告冻结 + markdown 导出（kitagent projection.py:315-380）
+- [x] A14 协议文档生成链（kitagent scripts/generate_wire_protocol.py 模式）
 
 ## 边界
 

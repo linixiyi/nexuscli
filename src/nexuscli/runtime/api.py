@@ -75,6 +75,118 @@ _CSP = (
     "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
 )
 
+# A14 端点清单事实源：_handle 各分流分支（静态 → bootstrap → if/elif 链）的机器
+# 可读镜像，条目 = (method, path_pattern, auth, summary)。约束：
+# 1. 清单与 _handle 的路由分发一一对应——新增/改动分支必须同步这里（既有
+#    runtime 测试是分发行为的回归锚）；
+# 2. docs/runtime-api.md 的端点表节由 scripts/generate_endpoint_docs.py 对本
+#    常量做 ast 解析后生成（Do not edit manually），scripts/check_endpoint_docs.py
+#    在 CI 校验同步。分发逻辑本身不消费本清单。
+ROUTE_MANIFEST: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "GET",
+        "/",
+        "免鉴权（仅 --workbench）",
+        "工作台静态资源 / SPA 回退 / 空态页（匹配非 /v1/* 的 GET）",
+    ),
+    (
+        "POST",
+        "/v1/workbench/bootstrap",
+        "一次性口令",
+        "口令一次性换发 HttpOnly cookie 会话与 x-csrf-token",
+    ),
+    (
+        "POST",
+        "/v1/threads",
+        "api_key / cookie+csrf",
+        "创建线程，返回 {id}",
+    ),
+    (
+        "POST",
+        "/v1/threads/{thread_id}/turns",
+        "api_key / cookie+csrf",
+        "同步执行一个 turn（mode=react/plan/team），完成前阻塞",
+    ),
+    (
+        "GET",
+        "/v1/threads/{thread_id}/events/stream",
+        "api_key / cookie / api_key 查询参数",
+        "SSE 事件流：回放 + 实时 + 15s 心跳（?since=N 续传，16 连接上限）",
+    ),
+    (
+        "GET",
+        "/v1/sessions",
+        "api_key / cookie",
+        "REPL 会话列表（?limit、?all 查询参数，按 cwd 过滤）",
+    ),
+    (
+        "GET",
+        "/v1/sessions/{session_id}/transcript",
+        "api_key / cookie",
+        "会话转录分页读取（?offset、?limit 查询参数）",
+    ),
+    (
+        "GET",
+        "/v1/usage/summary",
+        "api_key / cookie",
+        "用量聚合汇总（?days 查询参数）",
+    ),
+    (
+        "GET",
+        "/v1/threads/{thread_id}/events",
+        "api_key / cookie",
+        "线程事件全量列表（text/event-stream 帧文本，按 id 升序）",
+    ),
+    (
+        "GET",
+        "/v1/approvals",
+        "api_key / cookie",
+        "挂起审批列表",
+    ),
+    (
+        "POST",
+        "/v1/approvals/{approval_id}/decision",
+        "api_key / cookie+csrf",
+        "审批决策（decision=approve/deny，同动词幂等重放）",
+    ),
+    (
+        "GET",
+        "/v1/workbench/permissions",
+        "api_key / cookie",
+        "会话权限快照（含 expected_revision）",
+    ),
+    (
+        "PATCH",
+        "/v1/workbench/permissions",
+        "api_key / cookie+csrf",
+        "会话权限变更（expected_revision 乐观锁，即时重判挂起审批）",
+    ),
+    (
+        "POST",
+        "/v1/tasks",
+        "api_key / cookie+csrf",
+        "创建后台任务（mode=react/plan/team）",
+    ),
+    (
+        "GET",
+        "/v1/tasks",
+        "api_key / cookie",
+        "后台任务列表",
+    ),
+    (
+        "GET",
+        "/v1/tasks/{task_id}",
+        "api_key / cookie",
+        "后台任务详情",
+    ),
+    (
+        "POST",
+        "/v1/tasks/{task_id}/cancel",
+        "api_key / cookie+csrf",
+        "取消后台任务（运行中取消不被迟到结果覆盖）",
+    ),
+)
+
 
 class TaskCanceledError(RuntimeError):
     pass

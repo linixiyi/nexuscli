@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { fetchTranscript } from "../api/client";
 import type { TranscriptRecord } from "../api/types";
 import { useEventStream } from "../sse/useEventStream";
+import { exportReportMarkdown } from "./report";
 import { mergeTimeline } from "./timeline";
 
 type Props = {
@@ -15,6 +16,30 @@ type Props = {
 
 function isThreadLike(id: string): boolean {
   return id.startsWith("thread_");
+}
+
+// 导出报告：Blob + 临时 objectURL + a[download] 触发浏览器下载，不落服务端。
+// 文件名只保留安全字符，防会话 id 里的分隔符搅乱下载名。
+function downloadReport(sessionId: string, text: string): void {
+  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `nexuscli-report-${sessionId.replace(/[^A-Za-z0-9._-]/g, "_")}.md`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+// 静态转录 → 报告导出：usage 行单独抽出台账表，其余记录进对话时间线。
+function exportStaticReport(sessionId: string, records: TranscriptRecord[] | null): void {
+  if (records === null) {
+    return;
+  }
+  const usage = records.filter((record) => record.type === "usage");
+  downloadReport(
+    sessionId,
+    exportReportMarkdown(sessionId, records, usage, new Date().toISOString()),
+  );
 }
 
 function TranscriptBody({ records }: { records: TranscriptRecord[] }): JSX.Element {
@@ -71,6 +96,11 @@ export function TranscriptView({ sessionId }: Props): JSX.Element {
       <div className="view">
         <p className="muted">REPL 会话转录（静态回放）</p>
         {error !== null && <p className="error">{error}</p>}
+        {records !== null && (
+          <button type="button" onClick={() => exportStaticReport(sessionId, records)}>
+            导出报告（markdown）
+          </button>
+        )}
         {records === null ? <p className="muted">加载中…</p> : <TranscriptBody records={records} />}
       </div>
     );
