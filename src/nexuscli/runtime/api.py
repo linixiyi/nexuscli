@@ -12,23 +12,29 @@ import threading
 import time
 from contextlib import suppress
 from dataclasses import asdict
+from dataclasses import fields as dataclass_fields
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import nexuscli.runtime.approvals as approvals_module
 from nexuscli.agent import QueryEngine
+from nexuscli.agent.agent import Agent
+from nexuscli.agent.turn_checkpoint import TurnCheckpointStore, _checkpoint_id_for_run
 from nexuscli.bootstrap import build_tool_registry
 from nexuscli.config import NexusCliConfig
 from nexuscli.llm import create_llm_client
 from nexuscli.net_guards import is_loopback_origin
+from nexuscli.prompt import PromptAssembler
 from nexuscli.runtime import reads
 from nexuscli.runtime.approvals import (
     APPROVAL_INPUT_MAX_BYTES,
     ApprovalBridge,
     ApprovalConflictError,
     ApprovalInputTooLargeError,
+    ApprovalSuspension,
     UnknownApprovalError,
 )
 from nexuscli.runtime.tasks import TASK_MODES, DurableTaskManager, TaskRecord
@@ -39,7 +45,9 @@ from nexuscli.runtime.websession import (
     cookie_value_from_header,
     session_cookie_header,
 )
-from nexuscli.types import Message
+from nexuscli.tools.base import ToolContext
+from nexuscli.tools.executor import ToolExecutor
+from nexuscli.types import Message, Usage
 
 MAX_SSE_CLIENTS = 16
 SSE_HEARTBEAT_SECONDS = 15
@@ -129,6 +137,11 @@ class RuntimeApiServer:
         # + 首次响应；Condition 用于在飞重放等待首请求完成。
         self._idempotency: dict[str, dict[str, Any]] = {}
         self._idempotency_cond = threading.Condition()
+        # A9 任务路径事件台账（仅内存，进程生命周期）：任务没有线程事件面（events
+        # 表以 thread_id 为键，读路径带 threads 存在性门），react 任务的挂起/收口
+        # 信号落在这里供工作台与测试观测。审批登记表同取向：随进程消亡，无落盘。
+        self._task_events: dict[str, list[dict[str, Any]]] = {}
+        self._task_events_guard = threading.Lock()
         self._ensure_schema()
 
     def serve_forever(self) -> None:
@@ -388,17 +401,22 @@ class RuntimeApiServer:
                         },
                     )
                 else:
-                    _send_json(
-                        request,
-                        200,
-                        {
-                            "ok": True,
-                            "id": approval_id,
-                            "resolved_by": resolved.resolved_by,
-                            "decision": decision,
-                            "status": resolved.status,
-                        },
-                    )
+                    # A9 恢复触发：挂起任务的 worker 正等在这张卡的 event 上，
+                    # decide() 的 event.set() 即恢复信号——决策端点在此立即返回，
+                    # 不做任何恢复工作（HTTP 响应零阻塞）；worker 醒来后按
+                    # checkpoint_id 重派 pending 调用并接续任务。
+                    suspension = self.approval_bridge.suspension_for(approval_id)
+                    payload: dict[str, Any] = {
+                        "ok": True,
+                        "id": approval_id,
+                        "resolved_by": resolved.resolved_by,
+                        "decision": decision,
+                        "status": resolved.status,
+                    }
+                    if suspension is not None:
+                        payload["suspended_task_id"] = suspension["task_id"]
+                        payload["checkpoint_id"] = suspension["checkpoint_id"]
+                    _send_json(request, 200, payload)
             elif method == "GET" and path == "/v1/workbench/permissions":
                 # A6 会话权限读面（kitagent session.get_permissions rpc 同位，
                 # web/session.py:228）：客户端据此取 expected_revision。
@@ -590,6 +608,12 @@ class RuntimeApiServer:
         self._ensure_llm_key()
         if self.task_manager.is_canceled(task.id):
             raise TaskCanceledError(task.id)
+        if task.mode == "react":
+            # A9 挂起即 checkpoint：react 任务的审批从「回调阻塞等待」改为登记后
+            # 立即中断 + 回合 checkpoint + 决策后恢复（_run_task_react）。
+            return await self._run_task_react(task)
+        # plan/team 维持 F6 同步桥（无回合 checkpoint/按 id 重派面，挂起恢复 machinery
+        # 是 react 特有）：行为与 A9 之前一致，零回归。
         registry, _manager = await build_tool_registry(config=self.config, cwd=self.cwd)
         engine = QueryEngine(
             llm_client=create_llm_client(
@@ -612,6 +636,226 @@ class RuntimeApiServer:
             elif event.get("type") == "error":
                 raise event["error"]
         return text
+
+    def _react_system_prompt(self, registry, llm_client) -> str:
+        return PromptAssembler(
+            config=self.config,
+            cwd=self.cwd,
+            tool_names=registry.list_names(),
+            model=llm_client.model_name,
+            provider=llm_client.provider_name,
+        ).build_static()
+
+    def _session_permissions_revision(self) -> int | None:
+        snapshot = self.session_permissions.snapshot()
+        revision = snapshot.get("revision") if isinstance(snapshot, dict) else None
+        return revision if isinstance(revision, int) else None
+
+    async def _run_task_react(self, task: TaskRecord) -> str:
+        """A9 react 任务：审批请求 → 登记即挂起（checkpoint 落盘）→ 等决策 → 恢复。
+
+        - 挂起模式只由本路径的调用参数触发（callback_for(suspend=True)）；REPL
+          线程路径（_run_turn）与 plan/team 任务仍用 F6 同步桥，回调行为零变化。
+        - react 段直接构造 Agent 而非经 QueryEngine.ask：query_engine.py 不在本次
+          改动清单内且 ask() 无法传 turn_checkpoints=True，而 checkpoint (a)
+          （assistant tool_use 已入 messages、分发未开始）必须先于工具分发落盘，
+          挂起时它就是恢复依据（agent.py:522-535 的既有双快照点）。
+        - 恢复执行体取舍（设计裁决）：恢复在本 worker 原地执行——既不在决策线程
+          直跑，也不二次入队。租约归属把任务钉在认领它的 worker 上（heartbeat/
+          complete 都按 worker_id 结算，tasks.py 不在改动清单内，转移所有权需要
+          新的管理器原语）；决策端点只 decide() + event.set()，HTTP 响应零阻塞，
+          worker 醒来后从 checkpoint 重派。worker 在挂起等待期间仍由既有心跳线程
+          保活租约（F6 验证过的机制，_worker_loop 零改动）。
+        """
+
+        store = TurnCheckpointStore()
+        checkpoint_id = _checkpoint_id_for_run(task.run_id)
+        llm_client = create_llm_client(
+            self.config.llm,
+            telemetry_enabled=self.config.telemetry.enabled,
+        )
+        try:
+            registry, _manager = await build_tool_registry(config=self.config, cwd=self.cwd)
+            system_prompt = self._react_system_prompt(registry, llm_client)
+            callback = self.approval_bridge.callback_for(
+                task_id=task.id, permissions=self.session_permissions, suspend=True
+            )
+            agent = Agent(
+                llm_client=llm_client,
+                tool_registry=registry,
+                system_prompt=system_prompt,
+                cwd=self.cwd,
+                config=self.config,
+                approval_callback=callback,
+                max_turns=self.config.agent.max_turns,
+                use_journal=True,
+                run_id=task.run_id,
+                turn_checkpoints=True,
+            )
+            text, suspension = await self._consume_react_events(task, agent.run(task.prompt))
+            while suspension is not None:
+                self.approval_bridge.attach_suspension(
+                    suspension.approval_id,
+                    task_id=task.id,
+                    checkpoint_id=checkpoint_id,
+                    permissions_revision=self._session_permissions_revision(),
+                )
+                self._append_task_event(
+                    task.id, {**suspension.as_event(), "checkpoint_id": checkpoint_id}
+                )
+                decision, approval = self._await_suspension_settlement(task, suspension)
+                self.approval_bridge.drop_suspension(suspension.approval_id)
+                self._append_task_event(
+                    task.id,
+                    {
+                        "type": "approval_settled",
+                        "approval_id": approval.id,
+                        "decision": decision,
+                        "resolved_by": approval.resolved_by,
+                        "tool_name": approval.request.get("tool_name"),
+                    },
+                )
+                if decision != "approve":
+                    # deny / 超时 expired：合成拒绝说明、任务正常收口，不重放任何调用。
+                    tool_name = str(approval.request.get("tool_name") or "unknown")
+                    note = (
+                        f'\n\nTool "{tool_name}" was denied by approval policy '
+                        f"(resolved_by={approval.resolved_by or 'timeout'}); the task "
+                        "finished without executing it."
+                    )
+                    with suppress(Exception):
+                        store.delete(checkpoint_id)
+                    return text + note
+                resumed_text, suspension = await self._resume_react_from_checkpoint(
+                    task, llm_client, registry, system_prompt, callback, store
+                )
+                text += resumed_text
+            with suppress(Exception):
+                store.delete(checkpoint_id)
+            return text
+        except BaseException:
+            # 任务到终态（含取消/硬失败）即清回合 checkpoint：无可恢复物，/turn-resume
+            # 不该看到终态任务的残影。worker 进程死亡（租约过期重跑）不走这里，
+            # checkpoint 留存，重跑会在同一审批上重新挂起新卡。
+            with suppress(Exception):
+                store.delete(checkpoint_id)
+            raise
+
+    async def _consume_react_events(
+        self, task: TaskRecord, events: Any
+    ) -> tuple[str, ApprovalSuspension | None]:
+        """消费一段 react 事件流：返回累计文本；挂起时返回 ApprovalSuspension。"""
+
+        text = ""
+        try:
+            async for event in events:
+                if self.task_manager.is_canceled(task.id):
+                    raise TaskCanceledError(task.id)
+                if event.get("type") == "text_delta":
+                    text += str(event.get("text") or "")
+                elif event.get("type") == "error":
+                    raise event["error"]
+        except ApprovalSuspension as suspension:
+            return text, suspension
+        return text, None
+
+    def _await_suspension_settlement(
+        self, task: TaskRecord, suspension: ApprovalSuspension
+    ) -> tuple[str, Any]:
+        """同步等待决策收口（worker 线程内，事件循环在此空闲）。
+
+        - decide/recheck_pending/expire 都以 event.set 唤醒；唤醒后决策位即现状。
+        - 300s 无决策 → expired（沿用 F6 fail-closed 口径）→ 按 deny 收口。
+        - 任务取消：撤销未决卡并抛 TaskCanceledError（cancel() 拥有终态）。
+        - 心跳保活：_worker_loop 的心跳线程在 _run_task 返回前一直运行，挂起等待
+          期间租约不失效（F6 验证过的机制，零改动复用）。
+        """
+
+        approval = suspension.approval
+        deadline = time.monotonic() + approvals_module.APPROVAL_TIMEOUT_SECONDS
+        while True:
+            if self.task_manager.is_canceled(task.id):
+                self.approval_bridge.cancel_pending(approval.id)
+                raise TaskCanceledError(task.id)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.approval_bridge.expire(approval.id)
+                return "deny", approval
+            if approval.event.wait(timeout=min(0.5, remaining)):
+                return approval.decision or "deny", approval
+
+    async def _resume_react_from_checkpoint(
+        self,
+        task: TaskRecord,
+        llm_client: Any,
+        registry: Any,
+        system_prompt: str,
+        callback: Any,
+        store: TurnCheckpointStore,
+    ) -> tuple[str, ApprovalSuspension | None]:
+        """approve 后从回合 checkpoint 恢复：按原 id 重派 pending 调用，再接续本轮。
+
+        journal 分流（F9）保证重派幂等：无记录 → 执行；completed → 复用序列化
+        结果（batch 中先于挂起调用已完成的调用不再执行）；started/outcome_unknown
+        → fail-closed。刚收口的 approve 决策经桥的持久决策查找（evaluate_durable
+        同位）放行同参重放——恢复不会在原审批上二次挂起；若本轮后续再遇新审批，
+        同样挂起即 checkpoint（外层 while 循环接续）。
+        """
+
+        checkpoint_id = _checkpoint_id_for_run(task.run_id)
+        checkpoint = store.load(checkpoint_id)
+        if checkpoint is None:
+            raise RuntimeError(f"approval resume checkpoint missing: {checkpoint_id}")
+        # cwd 归一化守卫（与 /turn-resume 同口径）：异工作区 checkpoint 不接续。
+        if os.path.realpath(checkpoint.cwd) != os.path.realpath(self.cwd):
+            raise RuntimeError("approval resume checkpoint belongs to a different workspace")
+        agent = Agent(
+            llm_client=llm_client,
+            tool_registry=registry,
+            system_prompt=system_prompt,
+            cwd=self.cwd,
+            config=self.config,
+            approval_callback=callback,
+            max_turns=self.config.agent.max_turns,
+            use_journal=True,
+            run_id=checkpoint.run_id,
+            turn_checkpoints=True,
+        )
+        valid_fields = {field.name for field in dataclass_fields(Message)}
+        agent.history = [
+            Message(**{key: value for key, value in item.items() if key in valid_fields})
+            for item in checkpoint.messages
+        ]
+        agent.last_usage = Usage.from_mapping(checkpoint.usage_so_far)
+        agent.last_cost = dict(checkpoint.cost_so_far)
+        if checkpoint.pending_tool_calls:
+            replay_context = ToolContext(
+                cwd=self.cwd,
+                config=self.config,
+                approval_callback=callback,
+                journal=agent._journal,
+                run_id=checkpoint.run_id,
+            )
+            replay_executor = ToolExecutor(registry)
+            for call in checkpoint.pending_tool_calls:
+                results = await replay_executor.execute_all([call], replay_context)
+                for result in results:
+                    agent.history.append(
+                        Message(
+                            role="tool",
+                            content=result.content,
+                            tool_call_id=result.tool_use_id,
+                        )
+                    )
+        return await self._consume_react_events(task, agent.continue_run())
+
+    def _append_task_event(self, task_id: str, event: dict[str, Any]) -> None:
+        with self._task_events_guard:
+            self._task_events.setdefault(task_id, []).append(dict(event))
+
+    def task_events(self, task_id: str) -> list[dict[str, Any]]:
+        with self._task_events_guard:
+            return [dict(event) for event in self._task_events.get(task_id, [])]
 
     def _ensure_llm_key(self) -> None:
         if not self.config.llm.api_key:

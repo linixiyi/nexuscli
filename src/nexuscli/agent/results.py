@@ -1,10 +1,12 @@
 """引擎结果合同（F11）：EngineResult = RunOutcome | RunSuspension 的 sum type。
 
 对标 kitagent engine/base.py 的形态（05-execution-durability.md F11 节定稿）：
-挂起是一等返回值，不是异常、不是 None。SuspensionReason 三态中，本轮真实生产者只有
-collaborative_interrupt（plan 协作中断）与 budget_exhausted（max_turns 用尽 / loop guard
-中止）；approval_pending 是挂账——F6 审批桥为同步阻塞回调、无挂起出口，异步化审批模型
-之前不接线（该值不出现在任何运行路径）。
+挂起是一等返回值，不是异常、不是 None。SuspensionReason 三态中，collaborative_interrupt
+（plan 协作中断）与 budget_exhausted（max_turns 用尽 / loop guard 中止）自 F11 起有
+真实生产者；approval_pending 自 A9 审批异步化起接线：Runtime react 任务路径的挂起
+模式回调登记审批后立即中断执行（runtime/approvals.py ApprovalSuspension），捕获点
+以 type=approval_suspended 事件发出等价信号，本折叠层将其映射回
+RunSuspension(reason="approval_pending", checkpoint_ref=approval_id)。
 
 错误码分类靠发射点标注 + 类型化异常，不做消息字符串匹配（码表只增不改语义）。
 """
@@ -94,6 +96,7 @@ async def fold_engine_result(events: Any) -> EngineRunResult:
 
     - error 事件 → RunOutcome(failed, EngineErrorDetail)
     - plan_interrupted 事件 → RunSuspension(collaborative_interrupt, plan_id)
+    - approval_suspended 事件 → RunSuspension(approval_pending, approval_id)（A9）
     - kind=budget_exhausted 的 warning → RunSuspension(budget_exhausted)
     - done 事件 → RunOutcome(success, 累计 text_delta 为 result)
     """
@@ -117,6 +120,12 @@ async def fold_engine_result(events: Any) -> EngineRunResult:
             return RunSuspension(
                 reason="collaborative_interrupt",
                 checkpoint_ref=str(event.get("plan_id") or "") or None,
+            )
+        elif kind == "approval_suspended":
+            return RunSuspension(
+                reason="approval_pending",
+                checkpoint_ref=str(event.get("approval_id") or "") or None,
+                detail=str(event.get("tool_name") or "") or None,
             )
         elif kind == "warning" and event.get("kind") == "budget_exhausted":
             budget_detail = str(event.get("message") or "")
