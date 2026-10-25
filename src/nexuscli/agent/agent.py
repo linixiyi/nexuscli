@@ -44,6 +44,15 @@ from nexuscli.types import Message, Usage
 
 AgentMode = Literal["react", "plan", "team"]
 
+# F12: synthetic tool_result for a `max_tokens` cutoff that landed inside a
+# tool_use block — the call's arguments JSON is incomplete, so the call is
+# never executed. Wording follows kitagent's loop synthesis (loop.py): tell
+# the model to split the task into smaller steps and retry.
+MAX_TOKENS_TOOL_RESULT_MESSAGE = (
+    "Error: output token limit reached before this tool call could be "
+    "completed. Please break the task into smaller steps and try again."
+)
+
 
 def _message_snapshot(message: Message) -> dict[str, Any]:
     """Message → JSON 安全 dict（dataclass 字段过滤，tool_calls 本就是 dict 列表）。"""
@@ -450,38 +459,57 @@ class Agent:
             if turn == self.max_turns and (stop_reason == "tool_use" or tool_calls):
                 hit_limit = True
 
-            # Loop guard: record every call's fingerprint. When the same
-            # fingerprint reaches the threshold the call is NOT executed and
-            # a nudge message is injected instead; if the very next turn
-            # repeats the fingerprint again, the whole turn aborts.
             blocked_results: dict[str, ToolResult] = {}
-            decisions = [
-                loop_guard.record(
-                    tool_call_fingerprint(
-                        call.get("function", {}).get("name", "unknown"), _tool_input(call)
-                    )
-                )
-                for call in tool_calls
-            ]
-            loop_aborted = any(decision.abort for decision in decisions)
-            if loop_aborted:
-                # Answer every tool call of the aborting turn with the abort
-                # message so the assistant tool_calls stay paired in history.
+            if stop_reason == "max_tokens" and tool_calls:
+                # F12: a `max_tokens` cutoff landing inside a tool_use block
+                # truncates the call's arguments JSON — executing the
+                # degraded `{"raw": ...}` input would act on garbage. Answer
+                # every call with a synthetic is_error tool_result so the
+                # assistant tool_use / tool_result pairing invariant holds
+                # and execute nothing; the next turn lets the model retry
+                # with smaller steps. Loop-guard fingerprints are not
+                # recorded: these calls never ran, so they are not
+                # repetitions.
+                loop_aborted = False
                 for call in tool_calls:
                     call_id = str(call.get("id") or "")
                     blocked_results[call_id] = ToolResult(
                         tool_use_id=call_id,
-                        content=LOOP_ABORT_MESSAGE,
+                        content=MAX_TOKENS_TOOL_RESULT_MESSAGE,
                         is_error=True,
                     )
             else:
-                for call, decision in zip(tool_calls, decisions, strict=True):
-                    if decision.blocked:
+                # Loop guard: record every call's fingerprint. When the same
+                # fingerprint reaches the threshold the call is NOT executed and
+                # a nudge message is injected instead; if the very next turn
+                # repeats the fingerprint again, the whole turn aborts.
+                decisions = [
+                    loop_guard.record(
+                        tool_call_fingerprint(
+                            call.get("function", {}).get("name", "unknown"), _tool_input(call)
+                        )
+                    )
+                    for call in tool_calls
+                ]
+                loop_aborted = any(decision.abort for decision in decisions)
+                if loop_aborted:
+                    # Answer every tool call of the aborting turn with the abort
+                    # message so the assistant tool_calls stay paired in history.
+                    for call in tool_calls:
                         call_id = str(call.get("id") or "")
                         blocked_results[call_id] = ToolResult(
                             tool_use_id=call_id,
-                            content=loop_guard.format_nudge(decision),
+                            content=LOOP_ABORT_MESSAGE,
+                            is_error=True,
                         )
+                else:
+                    for call, decision in zip(tool_calls, decisions, strict=True):
+                        if decision.blocked:
+                            call_id = str(call.get("id") or "")
+                            blocked_results[call_id] = ToolResult(
+                                tool_use_id=call_id,
+                                content=loop_guard.format_nudge(decision),
+                            )
 
             # Run tools (calls intercepted by the loop guard are skipped).
             for call in tool_calls:

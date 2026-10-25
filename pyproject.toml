@@ -60,3 +60,51 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/nexuscli"]
+ignore_missing_imports = true
+# 首版无全局严格开关: 与摸底基线(默认设置)同口径, 只收清单不加严格度。
+
+# 存量问题文件排除清单: 逐模块 ignore_errors, 文件仍参与检查, 只是错误被抑制。
+# 生成方式: `uv run --with mypy mypy --python-version 3.11 --ignore-missing-imports
+# src/nexuscli` 的逐文件错误分布(2026-10-25 基线: 119 errors / 30 files / 128 checked)。
+# 纪律: 清单「只减不增」——后续轮次修掉一个文件就摘除一项, 不得为容纳新错误而扩清单;
+# 新增模块与本轮改动模块(llm/anthropic.py、agent/results.py、agent/turn_checkpoint.py、
+# tools/journal.py、runtime/approvals.py、runtime/reads.py、net_guards.py)不在清单内,
+# 出现新错误 CI 即红。
+[[tool.mypy.overrides]]
+module = [
+  "nexuscli.agent.agent",
+  "nexuscli.agent.bg_tasks",
+  "nexuscli.agent.query",
+  "nexuscli.agent.query_engine",
+  "nexuscli.agent.subagent",
+  "nexuscli.config",
+  "nexuscli.context.manager",
+  "nexuscli.entrypoints.cli",
+  "nexuscli.entrypoints.commands.effort",
+  "nexuscli.entrypoints.commands.memory_cmds",
+  "nexuscli.entrypoints.commands.model_cmds",
+  "nexuscli.entrypoints.commands.session_cmds",
+  "nexuscli.entrypoints.commands.skill",
+  "nexuscli.entrypoints.repl",
+  "nexuscli.eval.runner",
+  "nexuscli.image.processor",
+  "nexuscli.mcp.client",
+  "nexuscli.memory.manager",
+  "nexuscli.prompt.assembler",
+  "nexuscli.runtime.api",
+  "nexuscli.sdk",
+  "nexuscli.session.store",
+  "nexuscli.skill.registry",
+  "nexuscli.snapshot.service",
+  "nexuscli.telemetry.tracing",
+  "nexuscli.tools.background",
+  "nexuscli.tools.builtins",
+  "nexuscli.tools.commands",
+  "nexuscli.tools.executor",
+  "nexuscli.tools.file_ops",
+]
+ignore_errors = true

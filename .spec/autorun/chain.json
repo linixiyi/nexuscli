@@ -7,12 +7,13 @@
     "pkg-workbench-mvp",
     "pkg-workbench-interaction",
     "pkg-workbench-ci-docs",
-    "pkg-tool-journal"
+    "pkg-tool-journal",
+    "pkg-turn-resume"
   ],
   "execution_mode": "current",
   "feature_fingerprint": "7547acd9a3801597afd4b526bf5ff731fa438d24fbdc7464489a4cfc36e18869",
   "host": "zcode",
-  "lifecycle": "active",
+  "lifecycle": "complete",
   "max_rounds": 7,
   "model": null,
   "model_control": "host",
@@ -20,26 +21,26 @@
   "plan_docs": [
     ".spec/plans/2026-10-25_workbench-and-readme/master.md"
   ],
-  "revision": 12,
-  "round": 6,
+  "revision": 14,
+  "round": 7,
   "schema_version": 3,
   "step": {
-    "id": "pkg-turn-resume",
+    "id": "pkg-provider-mypy",
     "kind": "package",
     "outcome": "passed",
     "proof": {
-      "archive": ".spec/specs/archive/2026-10-25_add-turn-resume-engine-contract",
+      "archive": ".spec/specs/archive/2026-10-25_update-provider-details-mypy",
       "archive_hashes": {
-        "completion-summary.md": "45eb67ac70fd685a390b26b4e296b931e60575ff23e3743482b87c02ba36062c",
-        "runs.jsonl": "f0450075773a498016236242d03cc2332483f7f0cf2b666eac9b7dc35709fede",
-        "spec.md": "8b5bead83f562a744aed0bf5a6985ba535fe516b2c51c22639093a255de436a4",
-        "tasks.md": "f00d7172b948f4a6c734645f2078ee7c8bbef0455109dc8518b3fbf1b757f447"
+        "completion-summary.md": "10386f5b0d3f522dada1618923669a1a325d6cab6b41068fa672e9cf2edabbbf",
+        "runs.jsonl": "4d7b5cdd354fe415fafa8d5a303500f83fe0c6abb4af11336ef495b0e22cf6fa",
+        "spec.md": "569d99f07fb278f708104d6eb7d37be8eaa29120440d1e4bb49ce68eb50beb7e",
+        "tasks.md": "5c15259ddf61d96087be33082d7a80aaf8e412d105896a040628f8bb3b88d506"
       },
-      "slug": "2026-10-25_add-turn-resume-engine-contract"
+      "slug": "2026-10-25_update-provider-details-mypy"
     },
-    "slug": "2026-10-25_add-turn-resume-engine-contract",
+    "slug": "2026-10-25_update-provider-details-mypy",
     "status": "complete",
     "target": null
   },
-  "updated_at": "2026-10-25T06:27:57Z"
+  "updated_at": "2026-10-25T07:25:36Z"
 }

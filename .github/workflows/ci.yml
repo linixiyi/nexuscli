@@ -34,6 +34,11 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+      # F13 mypy 渐进接入: 配置(含「只减不增」排除清单)见 pyproject.toml [tool.mypy]。
+      # 用 --with mypy 临时注入, 不动 uv.lock; 排除清单外任何文件出现新错误都会红。
+      - name: Mypy (progressive)
+        run: uv run --with mypy mypy src/nexuscli
+
       - name: Run tests
         run: uv run python -m pytest
 

@@ -87,12 +87,12 @@ NexusCLI 的引擎。可移植的是它的**架构模式**——「一个 Core�
 
 ### 第 7 轮：provider 细节与静态检查
 
-- [ ] F12 Anthropic provider 细节对齐：`max_tokens` 截断落在工具调用中间时合成
+- [x] F12 Anthropic provider 细节对齐：`max_tokens` 截断落在工具调用中间时合成
       `is_error` tool_result 保住对话块配对；thinking 块带 signature 原样回传的核实与补齐；
       传输层流断线（RemoteProtocolError / ReadError / ConnectError）按 1/2/4s 退避重试且
       不重试语义错误；prompt caching 打位（system + 最后一个工具）。先盘点现状缺什么再补，
       已具备的补核实测试
-- [ ] F13 mypy 渐进接入 CI：配置 mypy，存量模块按排除清单豁免、新增与本轮改动模块必须通过，
+- [x] F13 mypy 渐进接入 CI：配置 mypy，存量模块按排除清单豁免、新增与本轮改动模块必须通过，
       CI 增加 mypy job；排除清单只减不增，最终目标全仓清零（对标 kitagent core 100 文件清零）
 
 ## 细节文档
