@@ -81,6 +81,29 @@ no-op），但未成文。任何未来的重可选能力（图编排、本地沙
 - run 收尾 shield 编排核对（runner.py:729-800 finish_run 语义，交接文档挂账 #9 重复引用）
 - stdio stderr drain：核对 MCP SDK 是否已处理管道满（kitagent client.py 手写 drain）
 
+### LangGraph 的加法（真要用时照此走，当前不构成需求）
+
+ AGENTS.md 守则不等于永久禁令——F1-F13 轮的「不引入 LangGraph」是**当轮作用域纪律**
+（防止在工作台/可靠性改造中顺手背框架）；真出现图编排需求（自研 plan DAG/turn_checkpoint
+覆盖不了的场景）时，按四步套路加它是合法路径。照搬参照与必须解决的既有判定：
+
+1. **安装门**：pyproject 加二级 extras（照搬 kitagent `graph` / `graph-sqlite` 之别——
+   编排框架与持久化 saver 分档），`uv sync --extra graph` 起步
+2. **惰性边界**：LangGraph import 只进新专属包（如 `src/nexuscli/agent/graph/`），
+   router 惰性解析 + `exc.name` 检查 + 类型化 unavailable 错误（照搬 kitagent
+   engine/router.py:111-159，含「内部 bug 与缺依赖区分」）
+3. **合同接线**：新引擎实现 EngineResult 合同（F11 的 sum type 就是为此准备的）——
+   RunSuspension(approval_pending) 的生产者可由 LangGraph interrupt() 提供（A9 挂账的
+   正式解法之一）
+4. **两套状态真相的合并策略（最难的一条，L 工作量的主因）**：LangGraph checkpoint 与
+   NexusCLI 的 plan_runs/turn_checkpoint/会话 JSONL 必须定权威分工表（kitagent 的答案：
+   RecoveryStore 不碰 LangGraph 私有表、只做补充——参照 recovery.py:50-77 与
+   master「两套真相」判定）
+5. **测试门**：pytest marker 声明 extra 前提；kitagent 测试套件（702 用例）可作语义对照
+
+预计工作量 L（矩阵 A9 行同级）；判定标准：出现「自研等价物评估不通过」的真实场景再启动，
+当前 A9 已用自研路径覆盖 react 任务审批挂起，暂无此场景。
+
 ### 引入时机判定（防止为加而加）
 
 第二个实现者出现才值得付抽象成本（kitagent 的 Protocol+Router 是两个引擎倒逼出来的）；
