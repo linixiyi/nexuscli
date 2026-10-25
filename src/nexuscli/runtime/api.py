@@ -25,6 +25,11 @@ from nexuscli.net_guards import is_loopback_origin
 from nexuscli.runtime import reads
 from nexuscli.runtime.approvals import ApprovalBridge
 from nexuscli.runtime.tasks import TASK_MODES, DurableTaskManager, TaskRecord
+from nexuscli.runtime.websession import (
+    WebSession,
+    cookie_value_from_header,
+    session_cookie_header,
+)
 from nexuscli.types import Message
 
 MAX_SSE_CLIENTS = 16
@@ -52,6 +57,8 @@ class RuntimeApiServer:
         self.port = port
         self.workbench = workbench
         self.approval_bridge = ApprovalBridge()
+        # F14 工作台会话：一次性口令 + HttpOnly cookie + csrf（kitagent 模型）
+        self.web_session = WebSession()
         # SSE 客户端槽位与事件唤醒信号（DB 仍是唯一事实源，Condition 只消除轮询延迟）
         self._sse_slots = threading.BoundedSemaphore(MAX_SSE_CLIENTS)
         self._event_cond = threading.Condition()
@@ -95,6 +102,11 @@ class RuntimeApiServer:
         print(f"NexusCLI Runtime API listening on http://127.0.0.1:{bound_port}", flush=True)
         if self.workbench:
             print(f"Workbench: http://127.0.0.1:{bound_port}/", flush=True)
+            print(
+                f"打开一键链接完成认证: http://127.0.0.1:{bound_port}/#bootstrap="
+                f"{self.web_session.bootstrap_token}",
+                flush=True,
+            )
         try:
             server.serve_forever()
         finally:
@@ -131,14 +143,42 @@ class RuntimeApiServer:
         if method == "GET" and self.workbench and not path.startswith("/v1/"):
             self._serve_static(request, path)
             return
+        # F14 bootstrap：一次性口令本身即凭证，免 cookie/key 门。
+        if method == "POST" and path == "/v1/workbench/bootstrap":
+            self._handle_bootstrap(request)
+            return
+        # F14 Origin 白名单：浏览器跨源请求必带 Origin 且非本机来源 → 403
+        # （先于凭证判断——无凭证也拒绝跨源探测）。无 Origin = curl 等非浏览器
+        # 客户端，走凭证门。
+        origin = request.headers.get("origin")
+        if origin is not None and not is_loopback_origin(origin):
+            _send_json(request, 403, {"error": "cross-origin requests are rejected"})
+            return
         stream_request = (
             method == "GET" and path.startswith("/v1/threads/") and path.endswith("/events/stream")
         )
-        authorized = self._authorized(request) or self._stream_query_authorized(
-            request, method, path
+        # F14 会话门三通道：api_key/Bearer 头（外部自动化）、api_key 查询参数
+        # （仅 SSE）、HttpOnly cookie（浏览器，经 bootstrap 换发）。
+        header_authorized = self._authorized(request)
+        cookie_authorized = self.web_session.authorize(
+            cookie_value_from_header(request.headers.get("cookie"))
         )
-        if not authorized:
+        if (
+            not header_authorized
+            and not cookie_authorized
+            and not self._stream_query_authorized(request, method, path)
+        ):
             _send_json(request, 401, {"error": "unauthorized"})
+            return
+        # F14 CSRF：cookie 通道的变更请求必须带 x-csrf-token（api_key 通道豁免——
+        # 外部程序无 cookie，凭证本身就是凭据）。
+        if (
+            cookie_authorized
+            and not header_authorized
+            and method == "POST"
+            and not self.web_session.csrf_matches(request.headers.get("x-csrf-token"))
+        ):
+            _send_json(request, 403, {"error": "csrf token missing or invalid"})
             return
         if stream_request and not self._stream_origin_allowed(request):
             _send_json(request, 403, {"error": "cross-origin requests are rejected"})
@@ -255,6 +295,20 @@ class RuntimeApiServer:
             _send_json(request, 400, {"error": str(exc)})
         except Exception as exc:  # noqa: BLE001 - API boundary
             _send_json(request, 500, {"error": str(exc)})
+
+    def _handle_bootstrap(self, request: BaseHTTPRequestHandler) -> None:
+        body = _read_json(request)
+        csrf = self.web_session.bootstrap(str(body.get("token") or ""))
+        if csrf is None:
+            _send_json(request, 403, {"error": "bootstrap token invalid or already used"})
+            return
+        body_bytes = json.dumps({"csrf": csrf}, ensure_ascii=False).encode("utf-8")
+        request.send_response(200)
+        request.send_header("content-type", "application/json")
+        request.send_header("content-length", str(len(body_bytes)))
+        request.send_header("set-cookie", session_cookie_header(self.web_session.cookie))
+        request.end_headers()
+        request.wfile.write(body_bytes)
 
     async def _run_turn(
         self, thread_id: str, message: str, *, mode: str = "react"

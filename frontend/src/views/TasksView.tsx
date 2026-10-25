@@ -4,13 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError, cancelTask, listTasks } from "../api/client";
 import type { TaskRecord } from "../api/types";
 
-export function TasksView({ activeKey }: { activeKey: string | null }): JSX.Element {
+export function TasksView({ active }: { active: boolean }): JSX.Element {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    if (activeKey === null) {
+    if (!active) {
       return;
     }
     listTasks()
@@ -21,7 +21,7 @@ export function TasksView({ activeKey }: { activeKey: string | null }): JSX.Elem
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : String(err));
       });
-  }, [activeKey]);
+  }, [active]);
 
   useEffect(() => {
     refresh();
