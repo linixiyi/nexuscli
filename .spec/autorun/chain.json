@@ -18,16 +18,26 @@
   "plan_docs": [
     ".spec/plans/2026-10-25_kitagent-alignment/master.md"
   ],
-  "revision": 7,
+  "revision": 8,
   "round": 4,
   "schema_version": 3,
   "step": {
     "id": "pkg-realtime-offline-e2e",
     "kind": "package",
-    "outcome": null,
+    "outcome": "passed",
+    "proof": {
+      "archive": ".spec/specs/archive/2026-10-25_port-realtime-offline-e2e",
+      "archive_hashes": {
+        "completion-summary.md": "531764c9310ff5dad70e8322ebc0f9366eb3038c8ac6f9ddb0cceeda4fcf4cc0",
+        "runs.jsonl": "a53d2b5e2c0d30b58a8f493c4098bec259fe91387fe4195b06ff570d59a8be16",
+        "spec.md": "fdcc2c633306b28737f17c410c2925061707a7b57fb8916ed9c8e0dbe8ab7336",
+        "tasks.md": "77972fe6b384b50b1500e98f0ef8df20243b9708e5b007bb0f9a855d29d27003"
+      },
+      "slug": "2026-10-25_port-realtime-offline-e2e"
+    },
     "slug": "2026-10-25_port-realtime-offline-e2e",
-    "status": "active",
+    "status": "complete",
     "target": null
   },
-  "updated_at": "2026-10-25T13:05:45Z"
+  "updated_at": "2026-10-25T15:31:13Z"
 }
