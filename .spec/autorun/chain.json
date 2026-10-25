@@ -6,7 +6,7 @@
   "execution_mode": "current",
   "feature_fingerprint": "73b5644679f52828dbf6c001d34c54ef233e3a51b1c7a1cecea80392245f40d5",
   "host": "zcode",
-  "lifecycle": "active",
+  "lifecycle": "complete",
   "max_rounds": 5,
   "model": null,
   "model_control": "host",
@@ -14,16 +14,26 @@
   "plan_docs": [
     ".spec/plans/2026-10-25_workbench-auth/master.md"
   ],
-  "revision": 1,
+  "revision": 2,
   "round": 1,
   "schema_version": 3,
   "step": {
     "id": "pkg-workbench-auth",
     "kind": "package",
-    "outcome": null,
+    "outcome": "passed",
+    "proof": {
+      "archive": ".spec/specs/archive/2026-10-25_update-workbench-auth",
+      "archive_hashes": {
+        "completion-summary.md": "8433183aa682fc8aa411e93e1ef299d21b6d47b51a3fe4781f489131e75bd2d1",
+        "runs.jsonl": "b649f28ecc0b3b3c5a5a4e7e02cfd969b9e81320c7afb8693eca1ef770f2370f",
+        "spec.md": "82759cb1f2e7fb38fac9b425c24e8b3426ee0391e776bcf8510a892e89c55f81",
+        "tasks.md": "86d3213c87c6c3c92b5e1e5d171ed8d93c427c4fdb1fc4ac0cf0e861bd63f9fa"
+      },
+      "slug": "2026-10-25_update-workbench-auth"
+    },
     "slug": "2026-10-25_update-workbench-auth",
-    "status": "active",
+    "status": "complete",
     "target": null
   },
-  "updated_at": "2026-10-25T07:54:18Z"
+  "updated_at": "2026-10-25T09:10:31Z"
 }
