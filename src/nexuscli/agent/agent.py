@@ -401,7 +401,7 @@ class Agent:
                     ),
                 }
             if stream_error is not None:
-                yield {"type": "error", "error": stream_error}
+                yield {"type": "error", "error": stream_error, "error_code": "llm_error"}
                 return
 
             total_usage = total_usage + turn_usage
@@ -511,6 +511,7 @@ class Agent:
         if hit_limit and not loop_aborted:
             yield {
                 "type": "warning",
+                "kind": "budget_exhausted",  # F11：类型化预算耗尽标记（折叠层不做字符串匹配）
                 "message": (
                     f"Reached the agent.max_turns limit ({self.max_turns}); the task "
                     "may be unfinished. Raise agent.max_turns in config.json to "
@@ -521,6 +522,7 @@ class Agent:
         if loop_aborted:
             yield {
                 "type": "warning",
+                "kind": "budget_exhausted",  # F11：loop guard 中止同为预算耗尽语义
                 "message": loop_abort_warning(turn, self.config.agent.loop_detection_threshold),
             }
 

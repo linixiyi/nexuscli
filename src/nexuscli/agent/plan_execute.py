@@ -121,7 +121,9 @@ class PlanExecuteAgent:
                 Message(role="assistant", content=final_text),
             ]
         except Exception as exc:  # noqa: BLE001
-            yield {"type": "error", "error": exc}
+            from nexuscli.agent.results import classify_error
+
+            yield {"type": "error", "error": exc, "error_code": classify_error(exc)}
             return
         finally:
             if snapshot is not None:
@@ -150,9 +152,12 @@ class PlanExecuteAgent:
         self._interrupt_requested.clear()
         plan = self.checkpoint_store.load(plan_id)
         if plan is None:
+            from nexuscli.agent.results import PlanCheckpointMissing
+
             yield {
                 "type": "error",
-                "error": ValueError(f"no plan checkpoint found for id {plan_id!r}"),
+                "error": PlanCheckpointMissing(f"no plan checkpoint found for id {plan_id!r}"),
+                "error_code": "plan_no_checkpoint",
             }
             return
         total_usage = Usage()
@@ -170,7 +175,9 @@ class PlanExecuteAgent:
                     final_text += str(event.get("text") or "")
                 yield event
         except Exception as exc:  # noqa: BLE001 - same error-event contract as run()
-            yield {"type": "error", "error": exc}
+            from nexuscli.agent.results import classify_error
+
+            yield {"type": "error", "error": exc, "error_code": classify_error(exc)}
             return
         done: dict[str, Any] = {
             "type": "done",
