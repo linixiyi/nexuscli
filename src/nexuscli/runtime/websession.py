@@ -7,19 +7,123 @@
 - 浏览器从 URL 片段读出口令，POST /v1/workbench/bootstrap 换发——**一次性**（bootstrapped
   标志，重放/错口令一律 403），成功后 Set-Cookie（HttpOnly + SameSite=strict，JS 不可读）
   并在 JSON 里返回 csrf。
-- 之后浏览器请求凭 cookie（同源自动携带）；变更请求（POST）另须 x-csrf-token 头
+- 之后浏览器请求凭 cookie（同源自动携带）；变更请求（POST/PATCH）另须 x-csrf-token 头
   （compare_digest 比对）——cookie 自动携带挡不住跨源伪造，csrf 补上这一刀。
 - 静态资源免认证；外部自动化通道（x-api-key/Bearer 头、SSE 的 api_key 查询参数）原样保留。
 
 会话生命周期 = 进程生命周期：不持久化、不刷新、重启即新一轮口令（kitagent 同款语义）。
+
+A6 会话权限模式（Ported from kitagent (MIT, zed123214/kitagent)
+core/permissions/policy.py:13-18 SessionPermissions + manager.py:66-108
+configure_session 的 revision 乐观锁）：SessionPermissions{mode, revoked_tools,
+revision} 仅内存——进程生命周期即权限生命周期（kitagent「never persisted as
+global policy」同款；manager.py:389-404 的断连清空在单用户 CLI 无断连面，等价
+语义 = 随进程消亡）。
 """
 
 from __future__ import annotations
 
 import secrets
+import threading
+from typing import Any, Literal
+
+from nexuscli.tools.base import ToolDecision
 
 COOKIE_NAME = "nexuscli_workbench"
 _CSRF_HEADER = "x-csrf-token"
+
+PermissionMode = Literal["read_only", "ask", "auto"]
+PERMISSION_MODES: tuple[PermissionMode, ...] = ("read_only", "ask", "auto")
+
+
+class RevisionConflict(Exception):
+    """A6 乐观锁冲突（kitagent manager.py:77-78 同款）：expected_revision 与当前
+    revision 不匹配。端点层映射 409，客户端刷新状态后携带新 revision 重试。"""
+
+    def __init__(self, expected_revision: int, current_revision: int) -> None:
+        self.expected_revision = expected_revision
+        self.current_revision = current_revision
+        super().__init__(
+            f"session permissions changed (expected revision {expected_revision}, "
+            f"current {current_revision}); refresh and retry"
+        )
+
+
+class SessionPermissions:
+    """会话权限模式与单项撤销（仅内存，单会话单实例）。
+
+    与 kitagent 的差异（有意）：kitagent 用 allowed_tools 记「本会话已 allow 的
+    工具」，本仓把会话面建模为 revoked_tools（单项撤销集）——长期信任的 allow
+    规则在配置/门链层（AGENTS.md allow 语义），会话面只做收紧，不新增放行。
+    """
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self.mode: PermissionMode = "ask"
+        self.revoked_tools: set[str] = set()
+        self.revision: int = 0
+
+    def static_gate(self, tool_name: str) -> ToolDecision | None:
+        """会话模式静态预判（回调预判与 recheck_pending 共用同一把尺）。
+
+        返回 None = 交回既有门链/人审（kitagent manager.py:151-168 的 session
+        权限层同位）。revoked 先于模式：auto 也不能放行被单项撤销的工具。
+        """
+
+        with self._guard:
+            if tool_name in self.revoked_tools:
+                return "deny"
+            if self.mode == "read_only":
+                return "deny"
+            if self.mode == "auto":
+                return "approve"
+            return None
+
+    def configure(
+        self,
+        *,
+        expected_revision: int,
+        mode: PermissionMode | None = None,
+        revoke_tool: str | None = None,
+    ) -> dict[str, Any]:
+        """修订校验的权限变更（kitagent manager.configure_session:66-97 同款乐观锁）。
+
+        - expected_revision 不匹配当前 → RevisionConflict（端点层 409）；
+        - mode 切到 read_only/auto → 清空 revoked_tools（「清空授权」：换模式即
+          全新起点，kitagent manager.py:79-83 对 grants 的清空同取向）；
+        - revoke_tool 单项撤销（manager.py:86 的单项过滤在此以撤销集建模）。
+
+        成功返回变更后的快照（revision +1）；快照是普通 dict，不共享锁。
+        """
+
+        if mode is not None and mode not in PERMISSION_MODES:
+            raise ValueError(f"mode must be one of: {', '.join(PERMISSION_MODES)}")
+        if revoke_tool is not None and not revoke_tool:
+            raise ValueError("revoke_tool must be a non-empty tool name")
+        with self._guard:
+            if expected_revision != self.revision:
+                raise RevisionConflict(expected_revision, self.revision)
+            if mode in {"read_only", "auto"}:
+                self.revoked_tools.clear()
+            if mode is not None:
+                self.mode = mode
+            if revoke_tool is not None:
+                self.revoked_tools.add(revoke_tool)
+            self.revision += 1
+            return self._snapshot_locked()
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        """快照（调用方持有 _guard——Lock 不可重入，勿在持锁路径调 snapshot()）。"""
+
+        return {
+            "mode": self.mode,
+            "revoked_tools": sorted(self.revoked_tools),
+            "revision": self.revision,
+        }
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._guard:
+            return self._snapshot_locked()
 
 
 class WebSession:

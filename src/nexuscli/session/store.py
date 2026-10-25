@@ -5,10 +5,17 @@ first line of each file is the session metadata; every following line is one
 serialized :class:`~nexuscli.types.Message`. Transcripts are append-only per
 turn and stay human-inspectable; resuming a session feeds the messages back
 into ``Agent.history`` so the conversation continues with full context.
+
+Every body line (messages and ``type: usage`` records alike) carries a
+``_chain`` hash-commit field — see :class:`SessionWriter` for the chain rules
+and the orphan tool_use trim semantics. Both are JSON field-level additions:
+the ``role`` / ``content`` / ``type: usage`` line structure is unchanged and
+the extra field is transparent to every existing consumer.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -219,6 +226,63 @@ def _line_type(line: str) -> str:
     if isinstance(data, dict):
         return str(data.get("type") or "")
     return ""
+
+
+# Zero anchor of the per-line transcript commit chain: the first body line —
+# and any line whose preceding body line carries no ``_chain`` (legacy
+# transcript) — hashes from here.
+TRANSCRIPT_CHAIN_ZERO = "0" * 64
+
+
+def transcript_chain_hash(prev_hash: str, record: dict[str, Any]) -> str:
+    """Commit hash of one transcript body line, hashed *without* its ``_chain``.
+
+    Ported from kitagent (MIT, zed123214/kitagent) core/session/store.py
+    ``transcript_commit`` / ``canonical_transcript_commit``: committed content
+    is digested as canonical JSON (sorted keys, compact separators), so the
+    hash is reproducible from the stored line regardless of key order or
+    spacing. Adapted from kitagent's per-run commit hash to a per-line chain:
+    ``sha256(prev_hash + canonical(record))``.
+    """
+    payload = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256((prev_hash + payload).encode("utf-8")).hexdigest()
+
+
+def _stamp_chain(record: dict[str, Any], prev_hash: str) -> str:
+    """Set ``record["_chain"]`` to its commit hash and return the new hash."""
+    chain = transcript_chain_hash(prev_hash, record)
+    record["_chain"] = chain
+    return chain
+
+
+def _last_body_chain(lines: list[str]) -> str:
+    """``_chain`` of the last reader-visible body line — the next append's prev.
+
+    Mirrors exactly what ``runtime/reads.py`` ``read_transcript`` will see, so
+    writer and verifier agree on which line is "the previous one":
+    unparseable lines and blank lines never become records (skipped here too),
+    a stray ``type: meta`` body line is filtered by the reader (skipped as
+    well), while any other visible line anchors the chain — at its ``_chain``
+    value, or at the zero hash when it has none (legacy transcript). Scanning
+    stops at the first visible line, so per-append hashing stays O(1) in the
+    new lines; only externally damaged files can push the scan further back.
+    """
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            return TRANSCRIPT_CHAIN_ZERO
+        if data.get("type") == "meta":
+            continue
+        chain = data.get("_chain")
+        if isinstance(chain, str) and chain:
+            return chain
+        return TRANSCRIPT_CHAIN_ZERO
+    return TRANSCRIPT_CHAIN_ZERO
 
 
 def _title_from(messages: list[Message]) -> str:
@@ -502,6 +566,25 @@ class SessionWriter:
     closing the REPL without a conversation leaves no file behind. When the
     in-memory history shrinks (context compression or /clear), the transcript
     is rewritten to stay in sync instead of appending past the truncation.
+
+    Hash-commit chain (Ported from kitagent (MIT, zed123214/kitagent)
+    core/session/store.py ``transcript_commit``, adapted from a per-run commit
+    hash to a per-line chain): every body line this writer produces carries
+    ``_chain = sha256(prev_hash + canonical line JSON)``, where ``prev_hash``
+    is the previous body line's ``_chain`` (zero string for the first line or
+    after a line without one — see ``_last_body_chain``). Hashing touches only
+    the new lines, so an append pays O(1) hashing on top of its existing
+    whole-file rewrite; ``_rewrite`` re-chains the entire body it already
+    rebuilds. Read-side verification lives in ``runtime/reads.read_transcript``
+    (opt-in ``verify_chain``).
+
+    Orphan tool_use trimming (Ported from kitagent (MIT, zed123214/kitagent)
+    core/session/store.py ``_trim_orphan_tool_use``) is deliberately NOT done
+    anywhere: transcripts stay append-only historical facts and readers are
+    read-only — ``runtime/reads.py`` annotates assistant messages whose tool
+    calls never got a paired tool result (crash-truncation artifacts) as an
+    ``orphans`` count instead of trimming. If a physical trim ever lands, its
+    place is this write path (``append`` / ``_rewrite``), never the readers.
     """
 
     def __init__(self, store: SessionStore, meta: SessionMeta, *, fsync: bool = False) -> None:
@@ -529,7 +612,11 @@ class SessionWriter:
         self.meta.message_count = self.persisted
         self.meta.updated_at = time.time()
         body = self._read_body()
-        body.extend(json.dumps(_message_to_dict(message), ensure_ascii=False) for message in fresh)
+        prev_hash = _last_body_chain(body)
+        for message in fresh:
+            record = _message_to_dict(message)
+            prev_hash = _stamp_chain(record, prev_hash)
+            body.append(json.dumps(record, ensure_ascii=False))
         self._atomic_write(self._compose(body))
         return len(fresh)
 
@@ -538,11 +625,27 @@ class SessionWriter:
         self.persisted = len(messages)
         self.meta.message_count = self.persisted
         self.meta.updated_at = time.time()
-        body = [json.dumps(_message_to_dict(message), ensure_ascii=False) for message in messages]
+        # A rewrite re-chains every line from the zero hash: the body is a new
+        # byte sequence (compression, /clear-style shrink), so the old chain
+        # values no longer commit to anything. Hashing all lines adds O(n) on
+        # top of an already-O(n) rewrite; the per-append O(1) guarantee covers
+        # the append fast path above.
+        body: list[str] = []
+        prev_hash = TRANSCRIPT_CHAIN_ZERO
+        for message in messages:
+            record = _message_to_dict(message)
+            prev_hash = _stamp_chain(record, prev_hash)
+            body.append(json.dumps(record, ensure_ascii=False))
         # Non-message records (per-turn ``usage`` lines) are historical facts,
         # not conversation state: a history shrink (compression, /clear-style
         # rewrite) must not erase the usage ledger.
-        body.extend(line for line in self._read_body() if _line_type(line) == USAGE_RECORD_TYPE)
+        for line in self._read_body():
+            if _line_type(line) != USAGE_RECORD_TYPE:
+                continue
+            record = json.loads(line)
+            record.pop("_chain", None)
+            prev_hash = _stamp_chain(record, prev_hash)
+            body.append(json.dumps(record, ensure_ascii=False))
         self._atomic_write(self._compose(body))
         return self.persisted
 
@@ -560,7 +663,8 @@ class SessionWriter:
         Called for every completed regular ReAct turn so a resumed session can
         rebuild its usage baseline from the transcript. ``ts`` is a
         fixed-instant seam for tests (defaults to "now", local time, in the
-        same ``_TS_FORMAT`` layout as ``~/.nexuscli/usage.db``).
+        same ``_TS_FORMAT`` layout as ``~/.nexuscli/usage.db``). The record
+        line carries a ``_chain`` commit hash like message lines do.
         """
         usd, cny = cost_totals(cost)
         record = {
@@ -578,6 +682,7 @@ class SessionWriter:
         }
         self.store.root.mkdir(parents=True, exist_ok=True)
         body = self._read_body()
+        _stamp_chain(record, _last_body_chain(body))
         body.append(json.dumps(record, ensure_ascii=False))
         self._atomic_write(self._compose(body))
 

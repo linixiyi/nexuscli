@@ -2,7 +2,9 @@
   "chain": "autorun",
   "chain_id": "autorun-20261025-kitagent-alignment",
   "client_surface": "desktop",
-  "completed_step_ids": [],
+  "completed_step_ids": [
+    "pkg-alignment-quick-wins"
+  ],
   "execution_mode": "current",
   "feature_fingerprint": "638a1165309c15a8b56c8fa94aab0ff2935c13746cc2a985239420026a8e4166",
   "host": "zcode",
@@ -14,26 +16,26 @@
   "plan_docs": [
     ".spec/plans/2026-10-25_kitagent-alignment/master.md"
   ],
-  "revision": 2,
-  "round": 1,
+  "revision": 4,
+  "round": 2,
   "schema_version": 3,
   "step": {
-    "id": "pkg-alignment-quick-wins",
+    "id": "pkg-approval-semantics",
     "kind": "package",
     "outcome": "passed",
     "proof": {
-      "archive": ".spec/specs/archive/2026-10-25_port-alignment-quick-wins",
+      "archive": ".spec/specs/archive/2026-10-25_port-approval-semantics",
       "archive_hashes": {
-        "completion-summary.md": "54a43f4098ea5f91eac980a70901ba5442405afe72f3b62ea7fabf5c798bd079",
-        "runs.jsonl": "436d9dcd6f269dc4d5a37e3035c0d5f6f1b3af6457cf33508863ae6d63ccf392",
-        "spec.md": "1d99e9a3f59a6d1a0ba6c26100264088b12be57eecae647eb4e5181772d35bdd",
-        "tasks.md": "bd1bc03543732271906874734753669f4b9be3818b6de8ba01f36b83eb281212"
+        "completion-summary.md": "95e64fa312429577877c663399db6253e85eab413cf17d25fe1b548cb166b235",
+        "runs.jsonl": "d1454ee25ed5723ccf63723afec2fc6792ea74ebb9524eda39906796d5056d4b",
+        "spec.md": "12d405225bb93683ef2ec33583a6e9c7685d5dfdb92a2966d94360c1c3f15afa",
+        "tasks.md": "30576a796216898b348b7dbf5642e25f78ba23e0402b5e80379ac6e6bebdde4a"
       },
-      "slug": "2026-10-25_port-alignment-quick-wins"
+      "slug": "2026-10-25_port-approval-semantics"
     },
-    "slug": "2026-10-25_port-alignment-quick-wins",
+    "slug": "2026-10-25_port-approval-semantics",
     "status": "complete",
     "target": null
   },
-  "updated_at": "2026-10-25T10:27:17Z"
+  "updated_at": "2026-10-25T11:49:19Z"
 }

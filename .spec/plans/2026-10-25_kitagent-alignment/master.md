@@ -29,12 +29,12 @@
   reads.read_transcript（kitagent core/graph/event_log.py:29-50）
 
 ### 第 2 轮：审批与会话语义对齐
-- [ ] A5 审批卡片五态状态机（pending/submitting/resolved/expired/unknown + 幂等门 +
+- [x] A5 审批卡片五态状态机（pending/submitting/resolved/expired/unknown + 幂等门 +
   参数截断禁 allow）（kitagent web/session.py:183-232）
-- [ ] A6 会话权限模式与撤销（read_only/ask/auto + revision 乐观锁 409 + revoke_tool +
+- [x] A6 会话权限模式与撤销（read_only/ask/auto + revision 乐观锁 409 + revoke_tool +
   切模式即时重判挂起 + 断连清空挂起防泄漏）（kitagent permissions/manager.py:66-108,389-404）
-- [ ] A7 EventBus correlation/event_seq 续号（kitagent core/events/bus.py:66-104）
-- [ ] A8 SessionStore 哈希提交链 + 孤儿 tool_use 修剪（kitagent session/store.py:228,310）
+- [x] A7 EventBus correlation/event_seq 续号（kitagent core/events/bus.py:66-104）
+- [x] A8 SessionStore 哈希提交链 + 孤儿 tool_use 修剪（kitagent session/store.py:228,310）
 
 ### 第 3 轮：审批挂起语义（最大残留差距）
 - [ ] A9 审批异步化：approval_pending 生产者接线（审批回调改异步决策 → turn_checkpoint 落挂起态
