@@ -31,7 +31,7 @@
 ## 3. 功能范围
 
 ### 3.1 核心功能（MVP）
-- [ ] F9 工具调用日志与幂等重放：journal 模块（三态 CHECK/输入哈希/claim 四分支/序列化结果落库）+ executor 接线（write_file/edit_file 非 dry_run/bash 写类）+ run_id 延续（plan/task/run 注入）+ hash 级尽力去重
+- [x] F9 工具调用日志与幂等重放：journal 模块（三态 CHECK/输入哈希/claim 四分支/序列化结果落库）+ executor 接线（write_file/edit_file 非 dry_run/bash 写类）+ run_id 延续（plan/task/run 注入）+ hash 级尽力去重
 
 ### 3.2 扩展功能
 - 无
@@ -57,16 +57,16 @@
 - 变更对象：tools/journal.py（新）、executor 分发点、plan/models 与 runtime/tasks 的 run_id 面
 - 快速检查：`uv run python -m pytest -q tests/test_tool_journal.py tests/test_executor_journal.py`
 - 集成检查：`uv run python -m pytest -q tests/test_plan_checkpoint.py tests/test_lane_c_team_task.py tests/test_bg_subagent.py`（run_id 顺延路径）
-- 全项目检查：适用外——与 CI 一致的三步回归由收口任务执行
+- 全项目检查：适用外——与 CI 一致的三步回归已由 task_0005 真实执行并全绿（1110 passed），升级条件见「升级触发」行
 - 升级触发：若 executor 接入改变既有工具结果形状（非新增）或破坏任何既有测试语义，升级 integration 并记录
 
 ## 6. 成功标准与验证方式
-- [ ] journal 模块：三态 CHECK、schema 版本化（无元数据/版本不符拒绝）、claim 四分支（execute/reuse/outcome_unknown/conflict）、complete 落库序列化结果、异常转 outcome_unknown -> verify: task_0001
-- [ ] executor 接线：write_file 两次同参调用第二次 reuse 不落盘重写；started 残留 → outcome_unknown 错误结果；同 id 异参 → 类型化冲突；bash 只读直通不进日志 -> verify: task_0002
-- [ ] run_id 延续：plan checkpoint 载荷含 run_id；TaskRecord 含 run_id 列且旧库迁移不炸 -> verify: task_0003
-- [ ] hash 级去重：同 run_id 内 (tool_name, input_hash) 命中 completed → 复用 -> verify: task_0004
-- [ ] 全量回归（CI 三步）不破 -> verify: task_0005
-- [ ] master F9 勾选、.spec/autorun/ 摘要写入 -> verify: task_0006
+- [x] journal 模块：三态 CHECK、schema 版本化（无元数据/版本不符拒绝）、claim 四分支（execute/reuse/outcome_unknown/conflict）、complete 落库序列化结果、异常转 outcome_unknown -> verify: task_0001
+- [x] executor 接线：write_file 两次同参调用第二次 reuse 不落盘重写；started 残留 → outcome_unknown 错误结果；同 id 异参 → 类型化冲突；bash 只读直通不进日志 -> verify: task_0002
+- [x] run_id 延续：plan checkpoint 载荷含 run_id；TaskRecord 含 run_id 列且旧库迁移不炸 -> verify: task_0003
+- [x] hash 级去重：同 run_id 内 (tool_name, input_hash) 命中 completed → 复用 -> verify: task_0004
+- [x] 全量回归（CI 三步）不破 -> verify: task_0005
+- [x] master F9 勾选、.spec/autorun/ 摘要写入 -> verify: task_0005
 
 ## 7. 风险与约束
 - 风险点：journal 写失败把正常执行变成失败 -> 语义即如此（副作用后失败必须上抛，防静默重复）；测试锁该语义

@@ -24,6 +24,8 @@ class TaskRecord:
     worker_id: str | None = None
     lease_expires_at: str | None = None
     scope: str = ""
+    # F9：创建时生成的 run_id，租约恢复/重跑沿用（工具日志两级去重的前提）
+    run_id: str = ""
 
 
 class DurableTaskManager:
@@ -42,13 +44,14 @@ class DurableTaskManager:
         mode = _validate_mode(mode)
         task_id = _new_id("task")
         now = _now()
+        run_id = uuid4().hex
         with self._connect() as conn:
             conn.execute(
                 """
-                insert into tasks(id, prompt, status, created_at, updated_at, mode, scope)
-                values (?, ?, 'queued', ?, ?, ?, ?)
+                insert into tasks(id, prompt, status, created_at, updated_at, mode, scope, run_id)
+                values (?, ?, 'queued', ?, ?, ?, ?, ?)
                 """,
-                (task_id, prompt, now, now, mode, self.scope),
+                (task_id, prompt, now, now, mode, self.scope, run_id),
             )
         return task_id
 
@@ -280,6 +283,7 @@ class DurableTaskManager:
                 "worker_id": "alter table tasks add column worker_id text",
                 "lease_expires_at": "alter table tasks add column lease_expires_at text",
                 "scope": "alter table tasks add column scope text not null default ''",
+                "run_id": "alter table tasks add column run_id text not null default ''",
             }
             for column, statement in migrations.items():
                 if column not in existing:
@@ -295,7 +299,7 @@ class DurableTaskManager:
 
 _TASK_COLUMNS = (
     "id, prompt, status, created_at, updated_at, result, error, mode, attempts, "
-    "worker_id, lease_expires_at, scope"
+    "worker_id, lease_expires_at, scope, run_id"
 )
 
 

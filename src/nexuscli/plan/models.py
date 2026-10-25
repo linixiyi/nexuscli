@@ -114,6 +114,9 @@ class ExecutionPlan:
     summary: str = ""
     start_time: float = 0.0
     end_time: float = 0.0
+    # F9：创建该 plan 的 Agent.run() 的 run_id（两次 checkpoint 之间不变）；
+    # /plan --resume 载入后沿用，工具日志的 hash 级去重以此为前提。
+    run_id: str = ""
     _execution_order: list[str] = field(default_factory=list)
 
     def add_task(self, task: Task) -> None:
@@ -238,6 +241,7 @@ class ExecutionPlan:
             "summary": self.summary,
             "start_time": self.start_time,
             "end_time": self.end_time,
+            "run_id": self.run_id,
         }
 
     @classmethod
@@ -246,6 +250,7 @@ class ExecutionPlan:
             id=str(data.get("id") or ""),
             goal=str(data.get("goal") or ""),
         )
+        plan.run_id = str(data.get("run_id") or "")
         plan.summary = str(data.get("summary") or "")
         plan.status = _plan_status_from(str(data.get("status") or PlanStatus.CREATED.value))
         plan.start_time = _float_field(data, "start_time")

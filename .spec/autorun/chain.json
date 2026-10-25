@@ -5,7 +5,8 @@
   "completed_step_ids": [
     "pkg-readme-layering",
     "pkg-workbench-mvp",
-    "pkg-workbench-interaction"
+    "pkg-workbench-interaction",
+    "pkg-workbench-ci-docs"
   ],
   "execution_mode": "current",
   "feature_fingerprint": "7547acd9a3801597afd4b526bf5ff731fa438d24fbdc7464489a4cfc36e18869",
@@ -18,26 +19,26 @@
   "plan_docs": [
     ".spec/plans/2026-10-25_workbench-and-readme/master.md"
   ],
-  "revision": 8,
-  "round": 4,
+  "revision": 10,
+  "round": 5,
   "schema_version": 3,
   "step": {
-    "id": "pkg-workbench-ci-docs",
+    "id": "pkg-tool-journal",
     "kind": "package",
     "outcome": "passed",
     "proof": {
-      "archive": ".spec/specs/archive/2026-10-25_add-workbench-ci-docs",
+      "archive": ".spec/specs/archive/2026-10-25_add-tool-journal",
       "archive_hashes": {
-        "completion-summary.md": "baa0e973e89ac982c775667d68e0045e3e958e63cbe8425589c8ec03e046ab2a",
-        "runs.jsonl": "0ae1b656c7d8a82776280b4053c445f08b751010cc09b0b281d1b58c37f1cb3a",
-        "spec.md": "d3a18a8e5988e3f481bdb7f3279e4c96adca66e9d3e1927fb1f5b9d96a9430a3",
-        "tasks.md": "19a6c9b78b937da2bab36daaf1a9c31e70e76085b9f14af617e7416436b91575"
+        "completion-summary.md": "b951d378370f77d7607835ba1a0f86edf551d779872f796bbe47193d7620a68f",
+        "runs.jsonl": "02171629d2d466aaf4bf4cc092277f502bc9b22b81a6eecc7fef4e111db26193",
+        "spec.md": "79203fc471c1570ebc8ae3786ddd22ab3fd38844153d062800e82d84c9b0197b",
+        "tasks.md": "3542810ab44b86e7abbec81d8728aa3fe1c4e23d05127dda95dd76220d07397e"
       },
-      "slug": "2026-10-25_add-workbench-ci-docs"
+      "slug": "2026-10-25_add-tool-journal"
     },
-    "slug": "2026-10-25_add-workbench-ci-docs",
+    "slug": "2026-10-25_add-tool-journal",
     "status": "complete",
     "target": null
   },
-  "updated_at": "2026-10-24T22:24:39Z"
+  "updated_at": "2026-10-25T05:37:52Z"
 }

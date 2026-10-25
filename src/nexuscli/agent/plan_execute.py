@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from nexuscli.agent.query import query
 from nexuscli.config import NexusCliConfig
@@ -42,12 +43,19 @@ class PlanExecuteAgent:
         planner: Planner | None = None,
         max_task_turns: int = 8,
         checkpoint_store: PlanCheckpointStore | None = None,
+        use_journal: bool = False,
+        run_id: str | None = None,
     ):
         self.llm_client = llm_client
         self.tool_registry = tool_registry
         self.config = config
         self.cwd = cwd
         self.approval_callback = approval_callback
+        # F9：plan 自身的 run_id（checkpoint 持久化）；任务 worker 的日志接线归 F10。
+        from nexuscli.tools.journal import get_tool_journal
+
+        self._journal = get_tool_journal() if use_journal else None
+        self._run_id = run_id or uuid4().hex
         self.planner = planner or Planner(llm_client)
         self.max_task_turns = max_task_turns
         # Checkpointing is on by default (store injectable for tests); team
@@ -88,6 +96,9 @@ class PlanExecuteAgent:
                 yield event
             if plan is None:
                 raise ValueError("planner did not produce an execution plan")
+            # F9：plan 的 run_id = 创建 run 的 run_id；/plan --resume 载入后沿用，
+            # 工具日志的 hash 级去重以此为前提。
+            plan.run_id = self._run_id
             self._save_checkpoint(plan)
             yield {"type": "plan_checkpointed", "plan_id": plan.id}
             yield {

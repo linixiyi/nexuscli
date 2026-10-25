@@ -28,6 +28,8 @@ async def query(
     approval_callback=None,
     skill_context_buffer=None,
     max_turns: int = 200,
+    journal: Any | None = None,
+    run_id: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     original_user_message = user_message
     user_message = _prepend_skill_candidates(user_message, cwd, config)
@@ -43,6 +45,8 @@ async def query(
         config=config,
         approval_callback=approval_callback,
         skill_context_buffer=skill_context_buffer,
+        journal=journal,
+        run_id=run_id,
     )
     dynamic_prompt = PromptAssembler(
         config=config,

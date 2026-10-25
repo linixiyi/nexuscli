@@ -67,7 +67,7 @@ NexusCLI 的引擎。可移植的是它的**架构模式**——「一个 Core�
 
 ### 第 5 轮：工具副作用日志（恢复底座）
 
-- [ ] F9 工具调用日志与幂等重放：新增独立 SQLite 工具日志——三态
+- [x] F9 工具调用日志与幂等重放：新增独立 SQLite 工具日志——三态
       `started / completed / outcome_unknown` + 规范化输入哈希身份校验 + 序列化结果落库，
       语义对标 kitagent `graph/recovery.py`（claim→execute/reuse/fail-closed，同 id 异参数为
       类型化冲突）；接入有副作用的内置工具（写类 bash、write_file、edit_file）；

@@ -372,7 +372,7 @@ class RuntimeApiServer:
             approval_callback=self.approval_bridge.callback_for(task_id=task.id),
         )
         text = ""
-        async for event in _engine_events(engine, task.mode, task.prompt):
+        async for event in _engine_events(engine, task.mode, task.prompt, run_id=task.run_id):
             if self.task_manager.is_canceled(task.id):
                 raise TaskCanceledError(task.id)
             if event.get("type") == "text_delta":
@@ -759,9 +759,13 @@ def _validate_mode(mode: str) -> str:
     return value
 
 
-def _engine_events(engine: QueryEngine, mode: str, message: str, *, history=None):
+def _engine_events(
+    engine: QueryEngine, mode: str, message: str, *, history=None, run_id: str | None = None
+):
     if mode == "plan":
         return engine.plan(message)
     if mode == "team":
         return engine.team(message)
+    if run_id:
+        return engine.ask(message, history=history, run_id=run_id)
     return engine.ask(message, history=history)
