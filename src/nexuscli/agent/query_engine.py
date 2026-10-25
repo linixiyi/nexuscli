@@ -22,7 +22,9 @@ class QueryEngine:
         config: NexusCliConfig,
         cwd: str,
         approval_callback=None,
+        use_journal: bool = True,
     ):
+        self.use_journal = use_journal
         self.llm_client = llm_client
         self.tool_registry = tool_registry
         self.config = config
@@ -36,7 +38,13 @@ class QueryEngine:
             provider=llm_client.provider_name,
         ).build_static()
 
-    async def ask(self, message: str, history: list[Message] | None = None):
+    async def ask(
+        self,
+        message: str,
+        history: list[Message] | None = None,
+        *,
+        run_id: str | None = None,
+    ):
         agent = Agent(
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
@@ -45,6 +53,8 @@ class QueryEngine:
             config=self.config,
             approval_callback=self.approval_callback,
             max_turns=self.config.agent.max_turns,
+            use_journal=self.use_journal,
+            run_id=run_id,
         )
         agent.history = list(history or [])
         async for event in agent.run(message):
@@ -57,6 +67,7 @@ class QueryEngine:
             config=self.config,
             cwd=self.cwd,
             approval_callback=self.approval_callback,
+            use_journal=self.use_journal,
         )
         async for event in agent.run(message):
             yield event

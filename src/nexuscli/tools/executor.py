@@ -20,10 +20,54 @@ from nexuscli.tools.registry import ToolRegistry
 # nexuscli.policy.bash_readonly): such commands bypass the HITL prompt.
 _COMMAND_TOOLS = {"bash", "execute_command"}
 
+# F9 工具副作用日志的接入范围（05-execution-durability.md 定稿）：三类有副作用工具。
+# edit_file 的 dry_run 调用与 bash 的只读直通本身只读，不进日志；只读工具一律不进。
+_JOURNALED_TOOLS = {"write_file", "edit_file", "bash", "execute_command"}
+
 
 class ToolExecutor:
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
+
+    def _journal_claim(
+        self, context: ToolContext, tool: Tool, tool_call_id: str, data: dict[str, Any]
+    ):
+        """F9：三类有副作用工具的 claim（含 hash 级尽力去重）；不接入则返回 None。"""
+
+        journal = context.journal
+        if journal is None or tool.name not in _JOURNALED_TOOLS:
+            return None
+        if tool.name == "edit_file" and data.get("dry_run") is True:
+            return None
+        if tool.name in _COMMAND_TOOLS and is_readonly_bash_command(str(data.get("command") or "")):
+            return None
+        claim = journal.claim_tool(
+            scope=context.cwd,
+            run_id=context.run_id,
+            tool_use_id=tool_call_id,
+            tool_name=tool.name,
+            tool_input=data,
+        )
+        if claim.action == "execute":
+            hit = journal.lookup_by_hash(
+                scope=context.cwd,
+                run_id=context.run_id,
+                tool_name=tool.name,
+                tool_input=data,
+            )
+            if hit is not None and hit.action == "reuse" and hit.tool_use_id != tool_call_id:
+                # 同 run 内同工具同参已完成：复用结果，并把本次新 id 的行落成 completed
+                # （否则该行永远停在 started，后续同 id 认领会误判 fail-closed）。
+                serialized = hit.serialized_result or {}
+                journal.complete_tool(
+                    scope=context.cwd,
+                    run_id=context.run_id,
+                    tool_use_id=tool_call_id,
+                    content=str(serialized.get("content", "")),
+                    is_error=bool(serialized.get("is_error", False)),
+                )
+                return hit
+        return claim
 
     async def execute_all(
         self,
@@ -109,6 +153,7 @@ class ToolExecutor:
         audit = AuditLog(context.config.policy.audit_log_path)
         approver = "none"
         try:
+            journal_claim: object | None = None  # F9：validate 可能在赋值前抛错，先置 None
             data = tool.validate(payload)
             # Statically read-only shell commands (git status, ls, ...) count
             # as read-only for the plan gate and the HITL prompt below. The
@@ -261,6 +306,28 @@ class ToolExecutor:
             elif tool.requires_approval or context.config.policy.hitl_mode == "always":
                 approver = "hitl"
 
+            # F9 工具副作用日志：审批门之后 claim（门链先行，日志不改变任何审批语义）。
+            journal_claim = self._journal_claim(context, tool, tool_call_id, data)
+            if journal_claim is not None and journal_claim.action == "reuse":
+                serialized = journal_claim.serialized_result or {}
+                return ToolResult(
+                    tool_use_id=tool_call_id,
+                    content=str(serialized.get("content", "")),
+                    is_error=bool(serialized.get("is_error", False)),
+                    error_type="journal_reuse",
+                )
+            if journal_claim is not None and journal_claim.action == "outcome_unknown":
+                return ToolResult(
+                    tool_use_id=tool_call_id,
+                    content=(
+                        "This side-effectful call has an unknown outcome from a previous "
+                        "interrupted attempt (tool journal). It will not be replayed "
+                        "automatically; inspect the workspace or start a fresh call."
+                    ),
+                    is_error=True,
+                    error_type="outcome_unknown",
+                )
+
             # The span covers only the tool execution and its outcome record.
             # The gate chain above (deny rules / hooks / approval / audit)
             # stays outside the span on purpose: gate order and audit
@@ -270,6 +337,15 @@ class ToolExecutor:
                     data,
                     context,
                 )
+                if journal_claim is not None:
+                    # 副作用已发生：落库结果。写失败必须原样上抛（不得触发重执行）。
+                    context.journal.complete_tool(
+                        scope=context.cwd,
+                        run_id=context.run_id,
+                        tool_use_id=tool_call_id,
+                        content=result.content,
+                        is_error=result.is_error,
+                    )
                 # Must stay inside the with-block: start_as_current_span ends the span on
                 # __exit__, and the SDK drops set_attribute on an ended span (warning
                 # "Setting attribute on ended span."; verified on opentelemetry-sdk 1.45/1.20).
@@ -319,6 +395,14 @@ class ToolExecutor:
                     )
             return result
         except Exception as exc:  # noqa: BLE001 - tool errors must flow back to the model
+            if journal_claim is not None and journal_claim.action == "execute":
+                # 工具执行异常：结果未知，fail-closed（不提供 serialized_result）。
+                # mark 自身的失败原样上抛——吞掉它会把「副作用可能已发生」伪装成干净失败。
+                context.journal.mark_outcome_unknown(
+                    scope=context.cwd,
+                    run_id=context.run_id,
+                    tool_use_id=tool_call_id,
+                )
             if context.config.features.audit_log and tool and not tool.is_read_only:
                 audit.record(
                     tool_name=tool.name,

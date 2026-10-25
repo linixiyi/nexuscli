@@ -228,6 +228,7 @@ async def start_repl(
         config=config,
         approval_callback=lambda request: _approval_prompt(request, console, permission_mode),
         max_turns=config.agent.max_turns,
+        use_journal=True,
     )
 
     session_store = SessionStore()
@@ -623,6 +624,7 @@ async def _handle_slash(
                 config=config,
                 cwd=cwd,
                 approval_callback=agent.approval_callback,
+                use_journal=True,
             )
             if plan_arg.startswith("--resume"):
                 plan_id = plan_arg[len("--resume") :].strip()

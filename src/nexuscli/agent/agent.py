@@ -37,6 +37,7 @@ from nexuscli.skill import SkillContextBuffer, SkillRegistry
 from nexuscli.snapshot import SnapshotService
 from nexuscli.tools.base import ToolContext, ToolResult
 from nexuscli.tools.executor import ToolExecutor
+from nexuscli.tools.journal import get_tool_journal
 from nexuscli.tools.registry import ToolRegistry
 from nexuscli.types import Message, Usage
 
@@ -78,6 +79,8 @@ class Agent:
         max_plan_depth: int = 1,
         subagent_depth: int = 0,
         session_id: str | None = None,
+        use_journal: bool = False,
+        run_id: str | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -86,6 +89,10 @@ class Agent:
         self.approval_callback = approval_callback
         self.mode = mode
         self.max_turns = max_turns
+        # F9 工具副作用日志：默认关闭（eval 直构 Agent 的离线承诺不破）；
+        # REPL/引擎路径显式开启。run_id 每次 Agent 实例一份（一次 run 一份）。
+        self._journal = get_tool_journal() if use_journal else None
+        self._run_id = run_id or uuid4().hex
         self.max_plan_depth = max_plan_depth
         # Recursion guard threaded into every ToolContext this agent builds
         # (see run_subagent / SUBAGENT_DEPTH_LIMIT).
@@ -254,6 +261,8 @@ class Agent:
             config=self.config,
             approval_callback=self.approval_callback,
             skill_context_buffer=self.skill_context_buffer,
+            journal=self._journal,
+            run_id=self._run_id,
             subagent_depth=self.subagent_depth,
         )
 

@@ -17,6 +17,9 @@ class ToolResult:
     is_error: bool = False
     display_summary: str | None = None
     tool_use_id: str | None = None
+    # 稳定错误码（如 outcome_unknown / tool_journal_conflict）：供事件流与恢复层分类，
+    # 不做消息字符串匹配（05-execution-durability.md F11 的分类机制沿用此口径）。
+    error_type: str | None = None
 
 
 @dataclass(slots=True)
@@ -35,6 +38,10 @@ class ToolContext:
     # ToolContext per Agent.run() (nexuscli.agent.agent._run_react) starts from
     # the default empty set, which is how the grant expires at run end.
     run_scope_approved: set[str] = field(default_factory=set)
+    # F9 工具副作用日志：journal 非空时，三类有副作用工具在分发点做 claim/complete；
+    # run_id 是每次 Agent.run() 的 uuid4 hex，恢复路径必须沿用原 run_id（两级去重的前提）。
+    journal: Any | None = None
+    run_id: str = ""
 
     def clear_run_scope(self) -> None:
         """Drop every per-run tool approval (new agent run / new user turn)."""
