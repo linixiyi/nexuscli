@@ -17,16 +17,26 @@
   "plan_docs": [
     ".spec/plans/2026-10-25_kitagent-alignment/master.md"
   ],
-  "revision": 5,
+  "revision": 6,
   "round": 3,
   "schema_version": 3,
   "step": {
     "id": "pkg-approval-async",
     "kind": "package",
-    "outcome": null,
+    "outcome": "passed",
+    "proof": {
+      "archive": ".spec/specs/archive/2026-10-25_port-approval-async",
+      "archive_hashes": {
+        "completion-summary.md": "e30c757d920504f3982a67ea509309a47bef1a21cca4c140ed7486aa89e60dd8",
+        "runs.jsonl": "7427d150f3339d717d40fe91af4216f492c0cb38fe52b2a21870dddfb5709309",
+        "spec.md": "eed1347ba54f162c6409d2df15f72603f41b59e8fbfe653d882d3e1f192133b7",
+        "tasks.md": "07194cf26afcf4632ea010408b4a1b2c17604cd0f1c20e9e6e3bf3caf4f620e5"
+      },
+      "slug": "2026-10-25_port-approval-async"
+    },
     "slug": "2026-10-25_port-approval-async",
-    "status": "active",
+    "status": "complete",
     "target": null
   },
-  "updated_at": "2026-10-25T11:50:35Z"
+  "updated_at": "2026-10-25T13:04:50Z"
 }
