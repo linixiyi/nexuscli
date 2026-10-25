@@ -5,7 +5,8 @@
 
 ## 活跃簇
 
-- [2026-10-25_workbench-and-readme](2026-10-25_workbench-and-readme/master.md) — 可视化工作台（借鉴 kitagent 架构模式）+ README 分层重排
+- [2026-10-25_workbench-and-readme](2026-10-25_workbench-and-readme/master.md) — 可视化工作台（13 特性，全部完成）
+- [2026-10-25_workbench-auth](2026-10-25_workbench-auth/master.md) — 工作台鉴权重构（一次性口令 + Cookie 会话，kitagent 模型）
 
 ## 已归档
 
