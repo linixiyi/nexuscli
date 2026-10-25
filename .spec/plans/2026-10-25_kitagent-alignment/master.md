@@ -41,9 +41,9 @@
   → 决策回传恢复；input_hash 防参数漂移）（kitagent graph/interrupts.py:20-113 语义剥离 LangGraph）
 
 ### 第 4 轮：实时推送与前端闭环
-- [ ] A10 审批事件入 SSE + token 合帧(50ms) + 队列满 resync（kitagent web/session.py:13-266）
-- [ ] A11 离线确定性 Demo provider + e2e 启动器（kitagent web/demo.py + web_validation_server）
-- [ ] A12 前端 seq-patch 应用器 + pending 幂等恢复 + Playwright e2e（kitagent frontend state.ts/useWorkbench/e2e）
+- [x] A10 审批事件入 SSE + token 合帧(50ms) + 队列满 resync（kitagent web/session.py:13-266）
+- [x] A11 离线确定性 Demo provider + e2e 启动器（kitagent web/demo.py + web_validation_server）
+- [x] A12 前端 seq-patch 应用器 + pending 幂等恢复 + Playwright e2e（kitagent frontend state.ts/useWorkbench/e2e）
 
 ### 第 5 轮：medium 收尾
 - [ ] A13 运行报告冻结 + markdown 导出（kitagent projection.py:315-380）

@@ -42,15 +42,18 @@ export async function request<T>(
   init?: { method?: string; body?: unknown },
 ): Promise<T> {
   const hasBody = init?.body !== undefined;
+  const method = init?.method ?? "GET";
   const headers: Record<string, string> = {};
   if (hasBody) {
     headers["content-type"] = "application/json";
-    if ((init?.method ?? "GET") === "POST") {
-      headers["x-csrf-token"] = csrfToken;
-    }
+  }
+  // F15 修正：POST 一律附 csrf（cookie 通道变更请求必检；无体 POST 也不例外——
+  // createThreadId 即无体 POST，漏头会被 api.py CSRF 门 403）。
+  if (method === "POST") {
+    headers["x-csrf-token"] = csrfToken;
   }
   const response = await fetch(path, {
-    method: init?.method ?? "GET",
+    method,
     headers,
     body: hasBody ? JSON.stringify(init?.body) : undefined,
   });

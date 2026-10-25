@@ -51,6 +51,20 @@ from nexuscli.types import Message, Usage
 
 MAX_SSE_CLIENTS = 16
 SSE_HEARTBEAT_SECONDS = 15
+# A10 token 合帧窗口（Ported from kitagent (MIT, zed123214/kitagent)
+# src/agent_runtime/web/session.py:69-73：llm.token 首帧起 50ms call_later 延迟
+# flush，其余事件立即 flush——同窗内到达的 token 帧合并为单帧推送）。
+SSE_DELTA_FLUSH_SECONDS = 0.05
+# A10 单个合帧的文本体量上限（字符，防御值）：超大积压一次性并入时提前冲刷，
+# 避免产出单帧 MB 级 payload 拖住写循环。
+SSE_DELTA_MAX_CHARS = 65536
+# A10 单连接积压高水位：单次轮询拉到的非 delta 行超过此值 → 下发 resync 语义帧
+# 并整段跳过（kitagent session.py:82-89 订阅队列 maxsize=64 满则丢弃+resync 的
+# 同位防护；此处无独立消费队列，取宽松值避免正常 turn 误触发）。
+SSE_BACKLOG_HIGH_WATER = 256
+# A10 审批登记表快照轮询间隔（approvals 是内存表非 events 行，机制取舍见
+# _stream_events docstring）。
+SSE_APPROVAL_POLL_SECONDS = 0.1
 # A2 幂等登记表容量（kitagent Gateway._record 同款 1000；满则 429）
 IDEMPOTENCY_CAPACITY = 1000
 
@@ -142,6 +156,15 @@ class RuntimeApiServer:
         # 信号落在这里供工作台与测试观测。审批登记表同取向：随进程消亡，无落盘。
         self._task_events: dict[str, list[dict[str, Any]]] = {}
         self._task_events_guard = threading.Lock()
+        # A10 审批收口台账（仅内存，进程生命周期）：approval_resolved SSE 帧的
+        # 数据源。登记点是 api.py 内全部收口调用点（decide 端点 / recheck_pending
+        # / expire / cancel_pending）——即 kitagent session.approve/_decide 里
+        # projection.put 的同位收口位置。例外：F6 同步桥回调内的 300s 超时收口
+        # 发生在 approvals.py 内部（callback 闭包），api.py 看不到，SSE 侧对该
+        # 路径以 record_status 兜底（decision/resolved_by 置空，见
+        # _emit_approval_frames）。
+        self._approval_resolutions: list[dict[str, Any]] = []
+        self._approval_resolutions_guard = threading.Lock()
         self._ensure_schema()
 
     def serve_forever(self) -> None:
@@ -416,6 +439,11 @@ class RuntimeApiServer:
                     if suspension is not None:
                         payload["suspended_task_id"] = suspension["task_id"]
                         payload["checkpoint_id"] = suspension["checkpoint_id"]
+                    # A10：先记后发——对 HTTP 响应作出反应的客户端（如重连 SSE）
+                    # 一定能看到这条收口台账（approval_resolved 帧的数据源）。
+                    self._record_approval_resolution(
+                        approval_id, decision, resolved.resolved_by, resolved.status
+                    )
                     _send_json(request, 200, payload)
             elif method == "GET" and path == "/v1/workbench/permissions":
                 # A6 会话权限读面（kitagent session.get_permissions rpc 同位，
@@ -457,6 +485,15 @@ class RuntimeApiServer:
                     _send_json(request, 400, {"error": str(exc)})
                 else:
                     rechecked = self.approval_bridge.recheck_pending(self.session_permissions)
+                    # A10：即时重判的收口同样入台账（decision 为 approve/deny，
+                    # resolved_by=session_permissions）。
+                    for settled in rechecked:
+                        self._record_approval_resolution(
+                            str(settled["id"]),
+                            str(settled["decision"]),
+                            settled["resolved_by"],
+                            "resolved",
+                        )
                     _send_json(request, 200, {**state, "rechecked": rechecked})
             elif method == "POST" and path == "/v1/tasks":
                 prompt = str(body.get("message") or body.get("prompt") or "")
@@ -776,10 +813,14 @@ class RuntimeApiServer:
         while True:
             if self.task_manager.is_canceled(task.id):
                 self.approval_bridge.cancel_pending(approval.id)
+                # A10：撤销也入台账（卡片凭空消失必须有帧解释；expired 卡
+                # decision 保持 None，kitagent session.py:216-217 同款）。
+                self._record_approval_resolution(approval.id, None, "task_canceled", "expired")
                 raise TaskCanceledError(task.id)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self.approval_bridge.expire(approval.id)
+                self._record_approval_resolution(approval.id, None, "timeout", "expired")
                 return "deny", approval
             if approval.event.wait(timeout=min(0.5, remaining)):
                 return approval.decision or "deny", approval
@@ -1058,29 +1099,254 @@ class RuntimeApiServer:
             request.send_header("connection", "close")
             _apply_security_headers(request, no_store_sent=True)
             request.end_headers()
-            last_id = max(0, since)
-            while not self._stop.is_set():
-                rows = self._events_since(thread_id, last_id)
-                if rows:
-                    payload = "".join(
-                        f"id: {row_id}\nevent: {event_type}\ndata: {row_payload}\n\n"
-                        for row_id, event_type, row_payload in rows
-                    ).encode("utf-8")
-                    request.wfile.write(payload)
-                    request.wfile.flush()
-                    last_id = rows[-1][0]
-                    continue
-                with self._event_cond:
-                    self._event_cond.wait(SSE_HEARTBEAT_SECONDS)
-                if not self._events_since(thread_id, last_id):
-                    request.wfile.write(b": ping\n\n")
-                    request.wfile.flush()
+            self._stream_events(request, thread_id, max(0, since))
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
             pass  # 客户端断开/半死：清理退出，finally 释放槽位
         finally:
             self._sse_slots.release()
             with suppress(Exception):
                 request.connection.close()
+
+    def _stream_events(self, request: BaseHTTPRequestHandler, thread_id: str, last_id: int) -> None:
+        """A10 SSE 推送循环（Ported from kitagent (MIT, zed123214/kitagent)
+        src/agent_runtime/web/session.py:60-97 的 event/flush/subscribe：50ms
+        合帧 call_later、订阅队列满下发 resync、订阅时高水位捕获无 await）。
+        三个机制与取舍：
+
+        1. 审批事件入流（轮询对比，非 Condition 挂钩——ask 二选一）：approvals
+           是内存登记表非 events 行。选轮询对比：approvals.py 不在本 lane 文件
+           白名单内，桥里没有可挂的 Condition；从 api.py 外包裹桥方法（含私有
+           _register）侵入性强且脆。挂起侧按 SSE_APPROVAL_POLL_SECONDS (0.1s)
+           轮询 list_pending() 快照 diff——新卡 → approval_suspended 帧；已见卡
+           从快照消失 → approval_resolved 帧。解决侧帧数据取自收口台账
+           （_approval_resolutions：api.py 内全部收口点登记，登记点即 kitagent
+           session.approve/_decide 里 projection.put 的同位位置；登记后
+           _event_cond.notify 即时唤醒，解决帧延迟近似 0）；台账无记录的路径
+           （F6 同步桥回调内的 300s 超时收口，approvals.py 闭包内发生）以
+           record_status 兜底，decision/resolved_by 置空。0.1s 轮询对人类尺度的
+           审批卡不可感知。帧只覆盖本线程 scope（scope_type=thread 且
+           scope_id=本线程）——流是 per-thread 投影，任务卡走 /v1/approvals 与
+           任务事件面。快照间隔内登记又收口的卡不产生帧（无人来得及看见），
+           消费方须容忍 resolved 无前置 suspended。审批/resync 帧不写 id: 行
+           （非 events 表行，不得推进客户端重放游标）。
+        2. token 合帧（50ms）：live 段连续 message.delta 行并入缓冲，窗口到期
+           （或体量超 SSE_DELTA_MAX_CHARS）合并为单帧推送，data.text 拼接，id:
+           取段末行 id（重放游标不回退）；非 delta 行到达即先冲刷缓冲再直通，
+           帧序与 id 单调性不变。回放段（客户端 since 游标的追赶首拍）逐行原文
+           下发——A7 契约「SSE data 即落库 payload 原文」由 tests/test_event_seq
+           锁定；合帧只发生在推送侧（kitagent flush 同为广播层合帧，存储不合并）。
+           合帧帧不带行级 seq（seq 已随行折叠；id: 行仍承载位置）。
+        3. 队列满 resync（单连接积压防护）：本实现无独立消费队列，积压表现为
+           单次轮询拉到的行数膨胀（客户端消费慢 → 写阻塞 → 积压继续增长）。
+           非 delta 行数超过 SSE_BACKLOG_HIGH_WATER 时不再整批下发：先冲刷
+           delta 缓冲，发 event: resync（data.since=客户端最后收到的行 id，
+           data.skipped_up_to=跳过段末行 id），内部游标跳到段末，流继续。
+           取舍：跳过段不在本流重发，客户端须按 data.since 重拉快照（
+           /v1/threads/{id}/events 全量按 id 去重，或重开流），重拉与续流可能
+           重叠 → 按 id 单调去重；delta 行不计入高水位——它们由机制 2 折叠，
+           帧成本有界。kitagent 语义对应：订阅队列满 → 丢弃订阅者 +
+           {"type": "resync"}，客户端重拉快照。
+        """
+
+        last_written = last_id  # 客户端实际收到的最后一个行 id（resync data.since 基准）
+        seen_approvals: set[str] = set()
+        last_approval_poll = 0.0  # 首拍立即对比（monotonic 远大于 0）
+        last_ping = time.monotonic()
+        first_poll = True  # 首拍 = 回放段（逐行原文）；此后为 live 段（合帧）
+        pending_deltas: list[tuple[int, str]] = []
+        pending_chars = 0
+        delta_deadline: float | None = None
+
+        def flush_deltas() -> None:
+            nonlocal pending_chars, delta_deadline, last_written
+            if not pending_deltas:
+                return
+            text = "".join(item[1] for item in pending_deltas)
+            merged_id = pending_deltas[-1][0]
+            frame = _sse_frame(
+                "message.delta", json.dumps({"text": text}, ensure_ascii=False), row_id=merged_id
+            )
+            request.wfile.write(frame.encode("utf-8"))
+            request.wfile.flush()
+            last_written = merged_id
+            pending_deltas.clear()
+            pending_chars = 0
+            delta_deadline = None
+
+        while not self._stop.is_set():
+            wrote = False
+            rows = self._events_since(thread_id, last_id)
+            replay_batch = first_poll
+            first_poll = False
+            if rows:
+                last_id = rows[-1][0]
+                non_delta = sum(
+                    1 for _row_id, event_type, _row_payload in rows if event_type != "message.delta"
+                )
+                if non_delta > SSE_BACKLOG_HIGH_WATER:
+                    # 机制 3：积压整段跳过 + resync 语义帧（先冲刷 delta 缓冲，
+                    # 让 data.since 精确指向客户端真正收到的位置）。
+                    flush_deltas()
+                    data = json.dumps(
+                        {"reason": "backlog", "since": last_written, "skipped_up_to": last_id},
+                        ensure_ascii=False,
+                    )
+                    request.wfile.write(_sse_frame("resync", data).encode("utf-8"))
+                    request.wfile.flush()
+                    wrote = True
+                elif replay_batch:
+                    # 机制 2 的回放例外：追赶段逐行原文（A7 契约）
+                    body = "".join(
+                        _sse_frame(event_type, row_payload, row_id=row_id)
+                        for row_id, event_type, row_payload in rows
+                    )
+                    request.wfile.write(body.encode("utf-8"))
+                    request.wfile.flush()
+                    last_written = last_id
+                    wrote = True
+                else:
+                    # 机制 2：live 段合帧
+                    for row_id, event_type, row_payload in rows:
+                        if event_type == "message.delta":
+                            text = _delta_text(row_payload)
+                            if text is None:
+                                # 防御：无 text 的 delta 行按原文即时直通
+                                flush_deltas()
+                                request.wfile.write(
+                                    _sse_frame(event_type, row_payload, row_id=row_id).encode(
+                                        "utf-8"
+                                    )
+                                )
+                                request.wfile.flush()
+                                last_written = row_id
+                                wrote = True
+                            else:
+                                pending_deltas.append((row_id, text))
+                                pending_chars += len(text)
+                                if delta_deadline is None:
+                                    delta_deadline = time.monotonic() + SSE_DELTA_FLUSH_SECONDS
+                                if pending_chars >= SSE_DELTA_MAX_CHARS:
+                                    flush_deltas()
+                                    wrote = True
+                        else:
+                            flush_deltas()
+                            request.wfile.write(
+                                _sse_frame(event_type, row_payload, row_id=row_id).encode("utf-8")
+                            )
+                            request.wfile.flush()
+                            last_written = row_id
+                            wrote = True
+            # 机制 1：审批登记表快照对比（间隔闸门，避免事件紧循环反复取锁）
+            now = time.monotonic()
+            if now - last_approval_poll >= SSE_APPROVAL_POLL_SECONDS:
+                last_approval_poll = now
+                if self._emit_approval_frames(request, thread_id, seen_approvals):
+                    wrote = True
+            # 到期合帧冲刷：批尾 delta 最多滞留一个窗口（50ms）
+            if pending_deltas and delta_deadline is not None and time.monotonic() >= delta_deadline:
+                flush_deltas()
+                wrote = True
+            if wrote:
+                last_ping = time.monotonic()
+                continue
+            # 等待：事件唤醒 / 合帧期限 / 审批轮询闸门 / 心跳兜底
+            timeout = SSE_HEARTBEAT_SECONDS
+            if pending_deltas and delta_deadline is not None:
+                timeout = min(timeout, max(0.0, delta_deadline - time.monotonic()))
+            timeout = min(timeout, SSE_APPROVAL_POLL_SECONDS)
+            with self._event_cond:
+                self._event_cond.wait(timeout)
+            if time.monotonic() - last_ping >= SSE_HEARTBEAT_SECONDS:
+                request.wfile.write(b": ping\n\n")
+                request.wfile.flush()
+                last_ping = time.monotonic()
+
+    def _emit_approval_frames(
+        self, request: BaseHTTPRequestHandler, thread_id: str, seen: set[str]
+    ) -> bool:
+        """A10 机制 1 的单次快照对比：新挂起卡 → approval_suspended 帧；已见卡
+        从快照消失 → approval_resolved 帧（数据优先取收口台账，无台账的收口
+        路径以 record_status 兜底）。返回是否写出过帧。"""
+
+        cards = [
+            card
+            for card in self.approval_bridge.list_pending()
+            if card["scope_type"] == "thread" and card["scope_id"] == thread_id
+        ]
+        wrote = False
+        for card in cards:
+            if card["id"] in seen:
+                continue
+            seen.add(card["id"])
+            data = json.dumps(
+                {
+                    "approval_id": card["id"],
+                    "tool_name": card["tool_name"],
+                    "description": card["description"],
+                    "scope_type": card["scope_type"],
+                    "scope_id": card["scope_id"],
+                    "reason": "approval_pending",
+                },
+                ensure_ascii=False,
+            )
+            request.wfile.write(_sse_frame("approval_suspended", data).encode("utf-8"))
+            request.wfile.flush()
+            wrote = True
+        current = {card["id"] for card in cards}
+        for approval_id in seen - current:
+            seen.discard(approval_id)
+            entry = self._approval_resolution_for(approval_id)
+            if entry is not None:
+                payload = {
+                    "id": approval_id,
+                    "approval_id": approval_id,
+                    "decision": entry["decision"],
+                    "resolved_by": entry["resolved_by"],
+                    "status": entry["status"],
+                }
+            else:
+                # F6 同步桥回调内的超时收口（approvals.py 闭包内发生，无台账）：
+                # record_status 只给状态位，decision/resolved_by 不可得 → 置空。
+                payload = {
+                    "id": approval_id,
+                    "approval_id": approval_id,
+                    "decision": None,
+                    "resolved_by": None,
+                    "status": self.approval_bridge.record_status(approval_id),
+                }
+            frame = _sse_frame("approval_resolved", json.dumps(payload, ensure_ascii=False))
+            request.wfile.write(frame.encode("utf-8"))
+            request.wfile.flush()
+            wrote = True
+        return wrote
+
+    def _record_approval_resolution(
+        self,
+        approval_id: str,
+        decision: str | None,
+        resolved_by: str | None,
+        status: str,
+    ) -> None:
+        """A10：审批收口入台账并唤醒 SSE 等待者（数据源契约见 __init__ 注释）。"""
+
+        with self._approval_resolutions_guard:
+            self._approval_resolutions.append(
+                {
+                    "id": approval_id,
+                    "decision": decision,
+                    "resolved_by": resolved_by,
+                    "status": status,
+                }
+            )
+        with self._event_cond:
+            self._event_cond.notify_all()
+
+    def _approval_resolution_for(self, approval_id: str) -> dict[str, Any] | None:
+        with self._approval_resolutions_guard:
+            for entry in reversed(self._approval_resolutions):
+                if entry["id"] == approval_id:
+                    return dict(entry)
+        return None
 
     def _events_since(self, thread_id: str, last_id: int) -> list[tuple[int, str, str]]:
         with self._connect() as conn:
@@ -1184,6 +1450,32 @@ def _build_http_server(handler: type[BaseHTTPRequestHandler], port: int) -> Thre
     """Bind the loopback server without serving; port 0 picks a free port (test seam)."""
 
     return ThreadingHTTPServer(("127.0.0.1", port), handler)
+
+
+def _sse_frame(event_type: str, data: str, *, row_id: int | None = None) -> str:
+    """A10：组装一帧 SSE 文本（既有格式 id:/event:/data: 不变）。
+
+    row_id 为 None 的帧（审批/resync）不写 id: 行——它们不是 events 表行，
+    不得推进客户端的重放游标。
+    """
+
+    prefix = f"id: {row_id}\n" if row_id is not None else ""
+    return f"{prefix}event: {event_type}\ndata: {data}\n\n"
+
+
+def _delta_text(payload: str) -> str | None:
+    """A10：提取 message.delta 行的 text（合帧拼接用）。
+
+    不可解析或缺 text 字段返回 None——调用方对该行走原文即时直通，不做合帧。
+    """
+
+    try:
+        value = json.loads(payload)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(value, dict) and isinstance(value.get("text"), str):
+        return value["text"]
+    return None
 
 
 def _int_query(query: dict[str, list[str]], name: str, default: int) -> int:
