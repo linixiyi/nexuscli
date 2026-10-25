@@ -1,7 +1,7 @@
 import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
-import { getApiKey } from "./api/client";
+import { bootstrapWithToken } from "./api/client";
 import { listApprovals, type PendingApproval } from "./api/approvals";
 import { ApprovalCard } from "./views/ApprovalCard";
 import { Composer } from "./views/Composer";
@@ -23,19 +23,44 @@ function readHash(): { tab: Tab; session: string | null } {
   return { tab: "sessions", session: null };
 }
 
+type BootstrapState =
+  | { phase: "bootstrapping" }
+  | { phase: "ready" }
+  | { phase: "waiting" }
+  | { phase: "error"; message: string };
+
 export function App(): JSX.Element {
-  const [apiKey, setApiKey] = useState<string | null>(() => {
-    const stored = getApiKey();
-    return stored === "" ? null : stored;
+  // F15：凭证 = 一次性口令换发的 HttpOnly cookie。页面加载时读 #bootstrap= 片段
+  // 自动换发（换发后从地址栏抹掉片段）；无片段则提示打开服务日志打印的一键链接。
+  const [auth, setAuth] = useState<BootstrapState>(() => {
+    const match = window.location.hash.match(/^#bootstrap=(.+)$/);
+    if (match !== null) {
+      return { phase: "bootstrapping" };
+    }
+    return { phase: "waiting" };
   });
-  const [draftKey, setDraftKey] = useState("");
   const [tab, setTab] = useState<Tab>(() => readHash().tab);
   const [sessionId, setSessionId] = useState<string | null>(() => readHash().session);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
 
+  // bootstrap：一次性口令换发 cookie + csrf（碎片抹除，token 不留地址栏）
+  useEffect(() => {
+    const match = window.location.hash.match(/^#bootstrap=(.+)$/);
+    if (match === null) {
+      return;
+    }
+    const token = decodeURIComponent(match[1]);
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    bootstrapWithToken(token)
+      .then(() => setAuth({ phase: "ready" }))
+      .catch((err: unknown) => {
+        setAuth({ phase: "error", message: err instanceof Error ? err.message : String(err) });
+      });
+  }, []);
+
   // 常驻审批轮询（2s，01 定稿节奏）：审批挂起/解决的 SSE 推送为挂账②，MVP 用轮询
   useEffect(() => {
-    if (apiKey === null) {
+    if (auth.phase !== "ready") {
       return;
     }
     let cancelled = false;
@@ -56,31 +81,22 @@ export function App(): JSX.Element {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [apiKey]);
+  }, [auth]);
 
-  if (apiKey === null) {
+  if (auth.phase !== "ready") {
     return (
       <div className="gate">
         <h1>NexusCLI Workbench</h1>
-        <p>输入 Runtime API key（NEXUSCLI_RUNTIME_API_KEY；仅存本浏览器 localStorage）</p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            const trimmed = draftKey.trim();
-            if (trimmed !== "") {
-              localStorage.setItem("nexuscli.workbench.apiKey", trimmed);
-              setApiKey(trimmed);
-            }
-          }}
-        >
-          <input
-            type="password"
-            value={draftKey}
-            onChange={(event) => setDraftKey(event.target.value)}
-            placeholder="api key"
-          />
-          <button type="submit">进入</button>
-        </form>
+        {auth.phase === "bootstrapping" && <p>正在完成一次性认证…</p>}
+        {auth.phase === "waiting" && (
+          <p>
+            请从服务启动日志打印的一键链接进入（形如
+            <code> http://127.0.0.1:&lt;port&gt;/#bootstrap=… </code>）。
+            <br />
+            认证凭证由一次性口令换发的 HttpOnly cookie 承载，无需输入任何 key。
+          </p>
+        )}
+        {auth.phase === "error" && <p className="error">{auth.message}</p>}
       </div>
     );
   }
@@ -127,7 +143,7 @@ export function App(): JSX.Element {
         {tab === "sessions" && (
           <>
             <Composer onOpenThread={openSession} />
-            <SessionsView activeKey={apiKey} onOpenSession={openSession} />
+            <SessionsView active onOpenSession={openSession} />
             {sessionId !== null && (
               <section>
                 <h3>回放：{sessionId}</h3>
@@ -136,8 +152,8 @@ export function App(): JSX.Element {
             )}
           </>
         )}
-        {tab === "tasks" && <TasksView activeKey={apiKey} />}
-        {tab === "usage" && <UsageView activeKey={apiKey} />}
+        {tab === "tasks" && <TasksView active />}
+        {tab === "usage" && <UsageView active />}
       </main>
     </div>
   );

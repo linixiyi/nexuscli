@@ -1,4 +1,5 @@
-// fetch 封装：附 x-api-key 头；错误归一为 ApiError{status, message}。
+// fetch 封装：凭证 = HttpOnly cookie（经 /v1/workbench/bootstrap 换发，同源自动携带）；
+// 变更请求（POST）另附 x-csrf-token（bootstrap 返回后存内存，不落 localStorage）。
 // 端点契约唯一来源是 01 文档；本文不定义、不改名任何端点。
 
 import type {
@@ -17,9 +18,23 @@ export class ApiError extends Error {
   }
 }
 
-export function getApiKey(): string {
-  const raw = localStorage.getItem("nexuscli.workbench.apiKey");
-  return raw === null ? "" : raw;
+// csrf 存内存（模块态）：HttpOnly cookie 挡 XSS 偷取，内存态挡持久泄露。
+let csrfToken = "";
+export function setCsrfToken(token: string): void {
+  csrfToken = token;
+}
+
+export async function bootstrapWithToken(token: string): Promise<void> {
+  const response = await fetch("/v1/workbench/bootstrap", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, `bootstrap 失败（HTTP ${response.status}）`);
+  }
+  const payload = (await response.json()) as { csrf: string };
+  setCsrfToken(payload.csrf);
 }
 
 export async function request<T>(
@@ -27,12 +42,16 @@ export async function request<T>(
   init?: { method?: string; body?: unknown },
 ): Promise<T> {
   const hasBody = init?.body !== undefined;
+  const headers: Record<string, string> = {};
+  if (hasBody) {
+    headers["content-type"] = "application/json";
+    if ((init?.method ?? "GET") === "POST") {
+      headers["x-csrf-token"] = csrfToken;
+    }
+  }
   const response = await fetch(path, {
     method: init?.method ?? "GET",
-    headers: {
-      "x-api-key": getApiKey(),
-      ...(hasBody ? { "content-type": "application/json" } : {}),
-    },
+    headers,
     body: hasBody ? JSON.stringify(init?.body) : undefined,
   });
   if (!response.ok) {

@@ -5,7 +5,7 @@ import { ApiError, fetchUsageSummary } from "../api/client";
 import type { UsageStats } from "../api/types";
 
 type Props = {
-  activeKey: string | null;
+  active: boolean;
 };
 
 const WINDOWS = [1, 7, 30];
@@ -14,13 +14,13 @@ function costText(cost: { usd: number; cny: number }): string {
   return `$${cost.usd.toFixed(4)} / ¥${cost.cny.toFixed(4)}`;
 }
 
-export function UsageView({ activeKey }: Props): JSX.Element {
+export function UsageView({ active }: Props): JSX.Element {
   const [days, setDays] = useState(7);
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (activeKey === null) {
+    if (!active) {
       return;
     }
     let cancelled = false;
@@ -39,7 +39,7 @@ export function UsageView({ activeKey }: Props): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [activeKey, days]);
+  }, [active, days]);
 
   return (
     <div className="view">

@@ -1,46 +1,29 @@
 {
   "chain": "autorun",
-  "chain_id": "autorun-20261025-workbench",
+  "chain_id": "autorun-20261025-workbench-auth",
   "client_surface": "desktop",
-  "completed_step_ids": [
-    "pkg-readme-layering",
-    "pkg-workbench-mvp",
-    "pkg-workbench-interaction",
-    "pkg-workbench-ci-docs",
-    "pkg-tool-journal",
-    "pkg-turn-resume"
-  ],
+  "completed_step_ids": [],
   "execution_mode": "current",
-  "feature_fingerprint": "7547acd9a3801597afd4b526bf5ff731fa438d24fbdc7464489a4cfc36e18869",
+  "feature_fingerprint": "73b5644679f52828dbf6c001d34c54ef233e3a51b1c7a1cecea80392245f40d5",
   "host": "zcode",
-  "lifecycle": "complete",
-  "max_rounds": 7,
+  "lifecycle": "active",
+  "max_rounds": 5,
   "model": null,
   "model_control": "host",
   "permission_effective": "host",
   "plan_docs": [
-    ".spec/plans/2026-10-25_workbench-and-readme/master.md"
+    ".spec/plans/2026-10-25_workbench-auth/master.md"
   ],
-  "revision": 14,
-  "round": 7,
+  "revision": 1,
+  "round": 1,
   "schema_version": 3,
   "step": {
-    "id": "pkg-provider-mypy",
+    "id": "pkg-workbench-auth",
     "kind": "package",
-    "outcome": "passed",
-    "proof": {
-      "archive": ".spec/specs/archive/2026-10-25_update-provider-details-mypy",
-      "archive_hashes": {
-        "completion-summary.md": "10386f5b0d3f522dada1618923669a1a325d6cab6b41068fa672e9cf2edabbbf",
-        "runs.jsonl": "4d7b5cdd354fe415fafa8d5a303500f83fe0c6abb4af11336ef495b0e22cf6fa",
-        "spec.md": "569d99f07fb278f708104d6eb7d37be8eaa29120440d1e4bb49ce68eb50beb7e",
-        "tasks.md": "5c15259ddf61d96087be33082d7a80aaf8e412d105896a040628f8bb3b88d506"
-      },
-      "slug": "2026-10-25_update-provider-details-mypy"
-    },
-    "slug": "2026-10-25_update-provider-details-mypy",
-    "status": "complete",
+    "outcome": null,
+    "slug": "2026-10-25_update-workbench-auth",
+    "status": "active",
     "target": null
   },
-  "updated_at": "2026-10-25T07:25:36Z"
+  "updated_at": "2026-10-25T07:54:18Z"
 }

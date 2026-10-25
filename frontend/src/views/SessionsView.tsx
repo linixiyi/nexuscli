@@ -6,11 +6,11 @@ import type { SessionMeta } from "../api/types";
 import { loadLocalThreads, type LocalThread } from "../state/localThreads";
 
 type Props = {
-  activeKey: string | null;
+  active: boolean;
   onOpenSession: (id: string) => void;
 };
 
-export function SessionsView({ activeKey, onOpenSession }: Props): JSX.Element {
+export function SessionsView({ active, onOpenSession }: Props): JSX.Element {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [localThreads, setLocalThreads] = useState<LocalThread[]>([]);
   const [allProjects, setAllProjects] = useState(false);
@@ -18,7 +18,7 @@ export function SessionsView({ activeKey, onOpenSession }: Props): JSX.Element {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (activeKey === null) {
+    if (!active) {
       return;
     }
     let cancelled = false;
@@ -38,7 +38,7 @@ export function SessionsView({ activeKey, onOpenSession }: Props): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [activeKey, allProjects]);
+  }, [active, allProjects]);
 
   return (
     <div className="view">

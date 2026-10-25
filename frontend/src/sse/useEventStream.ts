@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { ApiError, getApiKey } from "../api/client";
+import { ApiError } from "../api/client";
 import type { SseFrame } from "../api/types";
 
 export type StreamState = "connecting" | "live" | "polling" | "error";
@@ -102,9 +102,9 @@ export function useEventStream(threadId: string | null): {
       }
       controller = new AbortController();
       // 手工 fetch 流式读取（EventSource 无法设置 x-api-key 头——01 契约的鉴权约束）
+      // cookie 同源自动携带（HttpOnly）；api_key 查询参数仅为外部 curl/EventSource 保留
       const url =
-        `/v1/threads/${encodeURIComponent(threadId)}/events/stream` +
-        `?since=${lastId}&api_key=${encodeURIComponent(getApiKey())}`;
+        `/v1/threads/${encodeURIComponent(threadId)}/events/stream?since=${lastId}`;
       fetch(url, { signal: controller.signal })
         .then(async (response) => {
           if (response.status === 401 || response.status === 403 || response.status === 404) {
@@ -174,7 +174,6 @@ export function useEventStream(threadId: string | null): {
         try {
           const response = await fetch(
             `/v1/threads/${encodeURIComponent(threadId)}/events`,
-            { headers: { "x-api-key": getApiKey() } },
           );
           if (response.ok) {
             const text = await response.text();

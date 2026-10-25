@@ -18,10 +18,10 @@ src/agent_runtime/web/{app,gateway}.py 实读定稿），改为「一次性启�
 
 ## 特性
 
-- [ ] F14 服务端：bootstrap 端点（一次性口令换发 HttpOnly SameSite=strict cookie + csrf）+
+- [x] F14 服务端：bootstrap 端点（一次性口令换发 HttpOnly SameSite=strict cookie + csrf）+
   /v1/* 会话门（cookie 或既有 api_key 头二选一）+ 变更请求 CSRF 校验 + /v1/* 全面 Origin 白名单 +
   启动打印一键链接；api_key 头保留为外部自动化通道
-- [ ] F15 前端：key 门删除；加载时读 #bootstrap= 片段 → POST bootstrap → csrf 存内存；
+- [x] F15 前端：key 门删除；加载时读 #bootstrap= 片段 → POST bootstrap → csrf 存内存；
   变更请求附 x-csrf-token；SSE/EventSource 走 cookie 同源自动携带
 
 ## 边界
