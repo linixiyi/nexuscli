@@ -47,3 +47,41 @@
 - 依赖边界：不引入 LangChain/LangGraph/FastAPI 等 LLM/Web 框架（差距矩阵 30 项不适用判定）
 - 工作流纪律：spec 包 + /workflow 子代理并行，主会话只做路由/验收/收口
 - push 由用户逐次授权
+
+## 值得加什么（可选依赖模式分析沉淀，2026-10-25 第二次对话）
+
+来源：kitagent 可选依赖机制的源码级分析（engine/router.py:111-124 惰性导入 +
+exc.name 检查、checkpoint.py:56-60 二级关卡、pyproject extras 二级粒度、
+ensure_graph_available 启动早期快速失败、pytest marker 声明外部前提）。
+
+### 1. 可选依赖「四步套路」固化为仓库约定（建议写进 AGENTS.md）
+
+NexusCLI 已有两处同款雏形（read_file 的 pypdf 缺失返回安装指引、telemetry 未装全链路
+no-op），但未成文。任何未来的重可选能力（图编排、本地沙箱后端、新 provider SDK、
+重二进制工具）按此四步进：
+
+- extras 按能力分组、粒度到二级（「能用」与「能恢复/持久化」分开——kitagent 的
+  graph 与 graph-sqlite 之别）
+- 框架 import 只出现在专属模块边界，核心模块顶层零引用
+- 惰性导入 + `exc.name` 检查：缺依赖翻译成带安装指引的类型化错误，其他 import
+  失败原样抛（内部 bug 不被友好提示掩盖）
+- 启动早期 ensure（provider/外设构造之前快速失败）+ pytest marker 声明外部前提
+
+### 2. 触发点（什么时候真的加）
+
+- 图编排类需求出现时：先复用 turn_checkpoint/journal/EngineResult 自研等价物评估，
+  不够再按四步套路引入（kitagent engine/base.py 的 Protocol 形态是合同参照）
+- 本地沙箱/重二进制工具需求出现时：extras 二级粒度同样适用
+- 配置面扩大时：kitagent config.py 的「组合校验（引擎×沙箱互斥）」思想值得随配置项增长引入
+
+### 3. 顺带值得核对的三个小件（矩阵判 S，实施时先核对现状）
+
+- runner 合同校验层：引擎结果与 canonical 状态双重比对（kitagent runner.py:561-596）——
+  引擎数量增多（>2 个实现者）时引入，当前 ask/plan/team 三入口暂不需要
+- run 收尾 shield 编排核对（runner.py:729-800 finish_run 语义，交接文档挂账 #9 重复引用）
+- stdio stderr drain：核对 MCP SDK 是否已处理管道满（kitagent client.py 手写 drain）
+
+### 引入时机判定（防止为加而加）
+
+第二个实现者出现才值得付抽象成本（kitagent 的 Protocol+Router 是两个引擎倒逼出来的）；
+单一实现者阶段保持 query_engine 三入口直连，只把 sum type 返回合同（F11 已做）守住。
