@@ -4,6 +4,7 @@ import os
 
 from nexuscli.config import LlmConfig
 from nexuscli.llm.anthropic import AnthropicClient
+from nexuscli.llm.offline_demo import OfflineDemoProvider
 from nexuscli.llm.openai_compatible import OpenAICompatibleClient
 from nexuscli.llm.pricing import resolve_price_profile
 
@@ -30,6 +31,14 @@ MODEL_CONTEXT_WINDOWS = {
 }
 
 
+# Offline deterministic demo provider injection (Ported from kitagent (MIT,
+# zed123214/kitagent) src/agent_runtime/web/demo.py): set NEXUSCLI_OFFLINE_DEMO=1
+# to make the factory return the scripted OfflineDemoProvider. The switch is
+# env-only and opt-in on purpose — no config default, no provider name — so the
+# default path (real network clients) is byte-for-byte unchanged.
+OFFLINE_DEMO_ENV_VAR = "NEXUSCLI_OFFLINE_DEMO"
+
+
 def create_llm_client(
     config: LlmConfig,
     *,
@@ -38,7 +47,9 @@ def create_llm_client(
     # it. Default False keeps every existing caller unchanged; production
     # call sites pass config.telemetry.enabled (repl/cli/runtime/subagent/sdk).
     telemetry_enabled: bool = False,
-) -> OpenAICompatibleClient | AnthropicClient:
+) -> OpenAICompatibleClient | AnthropicClient | OfflineDemoProvider:
+    if os.environ.get(OFFLINE_DEMO_ENV_VAR, "") == "1":
+        return OfflineDemoProvider()
     provider = config.provider.lower()
     if provider == "deepseek":
         base_url = config.base_url or DEEPSEEK_BASE_URL
