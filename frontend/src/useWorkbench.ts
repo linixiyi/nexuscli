@@ -20,13 +20,14 @@
 //    SequenceGap 断档 → 重建状态并 since=0 全量回放（= kitagent publish 捕获异常
 //    后关 socket 重连的同位，「重拉快照」）。
 //
-// 本 hook 是 A12 的新增编排层，暂未接入 App.tsx（App.tsx 不在本任务文件面内）；
-// 接入方可直接以本 hook 替换 App 的 bootstrap/轮询段。
+// 本 hook 自 2026-10-26_workbench-kitagent-ui 起接入 App.tsx（bootstrap/审批轮询/
+// SSE 全部经此编排；gate 粘贴换发走 redeem——页内换发，绝不 reload）。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, setCsrfToken } from "./api/client";
 import type { SseFrame } from "./api/types";
+import { rememberThread } from "./state/localThreads";
 import {
   applyEvent,
   initialWorkbenchState,
@@ -261,6 +262,8 @@ export function useWorkbench(): {
   busy: boolean;
   /** 发起 turn（新建线程 + 幂等 POST）；返回是否已取得终态回执。 */
   startTurn: (message: string, mode: string) => Promise<boolean>;
+  /** 认证门粘贴换发（页内完成，不 reload）；失败原样抛错由 Gate 呈现。 */
+  redeem: (token: string) => Promise<void>;
   /** 用户显式「查询原请求」：先纯查询，未决且持有 csrf 时经 A2 幂等门重放。 */
   checkPending: () => Promise<void>;
   /** 解除本页等待（不重发、不取消——kitagent leavePending 同款语义）。 */
@@ -275,9 +278,13 @@ export function useWorkbench(): {
   });
   const [threadId, setThreadId] = useState<string | null>(() => {
     const hash = window.location.hash.replace(/^#/, "");
-    return hash.startsWith("/threads/")
-      ? decodeURIComponent(hash.slice("/threads/".length))
-      : null;
+    if (!hash.startsWith("/threads/")) return null;
+    const raw = hash.slice("/threads/".length);
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw; // 畸形编码回退原文（复审 F5），不让白屏盖过可诊断性
+    }
   });
   const [workbench, setWorkbench] = useState<WorkbenchState | null>(null);
   const [streamState, setStreamState] = useState<StreamStatus>("connecting");
@@ -426,6 +433,34 @@ export function useWorkbench(): {
     await resolvePending(record, true);
   }, [resolvePending]);
 
+  /**
+   * 认证门粘贴换发（2026-10-26 复审 F2 修复）：页内完成口令换发并直接进入就绪态，
+   * **绝不 reload**——csrf 只存模块内存（client.ts:21-25），整页刷新即失，换发成功
+   * 也会落成只读会话且一次性口令已被烧掉。bootstrapExchange 失败时原样抛错，
+   * 由调用方（App 的 Gate）呈现。
+   */
+  const redeem = useCallback(
+    async (token: string): Promise<void> => {
+      setAuth({ phase: "bootstrapping" });
+      const csrf = await bootstrapExchange(token);
+      csrfRef.current = csrf;
+      setCsrfToken(csrf);
+      const authorized = await probeAuthorized();
+      if (authorized) {
+        setAuth({ phase: "ready", canPost: true });
+        const record = loadPendingRecord();
+        if (record !== null) {
+          pendingRef.current = record;
+          setPending(record);
+          void resolvePending(record, false);
+        }
+      } else {
+        setAuth({ phase: "waiting" });
+      }
+    },
+    [resolvePending],
+  );
+
   const leavePending = useCallback((): void => {
     const record = pendingRef.current;
     if (record === null || busy) return;
@@ -483,6 +518,9 @@ export function useWorkbench(): {
         pendingRef.current = record;
         savePendingRecord(record);
         setPending(record);
+        // 记入本浏览器线程记忆（侧栏「工作会话」数据源；title 取任务首行，
+        // 与旧 Composer 的 rememberThread 口径一致）。
+        rememberThread(created.id, trimmed.slice(0, 80));
         selectThread(created.id);
         try {
           const result = await postTurnIdempotent(record, csrf);
@@ -633,6 +671,7 @@ export function useWorkbench(): {
     notice,
     busy,
     startTurn,
+    redeem,
     checkPending,
     leavePending,
     dismissNotice,

@@ -1,72 +1,99 @@
-import type { JSX } from "react";
-import { useState } from "react";
+import { useRef, useState, type JSX } from "react";
+import { Send } from "lucide-react";
 
-import { createThreadId } from "../api/client";
-import { postTurn } from "../api/approvals";
-import { rememberThread } from "../state/localThreads";
+// Composer（2026-10-26_workbench-kitagent-ui task_0004，交互逻辑 Ported from
+// kitagent (MIT, zed123214/kitagent) frontend/src/App.tsx Chat 的 composer：
+// Enter 发送、Shift+Enter 换行、IME 合成保护、发送由父级 ChatPanel 编排）。
+// 差异：本仓无模型元数据端点，footer 左侧为模式选择（react/plan/team）而非模型点。
+
+export type ComposerMode = "react" | "plan" | "team";
+
+export const MAX_MESSAGE_BYTES = 32768;
 
 type Props = {
-  onOpenThread: (id: string) => void;
+  draft: string;
+  mode: ComposerMode;
+  busy: boolean;
+  canPost: boolean;
+  disabledHint: string | null;
+  onDraftChange: (text: string) => void;
+  onModeChange: (mode: ComposerMode) => void;
+  /** 已通过校验的提交；字节上限校验在本地（32KiB，kitagent 同款）。 */
+  onSend: () => void;
 };
 
-type SubmitState = "idle" | "sending" | "streaming" | "completed" | "failed";
+export function Composer({
+  draft,
+  mode,
+  busy,
+  canPost,
+  disabledHint,
+  onDraftChange,
+  onModeChange,
+  onSend,
+}: Props): JSX.Element {
+  const [error, setError] = useState("");
+  const composing = useRef(false);
+  const lastDraft = useRef(draft);
 
-// F7 提交状态机（02 定稿）：idle → sending（POST 已发出）→ SSE 观察（由
-// TranscriptView 承担）→ POST 同步返回作终态兜底 completed/failed。
-// POST 是同步阻塞请求，按「后台提交」发出，不阻塞 UI。
-export function Composer({ onOpenThread }: Props): JSX.Element {
-  const [prompt, setPrompt] = useState("");
-  const [mode, setMode] = useState<"react" | "plan" | "team">("react");
-  const [state, setState] = useState<SubmitState>("idle");
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = (): void => {
-    const trimmed = prompt.trim();
-    if (trimmed === "" || state === "sending") {
+  const send = (): void => {
+    lastDraft.current = draft;
+    if (!draft.trim() || busy || !canPost) return;
+    if (new TextEncoder().encode(draft).length > MAX_MESSAGE_BYTES) {
+      setError(`单条消息不能超过 ${Math.round(MAX_MESSAGE_BYTES / 1024)} KiB。`);
       return;
     }
-    setState("sending");
-    setError(null);
-    createThreadId()
-      .then((thread) => {
-        rememberThread(thread.id, trimmed.slice(0, 80));
-        onOpenThread(thread.id);
-        setState("streaming");
-        return postTurn(thread.id, trimmed, mode)
-          .then(() => setState("completed"))
-          .catch((err: unknown) => {
-            setError(err instanceof Error ? err.message : String(err));
-            setState("failed");
-          });
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : String(err));
-        setState("failed");
-      });
+    setError("");
+    onSend();
   };
 
   return (
-    <div className="composer">
+    <form
+      className="composer"
+      onSubmit={(event) => {
+        event.preventDefault();
+        send();
+      }}
+    >
       <textarea
-        value={prompt}
-        onChange={(event) => setPrompt(event.target.value)}
-        placeholder="描述任务…（提交后经 SSE 实时观察流式输出）"
+        aria-label="输入任务"
+        placeholder={disabledHint ?? "描述你希望完成的任务…"}
+        value={draft}
         rows={3}
-        disabled={state === "sending"}
+        onChange={(event) => onDraftChange(event.target.value)}
+        onCompositionStart={() => {
+          composing.current = true;
+        }}
+        onCompositionEnd={() => {
+          composing.current = false;
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !composing.current) {
+            event.preventDefault();
+            send();
+          }
+        }}
       />
-      <div className="row">
-        <select value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}>
-          <option value="react">react</option>
-          <option value="plan">plan</option>
-          <option value="team">team</option>
-        </select>
-        <button type="button" onClick={submit} disabled={state === "sending" || prompt.trim() === ""}>
-          {state === "sending" ? "提交中…" : "发送"}
+      <div className="composer-footer">
+        <div className="composer-context">
+          <select
+            className="mode-select"
+            aria-label="执行模式"
+            value={mode}
+            onChange={(event) => onModeChange(event.target.value as ComposerMode)}
+          >
+            <option value="react">react</option>
+            <option value="plan">plan</option>
+            <option value="team">team</option>
+          </select>
+          {/* 只读态说明走 disabledHint（占位符），这里不再重复渲染，避免
+              「pending 未决」被误述成「无 CSRF 凭证」。 */}
+        </div>
+        <button className="send-button" type="submit" aria-label="发送任务" disabled={!draft.trim() || busy || !canPost}>
+          <Send size={16} />
         </button>
-        {state === "streaming" && <span className="muted">流式观察中（POST 结束后给终态）…</span>}
-        {state === "completed" && <span className="muted">turn 完成</span>}
-        {state === "failed" && <span className="error">{error}</span>}
       </div>
-    </div>
+      {error !== "" && <p className="error-text composer-error">{error}</p>}
+    </form>
   );
 }

@@ -1,8 +1,12 @@
 import type { JSX } from "react";
 import { useEffect, useState } from "react";
+import { BarChart3 } from "lucide-react";
 
 import { ApiError, fetchUsageSummary } from "../api/client";
 import type { UsageStats } from "../api/types";
+
+// 用量统计面板（2026-10-26_workbench-kitagent-ui task_0003 重绘：kitagent 无对应
+// 面板，用同一设计 token 重绘为 data-panel + stat-card；统计口径与窗口切换不变）。
 
 type Props = {
   active: boolean;
@@ -42,49 +46,52 @@ export function UsageView({ active }: Props): JSX.Element {
   }, [active, days]);
 
   return (
-    <div className="view">
+    <div className="data-panel">
+      <h2>
+        <BarChart3 size={17} /> 用量统计
+      </h2>
       <p className="muted">
         GET /v1/usage/summary（= UsageStore.stats 原样）；未配置价格表时成本恒为 0，以供应商返回的实际 Token 为准
       </p>
-      <div className="row">
+      <div className="check-row">
         {WINDOWS.map((value) => (
           <button
             key={value}
             type="button"
-            className={value === days ? "active" : ""}
+            className={value === days ? "primary" : ""}
             onClick={() => setDays(value)}
           >
             {value} 天
           </button>
         ))}
       </div>
-      {error !== null && <p className="error">{error}</p>}
+      {error !== null && <p className="error-text">{error}</p>}
       {stats === null ? (
         <p className="muted">加载中…</p>
       ) : (
         <>
-          <div className="cards">
-            <div className="card">
-              <div className="card-value">{stats.turns}</div>
-              <div className="card-label">回合</div>
+          <div className="stat-cards">
+            <div className="stat-card">
+              <strong>{stats.turns}</strong>
+              <span>回合</span>
             </div>
-            <div className="card">
-              <div className="card-value">{stats.total_tokens}</div>
-              <div className="card-label">总 Token</div>
+            <div className="stat-card">
+              <strong>{stats.total_tokens}</strong>
+              <span>总 Token</span>
             </div>
-            <div className="card">
-              <div className="card-value">{costText(stats.total_cost)}</div>
-              <div className="card-label">成本（USD/CNY）</div>
+            <div className="stat-card">
+              <strong>{costText(stats.total_cost)}</strong>
+              <span>成本（USD / CNY）</span>
             </div>
-            <div className="card">
-              <div className="card-value">
+            <div className="stat-card">
+              <strong>
                 {stats.input_tokens} / {stats.output_tokens}
-              </div>
-              <div className="card-label">输入 / 输出</div>
+              </strong>
+              <span>输入 / 输出</span>
             </div>
           </div>
-          <h3>按模型</h3>
-          <table className="table">
+          <p className="detail-label">按模型</p>
+          <table className="data-table">
             <thead>
               <tr>
                 <th>模型</th>
@@ -104,8 +111,8 @@ export function UsageView({ active }: Props): JSX.Element {
               ))}
             </tbody>
           </table>
-          <h3>按来源</h3>
-          <table className="table">
+          <p className="detail-label">按来源</p>
+          <table className="data-table">
             <thead>
               <tr>
                 <th>来源</th>

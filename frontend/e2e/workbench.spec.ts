@@ -5,21 +5,21 @@
 //   1. bootstrap 认证流：#bootstrap= 一次性口令 → 片段抹除 → 门通过（并产生后续用例
 //      复用的已认证页面）
 //   2. 加载：静态托管 + React 挂载 + 无页面错误
+//   2.5 gate 粘贴换发（独立服务实例）：页内换发 → 可发任务（复审 F2 回归）
 //   3. 发起 turn：x-api-key 头通道（csrf 豁免，api.py:262-272）建线程 + 幂等 POST
 //      turn（x-request-id 重放同回执）+ 事件 seq 严格连续（state.replayEvents 折叠
 //      不抛 SequenceGap）
-//   4. 会话列表：默认 Tab 渲染服务端会话面
-//   5. 任务面板：任务 Tab 渲染任务面
+//   4. 会话列表：侧栏渲染工作会话/会话回放两组列表（2026-10-26 UI 重构后侧栏承载）
+//   5. 任务面板：侧栏入口切换到任务面
 //
 // 服务策略：起真服务 scripts/web_validation_server.py（A11/lane2 交付）；脚本或浏览器
 // 二进制缺失时整文件跳过并留说明（本地可选，CI 不强制）。turn 用例依赖离线 Demo
 // provider（无 key 端到端）：服务报「NEXUSCLI_API_KEY is not configured」时按未就绪
 // 跳过，不伪造通过。
 //
-// 现状断言说明：现有 App.tsx 无 cookie 探针——冷加载（即使带有效 cookie）恒显示
-// 引导门，认证态只存在于完成 fragment 换发的那个页面。因此用例 1 产生的已认证页面
-// 被用例 4/5 串行复用（kitagent 用 /status+storageState 的做法在本仓 API 面不可行）。
-// A12 的 useWorkbench 已实现 probeAuthorized 探针，接入 App 后可改为标准 storageState 流。
+// 2026-10-26 UI 重构（workbench-kitagent-ui）：App 已接入 useWorkbench 的
+// probeAuthorized 探针——带有效 cookie 的冷加载直接进工作台（用例 1 的页面继续
+// 被用例 4/5 复用）；无 cookie 冷加载显示认证门（用例 2），门上有粘贴换发入口。
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
@@ -197,17 +197,18 @@ async function stopServer(): Promise<void> {
 test("bootstrap 认证流：一次性口令换发并抹除片段", async ({ browser }) => {
   // 跨用例持久页面：Playwright 的 page fixture 每测试隔离、用例结束即销毁——
   // 串行 authedPage 交接必须用 browser fixture 自建 context（主会话收口修复）。
-  const context = await browser.newContext();
+  // 1440x900：侧栏在 ≥1280px 才常驻（kitagent 同款断点），默认 1280 贴着断线。
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   test.skip(!harnessReady, skipReason);
   test.skip(!servesWorkbench, uiSkipReason);
   await page.goto(`${origin}/#bootstrap=${bootstrapToken}`);
   // 换发后口令不得留在地址栏（kitagent 同款断言）
   await expect(page).not.toHaveURL(/bootstrap=/);
-  await expect(page.getByRole("heading", { name: "NexusCLI Workbench" })).toBeVisible();
-  // 门通过：引导文案消失，工作台主体（导航）渲染
-  await expect(page.getByText("请从服务启动日志打印的一键链接进入")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "会话", exact: true })).toBeVisible();
+  // 门通过：品牌侧栏与对话主面板渲染，认证门不再出现
+  await expect(page.locator(".brand strong")).toHaveText("NexusCLI");
+  await expect(page.locator(".gate-card")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "新建会话" })).toBeVisible();
   authedContext = page.context();
   authedPage = page;
 });
@@ -219,10 +220,101 @@ test("加载：静态托管 + React 挂载无页面错误", async ({ page }) => 
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(origin);
   await expect(page.getByRole("heading", { name: "NexusCLI Workbench" })).toBeVisible();
-  // 现状：App 无 cookie 探针，冷加载显示引导门（useWorkbench 的 probe-ready 待接入；
-  // 接入后此断言应改为工作台主体渲染）。
-  await expect(page.getByText("请从服务启动日志打印的一键链接进入")).toBeVisible();
+  // 无 cookie 冷加载 → 认证门（含粘贴换发入口，task_0006），无页面错误。
+  await expect(page.locator(".gate-card")).toBeVisible();
+  await expect(page.getByPlaceholder("粘贴一键链接或口令")).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+
+// 独立 spawn 一台 validation server（粘贴换发用例专用：一次性口令不能与用例 1 共享）。
+async function spawnServer(): Promise<{ origin: string; token: string; proc: ChildProcess }> {
+  const isolatedHome = mkdtempSync(path.join(tmpdir(), "nexuscli-e2e-paste-"));
+  const pythonArgv = process.env.NEXUSCLI_E2E_PYTHON
+    ? [process.env.NEXUSCLI_E2E_PYTHON, validationServer]
+    : ["uv", "run", "python", validationServer];
+  const proc = spawn(pythonArgv[0], pythonArgv.slice(1), {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      HOME: isolatedHome,
+      USERPROFILE: isolatedHome,
+      NEXUSCLI_RUNTIME_API_KEY: apiKey,
+    },
+    stdio: "pipe",
+    detached: true,
+  });
+  const ready = await new Promise<{ origin: string; token: string }>((resolve, reject) => {
+    let buffer = "";
+    const timer = setTimeout(() => reject(new Error("paste server 90s 内未就绪")), 90_000);
+    const onData = (chunk: Buffer): void => {
+      buffer += String(chunk);
+      for (const line of buffer.split("\n")) {
+        if (line.startsWith("READY ")) {
+          try {
+            const payload = JSON.parse(line.slice(6)) as { origin?: string; token?: string };
+            if (typeof payload.origin === "string" && typeof payload.token === "string") {
+              clearTimeout(timer);
+              resolve({ origin: payload.origin, token: payload.token });
+              return;
+            }
+          } catch {
+            /* 继续等 */
+          }
+        }
+      }
+    };
+    proc.stdout?.on("data", onData);
+    proc.stderr?.on("data", onData);
+    proc.once("exit", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`paste server 提前退出（code ${code}）`));
+    });
+  });
+  return { ...ready, proc };
+}
+
+async function stopProc(proc: ChildProcess): Promise<void> {
+  if (proc.exitCode !== null) return;
+  proc.stdin?.write("\n");
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => resolve(), 5_000);
+    proc.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+  if (proc.exitCode === null && proc.pid !== undefined) {
+    try {
+      process.kill(-proc.pid, "SIGTERM");
+    } catch {
+      /* 进程组可能已退出 */
+    }
+  }
+}
+
+test("gate 粘贴换发：页内换发成功后可发任务（复审 F2 回归）", async ({ browser }) => {
+  test.skip(!harnessReady, skipReason);
+  test.skip(!servesWorkbench, uiSkipReason);
+  const own = await spawnServer();
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${own.origin}/`);
+    await page
+      .getByPlaceholder("粘贴一键链接或口令")
+      .fill(`${own.origin}/#bootstrap=${own.token}`);
+    await page.getByRole("button", { name: "进入" }).click();
+    // 换发成功：门消失、工作台渲染；关键是 composer 回到默认占位符——
+    // reload 语义会落成「只读态（无 CSRF 凭证）」占位符并禁用发送。
+    await expect(page.locator(".gate-card")).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.locator(".brand strong")).toHaveText("NexusCLI");
+    await page.locator("textarea").first().fill("检查样例 Python 仓库。");
+    await expect(page.locator(".send-button")).toBeEnabled();
+  } finally {
+    await context.close();
+    await stopProc(own.proc);
+  }
 });
 
 test("发起 turn：幂等 POST + 审批门 + 事件 seq 严格连续", async () => {
@@ -352,11 +444,12 @@ test("会话列表：默认 Tab 渲染服务端会话面", async () => {
   test.skip(!servesWorkbench, uiSkipReason);
   test.skip(authedPage === null, "前置用例未产出已认证页面（bootstrap 认证流失败）。");
   const page = authedPage as Page;
-  // 已认证页面停在用例 1 的工作台首页（默认 Tab 即会话列表）
-  await expect(page.getByRole("heading", { name: "REPL 会话（服务端枚举）" })).toBeVisible();
-  // 服务端枚举面：空列表提示或表格二选一（取决于服务端会话库存量）
+  // 侧栏两组会话列表（工作会话 = 本浏览器线程记忆；会话回放 = 服务端枚举）
+  await expect(page.locator(".section-caption", { hasText: "工作会话" })).toBeVisible();
+  await expect(page.locator(".section-caption", { hasText: "会话回放" })).toBeVisible();
+  // 服务端枚举面：空列表提示或会话条目二选一（取决于服务端会话库存量）
   await expect(
-    page.getByText("当前项目没有已保存会话").or(page.locator("table.table")),
+    page.getByText("当前项目没有已保存会话").or(page.locator(".session-item")),
   ).toBeVisible();
 });
 
@@ -365,8 +458,8 @@ test("任务面板：任务 Tab 渲染任务面", async () => {
   test.skip(!servesWorkbench, uiSkipReason);
   test.skip(authedPage === null, "前置用例未产出已认证页面（bootstrap 认证流失败）。");
   const page = authedPage as Page;
-  await page.getByRole("button", { name: "任务", exact: true }).click();
+  await page.locator(".view-switch").getByRole("button", { name: "任务" }).click();
   await expect(page.getByText("每 2s 轮询 GET /v1/tasks", { exact: false })).toBeVisible();
   // 任务面：空列表提示或任务表格二选一
-  await expect(page.getByText("没有后台任务").or(page.locator("table.table"))).toBeVisible();
+  await expect(page.getByText("没有后台任务").or(page.locator("table.data-table"))).toBeVisible();
 });

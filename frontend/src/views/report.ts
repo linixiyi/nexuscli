@@ -1,4 +1,4 @@
-// 运行报告导出：markdown 组装纯函数（无副作用，DOM 下载在 TranscriptView 侧）。
+// 运行报告导出：markdown 组装纯函数（无副作用，DOM 下载在 ReplayView / Inspector 侧）。
 // Ported from kitagent src/agent_runtime/web/projection.py:346-380 report_markdown
 // （模式照搬：标题/元数据行 → 分节正文 → 末尾声明行「模型结论不代替检查证据」；
 // kitagent 按报告快照组装，此处按转录记录 + 用量台账行组装，输入全显式传参。）
@@ -94,5 +94,45 @@ export function exportReportMarkdown(
     }
   }
   lines.push("## 用量台账", "", usageTable(usage), "", "---", "", DECLARATION);
+  return `${lines.join("\n")}\n`;
+}
+
+// 线程运行报告导出（2026-10-26_workbench-kitagent-ui task_0004）：与
+// exportReportMarkdown 同一声明口径（DECLARATION），输入是 state.ts 语义事件流，
+// 派生共用 views/derive.ts（避免 Inspector ↔ report 循环依赖）。
+import type { WorkbenchEvent } from "../state";
+import { deriveReport, deriveTools } from "./derive";
+
+export function exportThreadReportMarkdown(
+  threadId: string,
+  events: WorkbenchEvent[],
+  generatedAt: string,
+): string {
+  const report = deriveReport(events);
+  if (report === null) {
+    return `# NexusCLI 线程报告\n\n线程：${threadId}\n\n（尚无完成回合）\n`;
+  }
+  const toolNames = [...new Set(deriveTools(events).map((tool) => tool.name))];
+  const lines = [
+    "# NexusCLI 线程运行报告",
+    "",
+    `线程：${threadId}`,
+    `生成时间：${generatedAt}`,
+    `执行模式：${report.mode || "react"}`,
+    "",
+    "## 模型结论",
+    "",
+    report.text || "（本轮没有已提交的最终答复）",
+    "",
+    "## 执行事实",
+    "",
+    `- 工具调用：${report.tools} 次${toolNames.length > 0 ? `（${toolNames.join("、")}）` : ""}`,
+    `- 人工决定：${report.approvals} 次`,
+    `- 累计 tokens：${report.tokens}`,
+    "",
+    "---",
+    "",
+    DECLARATION,
+  ];
   return `${lines.join("\n")}\n`;
 }

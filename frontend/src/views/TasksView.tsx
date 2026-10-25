@@ -1,9 +1,13 @@
 import type { JSX } from "react";
 import { useCallback, useEffect, useState } from "react";
+import { ListTodo } from "lucide-react";
 
 import { ApiError, cancelTask, listTasks } from "../api/client";
 import type { TaskRecord } from "../api/types";
+import { labels, StatusIcon } from "../components/StatusIcon";
 
+// 后台任务面板（2026-10-26_workbench-kitagent-ui task_0003 重绘：kitagent 无对应
+// 面板，用同一设计 token 重绘为 data-panel；轮询节奏与取消语义不变）。
 export function TasksView({ active }: { active: boolean }): JSX.Element {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -42,13 +46,24 @@ export function TasksView({ active }: { active: boolean }): JSX.Element {
   };
 
   return (
-    <div className="view">
+    <div className="data-panel">
+      <h2>
+        <ListTodo size={17} /> 后台任务
+      </h2>
       <p className="muted">每 2s 轮询 GET /v1/tasks；取消走 POST /v1/tasks/&#123;id&#125;/cancel</p>
-      {error !== null && <p className="error">{error}</p>}
+      {error !== null && <p className="error-text">{error}</p>}
       {tasks.length === 0 ? (
-        <p className="muted">没有后台任务</p>
+        <div className="panel-empty">
+          <ListTodo size={28} />
+          <h3>没有后台任务</h3>
+          <p>
+            经 Runtime API 提交的队列任务
+            <br />
+            会按 lease/heartbeat 在这里显示。
+          </p>
+        </div>
       ) : (
-        <table className="table">
+        <table className="data-table">
           <thead>
             <tr>
               <th>id</th>
@@ -64,15 +79,17 @@ export function TasksView({ active }: { active: boolean }): JSX.Element {
             {tasks.map((task) => (
               <tr key={task.id}>
                 <td>
-                  <button
-                    type="button"
-                    onClick={() => setExpanded(expanded === task.id ? null : task.id)}
-                  >
+                  <button type="button" onClick={() => setExpanded(expanded === task.id ? null : task.id)}>
                     {task.id}
                   </button>
                 </td>
                 <td>{task.mode}</td>
-                <td className={`status-${task.status}`}>{task.status}</td>
+                <td>
+                  <span className={`status-badge ${task.status}`}>
+                    <StatusIcon status={task.status} size={12} />
+                    {labels[task.status] ?? task.status}
+                  </span>
+                </td>
                 <td>{task.attempts}</td>
                 <td>{task.scope}</td>
                 <td>{task.updated_at}</td>
@@ -95,12 +112,28 @@ export function TasksView({ active }: { active: boolean }): JSX.Element {
             return null;
           }
           return (
-            <div className="detail">
-              <h3>{task.id}</h3>
-              <pre className="content">{task.prompt}</pre>
-              {task.result !== null && <pre className="content">{task.result}</pre>}
-              {task.error !== null && <pre className="content error">{task.error}</pre>}
-              <p className="muted">worker: {String(task.worker_id ?? "—")} · lease: {String(task.lease_expires_at ?? "—")}</p>
+            <div className="tool-detail">
+              <div className="detail-heading">
+                <strong>{task.id}</strong>
+                <span className={`badge ${task.status}`}>{task.status}</span>
+              </div>
+              <p className="detail-label">任务输入</p>
+              <pre>{task.prompt}</pre>
+              {task.result !== null && (
+                <>
+                  <p className="detail-label">结果</p>
+                  <pre>{task.result}</pre>
+                </>
+              )}
+              {task.error !== null && (
+                <>
+                  <p className="detail-label">错误</p>
+                  <pre>{task.error}</pre>
+                </>
+              )}
+              <p className="detail-meta">
+                worker: {String(task.worker_id ?? "—")} · lease: {String(task.lease_expires_at ?? "—")}
+              </p>
             </div>
           );
         })()}

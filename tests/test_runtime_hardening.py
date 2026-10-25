@@ -261,3 +261,38 @@ def test_missing_request_id_is_zero_adaptation(hardening_server) -> None:
 
     status, _, _ = _json(port, "GET", "/v1/tasks", headers=_auth(**{"x-request-id": "req-get"}))
     assert status == 200
+
+
+def test_workbench_link_file_written_with_0600(tmp_path) -> None:
+    """task_0006（2026-10-26_workbench-kitagent-ui）：一键链接落盘状态目录。
+
+    服务启动（--workbench）后 ~/.nexuscli/workbench-link.txt 必须存在、内容是
+    含当前端口与一次性口令的一键链接、权限 0600（文件内嵌一次性口令，等同凭证）。
+    HOME/USERPROFILE 由 tests/conftest.py 的 autouse fixture 重定向到临时目录。
+    """
+    from pathlib import Path
+
+    server = RuntimeApiServer(
+        cwd=str(tmp_path),
+        config=load_config(project_root=None),
+        api_key=KEY,
+        port=0,
+        workbench=True,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        link_path = Path.home() / ".nexuscli" / "workbench-link.txt"
+        deadline = time.monotonic() + 10
+        while not link_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert link_path.exists(), "workbench 启动后必须落盘一键链接文件"
+        content = link_path.read_text(encoding="utf-8").strip()
+        port = int(server._server.server_address[1])  # type: ignore[index]
+        assert content == (
+            f"http://127.0.0.1:{port}/#bootstrap={server.web_session.bootstrap_token}"
+        )
+        assert link_path.stat().st_mode & 0o777 == 0o600
+    finally:
+        server._stop.set()
+        thread.join(timeout=5)
