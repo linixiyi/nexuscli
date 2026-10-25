@@ -76,11 +76,11 @@ NexusCLI 的引擎。可移植的是它的**架构模式**——「一个 Core�
 
 ### 第 6 轮：回合级恢复与引擎合同
 
-- [ ] F10 ReAct 回合级 checkpoint 与断点续跑：主代理 ReAct 循环每轮后原子落盘（对话消息、
+- [x] F10 ReAct 回合级 checkpoint 与断点续跑：主代理 ReAct 循环每轮后原子落盘（对话消息、
       待处理工具调用、usage 基线），提供从 checkpoint 接续被中断回合的入口；与既有
       `/plan --resume`（计划级）并存并明确三套持久化（会话 JSONL / plan checkpoint /
       回合 checkpoint）的真相分工；fail-closed 依赖 F9 日志（`outcome_unknown` 的调用不自动重放）
-- [ ] F11 引擎结果合同统一：react / plan / team 的分发边界收敛为显式 EngineResult
+- [x] F11 引擎结果合同统一：react / plan / team 的分发边界收敛为显式 EngineResult
       （终态 | 挂起）类型合同，审批等待、协作式中断、预算耗尽成为一等挂起值而非异常或 None，
       错误带类型化错误码；为 F6 Web 审批与 F10 恢复提供统一语言；对齐 kitagent
       `RunOutcome | RunSuspension` 的 sum-type 形态

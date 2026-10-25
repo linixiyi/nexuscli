@@ -22,13 +22,13 @@
 
 ## 阶段二：F10 回合恢复
 
-- [ ] src/nexuscli/agent/turn_checkpoint.py：存储与列表
+- [x] src/nexuscli/agent/turn_checkpoint.py：存储与列表
   - depends-on: task_0001
   - boundary: 只新建 turn_checkpoint.py（~/.nexuscli/turn_checkpoints/<id>.json、temp+rename 原子写、
     cwd 过滤列表、损坏降级、schema version=1、载荷：checkpoint_id/run_id/cwd/model/provider/turn/
     messages/pending_tool_calls/usage_so_far/cost_so_far/created_at）+ tests/test_turn_checkpoint.py 存储用例
   - verify: `uv run python -m pytest -q tests/test_turn_checkpoint.py`
-- [ ] _run_react 双快照点 + /turn-resume 接线
+- [x] _run_react 双快照点 + /turn-resume 接线
   - depends-on: task_0003
   - boundary: 只改 agent.py（Agent 参数 turn_checkpoints opt-in，默认 False；两快照点：assistant tool_use
     入 messages 后执行前 / 轮末继续前；载荷含 run_id/usage 基线）与 entrypoints/repl.py（/turn-resume
@@ -38,11 +38,11 @@
 
 ## 阶段三：收口
 
-- [ ] 全量回归（CI 三步）
+- [x] 全量回归（CI 三步）
   - depends-on: task_0004
   - boundary: 不改产品文件；CI 三步；失败修复限于本包 boundary
   - verify: `uv run ruff check . && uv run ruff format --check . && uv run python -m pytest`
-- [ ] 计划同步：勾选 master F10/F11 + .spec/autorun/ 摘要
+- [x] 计划同步：勾选 master F10/F11 + .spec/autorun/ 摘要
   - depends-on: task_0005
   - boundary: 只改 master（F10/F11 置 [x]）与 .spec/autorun/ 摘要
   - verify: `grep -c "\[x\] F1[01] " .spec/plans/2026-10-25_workbench-and-readme/master.md`（期望输出 2）

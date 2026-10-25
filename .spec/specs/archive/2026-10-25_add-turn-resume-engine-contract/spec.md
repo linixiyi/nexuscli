@@ -36,9 +36,9 @@
 ## 3. 功能范围
 
 ### 3.1 核心功能（MVP）
-- [ ] F10 回合级 checkpoint 与断点续跑：turn_checkpoints 存储（原子写）+ _run_react 双快照点 +
+- [x] F10 回合级 checkpoint 与断点续跑：turn_checkpoints 存储（原子写）+ _run_react 双快照点 +
   /turn-resume（列出/接续：重建历史、沿用 run_id、usage 初值、pending 按 journal 重派）
-- [ ] F11 引擎结果合同：results.py（EngineResult sum type/三态挂起/错误码表/classify_error）+
+- [x] F11 引擎结果合同：results.py（EngineResult sum type/三态挂起/错误码表/classify_error）+
   agent/plan_execute/query_engine 接线 + SDK `*_result_async` 变体
 
 ### 3.2 扩展功能
@@ -74,13 +74,13 @@
 - 升级触发：若事件流协议（text_delta/tool_result/done/error 形状）被迫改动即升级并记录
 
 ## 6. 成功标准与验证方式
-- [ ] turn_checkpoint 存储：原子写、cwd 过滤列表、损坏降级、schema 版本 -> verify: task_0001
-- [ ] _run_react 双快照点：in-flight 快照含 pending 原始 id、轮末快照 pending 为空且覆盖 -> verify: task_0002
-- [ ] /turn-resume：列出候选；接续重建历史并沿用 run_id；pending 按 journal 分流（execute/reuse/outcome_unknown）-> verify: task_0003
-- [ ] EngineResult 合同：sum type/三态挂起/classify_error 码表；error 事件带 error_code -> verify: task_0004
-- [ ] SDK `*_result_async` 变体返回合同且既有 raise 语义不破 -> verify: task_0005
-- [ ] 全量回归（CI 三步）不破 -> verify: task_0006
-- [ ] master F10/F11 勾选、.spec/autorun/ 摘要写入 -> verify: task_0007
+- [x] turn_checkpoint 存储：原子写、cwd 过滤列表、损坏降级、schema 版本 -> verify: task_0001
+- [x] _run_react 双快照点：in-flight 快照含 pending 原始 id、轮末快照 pending 为空且覆盖 -> verify: task_0002
+- [x] /turn-resume：列出候选；接续重建历史并沿用 run_id；pending 按 journal 分流（execute/reuse/outcome_unknown）-> verify: task_0003
+- [x] EngineResult 合同：sum type/三态挂起/classify_error 码表；error 事件带 error_code -> verify: task_0004
+- [x] SDK `*_result_async` 变体返回合同且既有 raise 语义不破 -> verify: task_0005
+- [x] 全量回归（CI 三步）不破 -> verify: task_0006
+- [x] master F10/F11 勾选、.spec/autorun/ 摘要写入 -> verify: task_0006
 
 ## 7. 风险与约束
 - 风险点：_run_react 双快照点拖慢热路径 -> 每轮两次本地 JSON 覆盖写（同 plan_runs 量级），实测回归把关

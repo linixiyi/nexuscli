@@ -6,39 +6,40 @@
     "pkg-readme-layering",
     "pkg-workbench-mvp",
     "pkg-workbench-interaction",
-    "pkg-workbench-ci-docs"
+    "pkg-workbench-ci-docs",
+    "pkg-tool-journal"
   ],
   "execution_mode": "current",
   "feature_fingerprint": "7547acd9a3801597afd4b526bf5ff731fa438d24fbdc7464489a4cfc36e18869",
   "host": "zcode",
   "lifecycle": "active",
-  "max_rounds": 5,
+  "max_rounds": 7,
   "model": null,
   "model_control": "host",
   "permission_effective": "host",
   "plan_docs": [
     ".spec/plans/2026-10-25_workbench-and-readme/master.md"
   ],
-  "revision": 10,
-  "round": 5,
+  "revision": 12,
+  "round": 6,
   "schema_version": 3,
   "step": {
-    "id": "pkg-tool-journal",
+    "id": "pkg-turn-resume",
     "kind": "package",
     "outcome": "passed",
     "proof": {
-      "archive": ".spec/specs/archive/2026-10-25_add-tool-journal",
+      "archive": ".spec/specs/archive/2026-10-25_add-turn-resume-engine-contract",
       "archive_hashes": {
-        "completion-summary.md": "b951d378370f77d7607835ba1a0f86edf551d779872f796bbe47193d7620a68f",
-        "runs.jsonl": "02171629d2d466aaf4bf4cc092277f502bc9b22b81a6eecc7fef4e111db26193",
-        "spec.md": "79203fc471c1570ebc8ae3786ddd22ab3fd38844153d062800e82d84c9b0197b",
-        "tasks.md": "3542810ab44b86e7abbec81d8728aa3fe1c4e23d05127dda95dd76220d07397e"
+        "completion-summary.md": "45eb67ac70fd685a390b26b4e296b931e60575ff23e3743482b87c02ba36062c",
+        "runs.jsonl": "f0450075773a498016236242d03cc2332483f7f0cf2b666eac9b7dc35709fede",
+        "spec.md": "8b5bead83f562a744aed0bf5a6985ba535fe516b2c51c22639093a255de436a4",
+        "tasks.md": "f00d7172b948f4a6c734645f2078ee7c8bbef0455109dc8518b3fbf1b757f447"
       },
-      "slug": "2026-10-25_add-tool-journal"
+      "slug": "2026-10-25_add-turn-resume-engine-contract"
     },
-    "slug": "2026-10-25_add-tool-journal",
+    "slug": "2026-10-25_add-turn-resume-engine-contract",
     "status": "complete",
     "target": null
   },
-  "updated_at": "2026-10-25T05:37:52Z"
+  "updated_at": "2026-10-25T06:27:57Z"
 }
