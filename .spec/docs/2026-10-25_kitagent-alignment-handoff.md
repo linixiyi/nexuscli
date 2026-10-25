@@ -54,7 +54,7 @@
 exc.name 检查、checkpoint.py:56-60 二级关卡、pyproject extras 二级粒度、
 ensure_graph_available 启动早期快速失败、pytest marker 声明外部前提）。
 
-### 1. 可选依赖「四步套路」固化为仓库约定（建议写进 AGENTS.md）
+### 1. 可选依赖「四步套路」固化为仓库约定（✅ 已落地 AGENTS.md「可选依赖」节，2026-10-25）
 
 NexusCLI 已有两处同款雏形（read_file 的 pypdf 缺失返回安装指引、telemetry 未装全链路
 no-op），但未成文。任何未来的重可选能力（图编排、本地沙箱后端、新 provider SDK、
