@@ -37,7 +37,7 @@
 - [x] A8 SessionStore 哈希提交链 + 孤儿 tool_use 修剪（kitagent session/store.py:228,310）
 
 ### 第 3 轮：审批挂起语义（最大残留差距）
-- [ ] A9 审批异步化：approval_pending 生产者接线（审批回调改异步决策 → turn_checkpoint 落挂起态
+- [x] A9 审批异步化：approval_pending 生产者接线（审批回调改异步决策 → turn_checkpoint 落挂起态
   → 决策回传恢复；input_hash 防参数漂移）（kitagent graph/interrupts.py:20-113 语义剥离 LangGraph）
 
 ### 第 4 轮：实时推送与前端闭环

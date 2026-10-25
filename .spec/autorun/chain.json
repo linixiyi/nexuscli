@@ -3,7 +3,8 @@
   "chain_id": "autorun-20261025-kitagent-alignment",
   "client_surface": "desktop",
   "completed_step_ids": [
-    "pkg-alignment-quick-wins"
+    "pkg-alignment-quick-wins",
+    "pkg-approval-semantics"
   ],
   "execution_mode": "current",
   "feature_fingerprint": "638a1165309c15a8b56c8fa94aab0ff2935c13746cc2a985239420026a8e4166",
@@ -16,26 +17,16 @@
   "plan_docs": [
     ".spec/plans/2026-10-25_kitagent-alignment/master.md"
   ],
-  "revision": 4,
-  "round": 2,
+  "revision": 5,
+  "round": 3,
   "schema_version": 3,
   "step": {
-    "id": "pkg-approval-semantics",
+    "id": "pkg-approval-async",
     "kind": "package",
-    "outcome": "passed",
-    "proof": {
-      "archive": ".spec/specs/archive/2026-10-25_port-approval-semantics",
-      "archive_hashes": {
-        "completion-summary.md": "95e64fa312429577877c663399db6253e85eab413cf17d25fe1b548cb166b235",
-        "runs.jsonl": "d1454ee25ed5723ccf63723afec2fc6792ea74ebb9524eda39906796d5056d4b",
-        "spec.md": "12d405225bb93683ef2ec33583a6e9c7685d5dfdb92a2966d94360c1c3f15afa",
-        "tasks.md": "30576a796216898b348b7dbf5642e25f78ba23e0402b5e80379ac6e6bebdde4a"
-      },
-      "slug": "2026-10-25_port-approval-semantics"
-    },
-    "slug": "2026-10-25_port-approval-semantics",
-    "status": "complete",
+    "outcome": null,
+    "slug": "2026-10-25_port-approval-async",
+    "status": "active",
     "target": null
   },
-  "updated_at": "2026-10-25T11:49:19Z"
+  "updated_at": "2026-10-25T11:50:35Z"
 }
