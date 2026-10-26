@@ -47,10 +47,12 @@ type Props = {
   busy: boolean;
   canPost: boolean;
   disabledHint: string | null;
+  /** U4（2026-10-27_workbench-ux-iteration）：存在挂起审批（approvals 轮询非空）。 */
+  waitingApproval: boolean;
   onSend: (message: string, mode: ComposerMode) => Promise<boolean>;
 };
 
-export function ChatPanel({ workbench, busy, canPost, disabledHint, onSend }: Props): JSX.Element {
+export function ChatPanel({ workbench, busy, canPost, disabledHint, waitingApproval, onSend }: Props): JSX.Element {
   const threadId = workbench?.threadId ?? "";
   const draftKey = `nexuscli:draft:${threadId || "new"}`;
   const [draft, setDraft] = useState(() => sessionStorage.getItem(draftKey) ?? "");
@@ -191,7 +193,9 @@ export function ChatPanel({ workbench, busy, canPost, disabledHint, onSend }: Pr
         {busy && (
           <div className="run-inline running">
             <Radio size={14} className="spin" />
-            <span>执行中</span>
+            {/* U4：审批挂起期 turn 仍在途（busy 一刀切），但行动指令应指向审批，
+                不能谎报「执行中」（kitagent 有 approval 态区分）。 */}
+            <span>{waitingApproval ? "等待审批 · 请在右侧面板批准" : "执行中"}</span>
             <span className="muted">工具调用与审批在右侧面板</span>
           </div>
         )}

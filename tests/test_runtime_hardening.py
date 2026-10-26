@@ -18,6 +18,7 @@ import pytest
 
 from nexuscli.config import load_config
 from nexuscli.runtime.api import IDEMPOTENCY_CAPACITY, RuntimeApiServer
+from nexuscli.runtime.websession import WebSession
 from tests.test_runtime import _runtime_test_key
 
 KEY = _runtime_test_key()
@@ -296,3 +297,146 @@ def test_workbench_link_file_written_with_0600(tmp_path) -> None:
     finally:
         server._stop.set()
         thread.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# U2 csrf 重签（2026-10-27_workbench-ux-iteration）：持有效会话 cookie 重签
+# ---------------------------------------------------------------------------
+
+
+def _bootstrap_session(port: int, server: RuntimeApiServer) -> str:
+    """一次性口令换发会话，返回 Cookie 头值（name=value 形态）。"""
+
+    status, raw, _ = _json(
+        port,
+        "POST",
+        "/v1/workbench/bootstrap",
+        payload={"token": server.web_session.bootstrap_token},
+    )
+    assert status == 200
+    cookie_line = next(value for name, value in raw if name == "set-cookie")
+    return cookie_line.split(";")[0]
+
+
+def test_reissue_without_cookie_is_401(hardening_server) -> None:
+    """无有效会话 cookie 一律 401 且不泄露信息（bootstrap 前后一致、畸形 cookie 同罪）。"""
+
+    server, port = hardening_server
+    # bootstrap 前：无 cookie
+    status, _, payload = _json(port, "POST", "/v1/workbench/reissue-csrf", payload={})
+    assert status == 401
+    assert payload == {"error": "unauthorized"}
+    # bootstrap 后：仍无 cookie → 401
+    _bootstrap_session(port, server)
+    status, _, _ = _json(port, "POST", "/v1/workbench/reissue-csrf", payload={})
+    assert status == 401
+    # 畸形 cookie → 401
+    status, _, _ = _json(
+        port,
+        "POST",
+        "/v1/workbench/reissue-csrf",
+        headers={"cookie": "nexuscli_workbench=wrong"},
+        payload={},
+    )
+    assert status == 401
+
+
+def test_reissue_with_cookie_returns_current_csrf(hardening_server) -> None:
+    """持有效 cookie 重签 200：返回当前 csrf（收敛语义，不轮换）；响应不设新 cookie。"""
+
+    server, port = hardening_server
+    cookie = _bootstrap_session(port, server)
+    current_csrf = server.web_session.csrf
+
+    status, raw, payload = _json(
+        port,
+        "POST",
+        "/v1/workbench/reissue-csrf",
+        headers={"cookie": cookie},
+        payload={},
+    )
+    assert status == 200
+    assert payload["csrf"] == current_csrf  # 收敛：取回当前值，不生成新值
+    assert server.web_session.csrf == current_csrf
+    assert [name for name, _value in raw if name == "set-cookie"] == []  # 会话 cookie 不变
+    assert cookie == f"nexuscli_workbench={server.web_session.cookie}"
+
+    # 该 csrf 能过 cookie 通道 POST 的 CSRF 门（U2 的目的：刷新后恢复写能力）
+    status, _, _ = _json(
+        port,
+        "POST",
+        "/v1/threads",
+        headers={"cookie": cookie, "x-csrf-token": current_csrf},
+        payload={},
+    )
+    assert status == 200
+
+
+def test_reissue_converges_multi_tab(hardening_server) -> None:
+    """多标签页收敛回归（2026-10-27 复审）：第二标签页冷加载自动重签不得使已打开
+    旧标签页的 csrf 失效——「重签即替换」旧实现把旧标签页踢成 403 且无页内恢复
+    路径，只能刷新（刷新又轮掉对方，乒乓）。收敛语义：重签取回同一值。"""
+
+    server, port = hardening_server
+    cookie = _bootstrap_session(port, server)
+    old_tab_csrf = server.web_session.csrf
+
+    # 旧标签页以既有 csrf 正常发起变更
+    status, _, _ = _json(
+        port,
+        "POST",
+        "/v1/threads",
+        headers={"cookie": cookie, "x-csrf-token": old_tab_csrf},
+        payload={},
+    )
+    assert status == 200
+
+    # 第二标签页冷加载 → 自动重签
+    status, _, payload = _json(
+        port, "POST", "/v1/workbench/reissue-csrf", headers={"cookie": cookie}, payload={}
+    )
+    assert status == 200
+    assert payload["csrf"] == old_tab_csrf  # 收敛：与旧标签页同值，服务端值未替换
+
+    # 旧标签页的后续变更不受影响（回归断言：修复前这里是 403）
+    status, _, payload = _json(
+        port,
+        "POST",
+        "/v1/threads",
+        headers={"cookie": cookie, "x-csrf-token": old_tab_csrf},
+        payload={},
+    )
+    assert status == 200
+    assert "error" not in payload
+
+
+def test_reissue_rejects_api_key_channel_without_cookie(hardening_server) -> None:
+    """api_key 头通道对此端点无意义：无 cookie 时仍 401（重签只认 cookie 会话）。"""
+
+    server, port = hardening_server
+    assert _bootstrap_session(port, server)
+    status, _, payload = _json(
+        port, "POST", "/v1/workbench/reissue-csrf", headers=_auth(), payload={}
+    )
+    assert status == 401
+    assert payload == {"error": "unauthorized"}
+
+
+def test_web_session_reissue_unit() -> None:
+    """WebSession.reissue 单元：compare_digest 口径的 cookie 比对 + 收敛（不轮换）。"""
+
+    session = WebSession()
+    original = session.csrf
+    # 未 bootstrap / 缺失 / 空值 / 错值 → None 且不泄露 csrf
+    assert session.reissue(None) is None
+    assert session.reissue("") is None
+    assert session.reissue("wrong") is None
+    assert session.csrf == original
+
+    assert session.bootstrap(session.bootstrap_token) is not None
+    reissued = session.reissue(session.cookie)
+    assert reissued is not None
+    assert reissued == original == session.csrf  # 收敛：同一值，不生成新值
+    assert session.csrf_matches(original)  # 旧标签页持有的值仍有效（多标签页收敛）
+    assert session.reissue(session.cookie) == original  # 重复重签仍收敛同一值
+    assert session.reissue("wrong") is None  # 重签后错 cookie 仍拒绝

@@ -63,6 +63,7 @@ uv run nexuscli worker --workers 2 --cwd .
 | --- | --- | --- | --- |
 | GET | `/` | 免鉴权（仅 --workbench） | 工作台静态资源 / SPA 回退 / 空态页（匹配非 /v1/* 的 GET） |
 | POST | `/v1/workbench/bootstrap` | 一次性口令 | 口令一次性换发 HttpOnly cookie 会话与 x-csrf-token |
+| POST | `/v1/workbench/reissue-csrf` | cookie 会话 | 凭有效会话 cookie 取回当前 x-csrf-token（无 cookie 401；不轮换，多标签页收敛） |
 | POST | `/v1/threads` | api_key / cookie+csrf | 创建线程，返回 {id} |
 | POST | `/v1/threads/{thread_id}/turns` | api_key / cookie+csrf | 同步执行一个 turn（mode=react/plan/team），完成前阻塞 |
 | GET | `/v1/threads/{thread_id}/events/stream` | api_key / cookie / api_key 查询参数 | SSE 事件流：回放 + 实时 + 15s 心跳（?since=N 续传，16 连接上限） |
@@ -97,6 +98,15 @@ uv run nexuscli worker --workers 2 --cwd .
   头（bootstrap 响应体返回，前端存内存不落 localStorage）——cookie 自动携带挡不住
   跨源伪造，csrf 补上这一刀；api_key 通道豁免（外部程序没有 cookie，凭证本身就是
   凭据）。
+- **csrf 重签（`POST /v1/workbench/reissue-csrf`）**：一次性的只有 bootstrap 口令，
+  csrf 是会话级衍生秘密，丢了可重签。浏览器刷新会丢掉内存里的 csrf 副本（cookie
+  不受影响），前端探测到「cookie 有效但无 csrf」时自动调本端点：持有效会话 cookie
+  即返回 `{"csrf": <当前值>}`，**不轮换**（多标签页收敛：第二标签页冷加载重签取回
+  同一值，不会把已打开标签页持有的 csrf 踢成 403——2026-10-27 复审修复；任何时刻
+  服务端恰有一个 csrf，单值语义不变），会话 cookie 本身不变——刷新后无需重开口令
+  即恢复写能力。无有效 cookie（如服务重启清会话）一律 401 且不泄露任何信息，前端
+  回落认证门流程；api_key 头通道对本端点无效（重签的信任根就是会话 cookie）。实现见
+  `websession.py` 的 `WebSession.reissue`。
 - **Origin 白名单**：`/v1/*` 上任何带 `Origin` 头且来源非本机回环的请求一律 403，
   且先于凭证判断（无凭证也拒绝跨源探测）；无 `Origin` 的 curl 等非浏览器客户端
   不受影响。

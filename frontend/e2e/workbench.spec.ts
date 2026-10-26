@@ -1,16 +1,18 @@
 // workbench.spec.ts：Playwright e2e 基线（A12，用例编排 Ported from kitagent (MIT,
 // zed123214/kitagent) frontend/e2e/workbench.spec.ts，服务与断言适配 NexusCLI Runtime API）。
 //
-// 5 条基线用例（serial 模式，前序失败则后续跳过）：
+// 基线用例（serial 模式，前序失败则后续跳过）：
 //   1. bootstrap 认证流：#bootstrap= 一次性口令 → 片段抹除 → 门通过（并产生后续用例
 //      复用的已认证页面）
 //   2. 加载：静态托管 + React 挂载 + 无页面错误
 //   2.5 gate 粘贴换发（独立服务实例）：页内换发 → 可发任务（复审 F2 回归）
+//   2.6 U1 回归（独立服务实例）：坏口令就地报错 + 表单可重试（2026-10-27 UX 实测）
+//   2.7 U2 回归：刷新后 csrf 自动重签恢复可写（2026-10-27 UX 实测）
 //   3. 发起 turn：x-api-key 头通道（csrf 豁免，api.py:262-272）建线程 + 幂等 POST
 //      turn（x-request-id 重放同回执）+ 事件 seq 严格连续（state.replayEvents 折叠
 //      不抛 SequenceGap）
 //   4. 会话列表：侧栏渲染工作会话/会话回放两组列表（2026-10-26 UI 重构后侧栏承载）
-//   5. 任务面板：侧栏入口切换到任务面
+//   5. 任务/用量面板：副标题用户文案（U7 断言同步，2026-10-27 UX 实测）
 //
 // 服务策略：起真服务 scripts/web_validation_server.py（A11/lane2 交付）；脚本或浏览器
 // 二进制缺失时整文件跳过并留说明（本地可选，CI 不强制）。turn 用例依赖离线 Demo
@@ -317,6 +319,69 @@ test("gate 粘贴换发：页内换发成功后可发任务（复审 F2 回归�
   }
 });
 
+// 2026-10-27_workbench-ux-iteration U1 回归：坏口令曾把 Gate 卡死在 bootstrapping
+// 分支（redeem 失败不还原 auth phase），整页无错误信息、无重试入口。
+// 独立 spawn 一台 server：坏口令尝试不烧真口令，但重试走同一台的一次性口令。
+test("U1 回归：坏口令就地报错，表单保留可重试", async ({ browser }) => {
+  test.skip(!harnessReady, skipReason);
+  test.skip(!servesWorkbench, uiSkipReason);
+  const own = await spawnServer();
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${own.origin}/`);
+    const input = page.getByPlaceholder("粘贴一键链接或口令");
+    await input.fill("wrong-token-abc");
+    await page.getByRole("button", { name: "进入" }).click();
+    // 错误就地可见（不再卡「正在完成一次性认证…」），且输入框仍在可重试
+    await expect(page.locator(".gate-error")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".gate-error")).toContainText("口令无效或已被使用");
+    await expect(input).toBeVisible();
+    // 用同一表单填正确口令 → 进入工作台
+    await input.fill(`${own.origin}/#bootstrap=${own.token}`);
+    await page.getByRole("button", { name: "进入" }).click();
+    await expect(page.locator(".gate-card")).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.locator(".brand strong")).toHaveText("NexusCLI");
+  } finally {
+    await context.close();
+    await stopProc(own.proc);
+  }
+});
+
+// 2026-10-27_workbench-ux-iteration U2 回归：csrf 仅内存，刷新后曾落成「只读死局」
+// （composer 禁用，一键链接已烧）。修复后 initialize 探测 cookie 有效即自动重签。
+test("U2 回归：刷新后 csrf 自动重签恢复可写，且重签 csrf 能真发变更请求", async () => {
+  test.skip(!harnessReady, skipReason);
+  test.skip(!servesWorkbench, uiSkipReason);
+  test.skip(authedPage === null, "前置用例未产出已认证页面（bootstrap 认证流失败）。");
+  const page = authedPage as Page;
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator(".brand strong")).toHaveText("NexusCLI", { timeout: 20_000 });
+  // 只读死局回归断言：修复前 send-button 恒 disabled 且占位符变「只读态」提示
+  await page.locator("textarea").first().fill("刷新后可写性检查");
+  await expect(page.locator(".send-button")).toBeEnabled({ timeout: 10_000 });
+  // 端到端一跳补齐（2026-10-27 复审）：可写性不止于前端 canPost——用重签恢复的
+  // csrf 经 UI 真发一次变更请求（startTurn 先 POST /v1/threads 建线程），服务端 200
+  // 才算端到端恢复（服务端半边由 test_reissue_with_cookie_returns_current_csrf 的
+  // 真实 POST /v1/threads 在单测层覆盖）。
+  const createThreadStatuses: number[] = [];
+  page.on("response", (response) => {
+    if (
+      new URL(response.url()).pathname === "/v1/threads" &&
+      response.request().method() === "POST"
+    ) {
+      createThreadStatuses.push(response.status());
+    }
+  });
+  await page.locator(".send-button").click();
+  // 线程创建成功 → selectThread 把 hash 切到新线程；403 会停留在原视图并出
+  // 「创建线程失败：csrf token missing or invalid」notice。
+  await expect(page).toHaveURL(/#\/threads\/thread_/, { timeout: 15_000 });
+  expect(createThreadStatuses).toEqual([200]);
+  // 重签 csrf 被服务端拒收的任何形态（建线程 403 或后续 turn POST 403）都不允许出现
+  await expect(page.getByText(/csrf token missing or invalid/)).toHaveCount(0);
+});
+
 test("发起 turn：幂等 POST + 审批门 + 事件 seq 严格连续", async () => {
   test.skip(!harnessReady, skipReason);
   // x-api-key 头通道（外部自动化通道，csrf 豁免；浏览器 cookie 通道的 UI 提交
@@ -447,19 +512,28 @@ test("会话列表：默认 Tab 渲染服务端会话面", async () => {
   // 侧栏两组会话列表（工作会话 = 本浏览器线程记忆；会话回放 = 服务端枚举）
   await expect(page.locator(".section-caption", { hasText: "工作会话" })).toBeVisible();
   await expect(page.locator(".section-caption", { hasText: "会话回放" })).toBeVisible();
-  // 服务端枚举面：空列表提示或会话条目二选一（取决于服务端会话库存量）
+  // 服务端枚举面：空列表提示或会话条目二选一（取决于服务端会话库存量）。
+  // .first()：两组列表并存——工作会话有条目时会话回放仍可显示空态提示，
+  // .or() 会解析出两个可见元素，严格模式要求取其一（U2 回归用例真实发送后必现）。
   await expect(
-    page.getByText("当前项目没有已保存会话").or(page.locator(".session-item")),
+    page
+      .getByText("当前项目没有已保存会话")
+      .or(page.locator(".session-item"))
+      .first(),
   ).toBeVisible();
 });
 
-test("任务面板：任务 Tab 渲染任务面", async () => {
+test("任务/用量面板：副标题为用户文案（U7 同步）", async () => {
   test.skip(!harnessReady, skipReason);
   test.skip(!servesWorkbench, uiSkipReason);
   test.skip(authedPage === null, "前置用例未产出已认证页面（bootstrap 认证流失败）。");
   const page = authedPage as Page;
   await page.locator(".view-switch").getByRole("button", { name: "任务" }).click();
-  await expect(page.getByText("每 2s 轮询 GET /v1/tasks", { exact: false })).toBeVisible();
+  // U7：副标题改用户视角文案（旧文案「每 2s 轮询 GET /v1/tasks」是实现细节，不进界面）
+  await expect(page.getByText("后台队列任务实时刷新，可在此取消", { exact: true })).toBeVisible();
   // 任务面：空列表提示或任务表格二选一
   await expect(page.getByText("没有后台任务").or(page.locator("table.data-table"))).toBeVisible();
+  await page.locator(".view-switch").getByRole("button", { name: "用量" }).click();
+  // U7：用量副标题同样用户化（旧文案「GET /v1/usage/summary（= UsageStore.stats 原样）」）
+  await expect(page.getByText("近 7 天回合、Token 与成本汇总", { exact: false })).toBeVisible();
 });

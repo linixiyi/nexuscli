@@ -78,7 +78,9 @@ export function ApprovalCard({ approval, scopeLabel, onResolved }: Props): JSX.E
           批准
         </button>
       </div>
-      <p className="detail-meta">挂起于 {new Date(approval.created_at).toLocaleString()}</p>
+      {/* U5：显式 zh-CN——无参 toLocaleString 跟随浏览器默认，en-US 环境泄漏
+          「10/26/2026, 5:37:13 PM」格式（2026-10-27 实测 U5）。 */}
+      <p className="detail-meta">挂起于 {new Date(approval.created_at).toLocaleString("zh-CN")}</p>
     </div>
   );
 }

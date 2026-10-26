@@ -50,7 +50,8 @@ export function TasksView({ active }: { active: boolean }): JSX.Element {
       <h2>
         <ListTodo size={17} /> 后台任务
       </h2>
-      <p className="muted">每 2s 轮询 GET /v1/tasks；取消走 POST /v1/tasks/&#123;id&#125;/cancel</p>
+      {/* U7（2026-10-27 实测）：副标题是用户文案，端点与轮询细节不进产品界面 */}
+      <p className="muted">后台队列任务实时刷新，可在此取消</p>
       {error !== null && <p className="error-text">{error}</p>}
       {tasks.length === 0 ? (
         <div className="panel-empty">

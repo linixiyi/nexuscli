@@ -210,6 +210,31 @@ async function probeAuthorized(): Promise<boolean> {
   }
 }
 
+/**
+ * U2（2026-10-27_workbench-ux-iteration）csrf 重签：凭有效会话 cookie 取回当前 csrf
+ * （无体 POST；服务端只认 cookie 会话通道，401 = cookie 已失效）。
+ * csrf 只存内存（F15 有意），刷新后本页是「cookie 只读」态——重签是唯一的页内恢复通道。
+ * 服务端为收敛语义（2026-10-27 复审修复：重签不轮换）——多标签页/多次刷新取回同一
+ * 值，本页重签不会使其他已打开标签页的 csrf 失效。
+ */
+type ReissueOutcome = { kind: "ok"; csrf: string } | { kind: "failed"; status: number };
+
+async function reissueCsrf(): Promise<ReissueOutcome> {
+  try {
+    const response = await fetch("/v1/workbench/reissue-csrf", { method: "POST" });
+    if (!response.ok) {
+      return { kind: "failed", status: response.status };
+    }
+    const payload = (await response.json()) as { csrf?: unknown };
+    if (typeof payload.csrf === "string" && payload.csrf !== "") {
+      return { kind: "ok", csrf: payload.csrf };
+    }
+    return { kind: "failed", status: response.status };
+  } catch {
+    return { kind: "failed", status: 0 };
+  }
+}
+
 /** 一次性口令换发（自持请求：需要拿到 csrf 响应体；client.ts 的封装不透出）。 */
 async function bootstrapExchange(token: string): Promise<string> {
   const response = await fetch("/v1/workbench/bootstrap", {
@@ -409,6 +434,23 @@ export function useWorkbench(): {
       const authorized = await probeAuthorized();
       if (!live) return;
       if (authorized) {
+        // U2：cookie 有效但 csrf 仅内存（刷新/第二标签页冷加载）→ 自动重签恢复可写。
+        // 服务端重签是收敛语义（返回当前值不轮换，2026-10-27 复审修复）：第二标签页
+        // 冷加载重签不会使已打开旧标签页的 csrf 失效，多标签页各自恢复互不破坏。
+        // 401（cookie 已失效，如服务重启清会话）→ 回 waiting 走 gate 自救（规格 §7
+        // 风险缓解：不掩盖真只读场景）；其他失败（端点缺失/网络抖动）→ 维持原
+        // 只读就绪态（canPost=false），不阻断浏览。
+        if (csrfRef.current === null) {
+          const reissue = await reissueCsrf();
+          if (!live) return;
+          if (reissue.kind === "ok") {
+            csrfRef.current = reissue.csrf;
+            setCsrfToken(reissue.csrf);
+          } else if (reissue.status === 401) {
+            setAuth({ phase: "waiting" });
+            return;
+          }
+        }
         setAuth({ phase: "ready", canPost: csrfRef.current !== null });
         const record = loadPendingRecord();
         if (record !== null) {
@@ -442,20 +484,28 @@ export function useWorkbench(): {
   const redeem = useCallback(
     async (token: string): Promise<void> => {
       setAuth({ phase: "bootstrapping" });
-      const csrf = await bootstrapExchange(token);
-      csrfRef.current = csrf;
-      setCsrfToken(csrf);
-      const authorized = await probeAuthorized();
-      if (authorized) {
-        setAuth({ phase: "ready", canPost: true });
-        const record = loadPendingRecord();
-        if (record !== null) {
-          pendingRef.current = record;
-          setPending(record);
-          void resolvePending(record, false);
+      try {
+        const csrf = await bootstrapExchange(token);
+        csrfRef.current = csrf;
+        setCsrfToken(csrf);
+        const authorized = await probeAuthorized();
+        if (authorized) {
+          setAuth({ phase: "ready", canPost: true });
+          const record = loadPendingRecord();
+          if (record !== null) {
+            pendingRef.current = record;
+            setPending(record);
+            void resolvePending(record, false);
+          }
+        } else {
+          setAuth({ phase: "waiting" });
         }
-      } else {
+      } catch (cause) {
+        // U1（2026-10-27_workbench-ux-iteration）：换发失败必须还原 waiting 态，
+        // 否则 Gate 停在 bootstrapping 分支——错误信息与重试表单都被吞掉
+        // （坏口令卡死「正在完成一次性认证…」）。错误原样上抛由 Gate 就地呈现。
         setAuth({ phase: "waiting" });
+        throw cause;
       }
     },
     [resolvePending],
@@ -573,11 +623,27 @@ export function useWorkbench(): {
     setWorkbench(state);
     setStreamState("connecting");
     setStreamError(null);
+    // 连接代际号（2026-10-27 复审修复——SSE 僵尸流泄漏）：connect 每次自增；已落后
+    // 代际的旧链路（超时重连定时器与被 abort 流的 catch 双触发过）只 abort 自己并
+    // 退出，不得再建连接或调度重连。没有这道闸，一条链路会分裂成多条并发 SSE 流：
+    // 每条流占死一个浏览器 per-host socket（SSE 响应永不结束），泄漏 6 条即耗尽
+    // Chromium 连接池上限，页面此后任何导航（如 journey step10 的 reload）永久排队
+    // ——这正是 journey 首跑 step10 reload 30s 超时、复跑随机的根因。
+    let connectGen = 0;
+
+    const clearRetryTimer = (): void => {
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
 
     const scheduleReconnect = (reason: string): void => {
       if (stopped) return;
       setStreamState("reconnecting");
       setStreamError(reason);
+      // 重设前必须清掉旧定时器：丢失句柄的旧定时器仍会触发，造成双连接。
+      clearRetryTimer();
       retryTimer = setTimeout(connect, Math.min(500 * 2 ** attempt, 8000));
       attempt += 1;
     };
@@ -585,11 +651,13 @@ export function useWorkbench(): {
     /** 断档重拉快照：重建状态 + since=0 全量回放（kitagent publish 捕获异常同位）。 */
     const resync = (reason: string): void => {
       if (stopped) return;
+      connectGen += 1; // 本链路作废：abort 后其 catch 落后代际，不再重复调度
       state = initialWorkbenchState(threadId);
       since = 0;
       setWorkbench(state);
       setStreamState("reconnecting");
       setStreamError(`${reason}；正在重拉快照。`);
+      clearRetryTimer();
       controller?.abort();
       retryTimer = setTimeout(connect, Math.min(500 * 2 ** attempt, 8000));
       attempt += 1;
@@ -613,12 +681,18 @@ export function useWorkbench(): {
 
     const connect = (): void => {
       if (stopped) return;
-      controller = new AbortController();
+      clearRetryTimer();
+      const gen = ++connectGen;
+      const ctl = new AbortController();
+      controller = ctl;
       fetch(`/v1/threads/${encodeURIComponent(threadId)}/events/stream?since=${since}`, {
-        signal: controller.signal,
+        signal: ctl.signal,
       })
         .then(async (response) => {
-          if (stopped) return;
+          if (stopped || gen !== connectGen) {
+            ctl.abort();
+            return;
+          }
           if (response.status === 404) {
             // 线程不存在（实例已重启/清库）：终态错误，不无限重连。
             setStreamState("error");
@@ -628,12 +702,16 @@ export function useWorkbench(): {
           if (!response.ok || response.body === null) {
             throw new Error(`HTTP ${response.status}`);
           }
+          // U3：连接（重）建立即清错——重连原因是瞬态，不得在 error-banner 常驻
+          // （空闲期无帧可达，清错必须挂在建连而非收帧）；终态 404 在上方提前
+          // 返回，错误保持呈现。
+          setStreamError(null);
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           let buffer = "";
           for (;;) {
             const { done, value } = await reader.read();
-            if (done || stopped) break;
+            if (done || stopped || gen !== connectGen) break;
             buffer += decoder.decode(value, { stream: true });
             const boundary = buffer.lastIndexOf("\n\n");
             if (boundary < 0) continue;
@@ -641,13 +719,13 @@ export function useWorkbench(): {
             buffer = buffer.slice(boundary + 2);
             for (const frame of parseSseFrames(complete)) {
               applyFrame(frame);
-              if (stopped) return;
+              if (stopped || gen !== connectGen) return;
             }
           }
-          if (!stopped) scheduleReconnect("连接关闭");
+          if (!stopped && gen === connectGen) scheduleReconnect("连接关闭");
         })
         .catch((cause: unknown) => {
-          if (stopped) return;
+          if (stopped || gen !== connectGen) return;
           scheduleReconnect(cause instanceof Error ? cause.message : String(cause));
         });
     };

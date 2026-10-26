@@ -207,6 +207,14 @@ export function App(): JSX.Element {
             </button>
           </div>
         )}
+        {route.kind === "thread" && wb.streamError !== null && (
+          // U3（2026-10-27_workbench-ux-iteration）：线程不存在/连接错误必须有显著
+          // 呈现位——此前只进状态栏小字（「连接断开」），页面安静地显示欢迎页。
+          <div className="error-banner" role="alert">
+            <span>{wb.streamError}</span>
+            <button onClick={() => navigate({ kind: "empty" })}>返回新建会话</button>
+          </div>
+        )}
         <div className="workspace">
           {route.kind === "tasks" && <TasksView active />}
           {route.kind === "usage" && <UsageView active />}
@@ -218,6 +226,7 @@ export function App(): JSX.Element {
                 busy={wb.busy}
                 canPost={canPost}
                 disabledHint={disabledHint}
+                waitingApproval={approvals.length > 0}
                 onSend={wb.startTurn}
               />
               {route.kind === "thread" && (

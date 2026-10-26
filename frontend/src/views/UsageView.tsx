@@ -50,8 +50,9 @@ export function UsageView({ active }: Props): JSX.Element {
       <h2>
         <BarChart3 size={17} /> 用量统计
       </h2>
+      {/* U7（2026-10-27 实测）：副标题是用户文案；价格表缺失的口径说明保留（用户相关） */}
       <p className="muted">
-        GET /v1/usage/summary（= UsageStore.stats 原样）；未配置价格表时成本恒为 0，以供应商返回的实际 Token 为准
+        近 {days} 天回合、Token 与成本汇总；未配置价格表时成本恒为 0，以供应商返回的实际 Token 为准
       </p>
       <div className="check-row">
         {WINDOWS.map((value) => (
