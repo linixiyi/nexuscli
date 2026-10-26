@@ -59,6 +59,8 @@
 /snapshot save [label]
 /snapshot clean
 /restore <snapshot-id-or-index>
+/turn-resume
+/turn-resume <checkpoint-id>
 ```
 
 ## /model 交互式模型选择器

@@ -120,3 +120,45 @@ def test_existing_world_readable_log_is_tightened_on_append(tmp_path: Path) -> N
         cwd=str(tmp_path),
     )
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_bearer_and_jwt_in_command_strings_are_masked(tmp_path):
+    """夜间③ P2-8：bash command 串里的 Bearer/JWT 不在任何敏感键下，必须值级掩码。"""
+    from nexuscli.policy.audit_log import AuditLog
+
+    jwt = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+        "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+    )
+    log = AuditLog(tmp_path / "audit.jsonl")
+    log.record(
+        tool_name="bash",
+        input_data={
+            "command": f"curl -sS -H 'Authorization: Bearer {jwt}' https://api.example.com/v1/me"
+        },
+        outcome="success",
+        approver="hitl",
+        cwd=str(tmp_path),
+    )
+    line = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert jwt not in line
+    assert "eyJ" not in line
+    assert "Bearer ***" in line
+
+
+def test_plain_words_are_not_masked(tmp_path):
+    """掩码正则不得误伤普通命令文本（长度/三段式约束的反例）。"""
+    from nexuscli.policy.audit_log import AuditLog
+
+    log = AuditLog(tmp_path / "audit.jsonl")
+    command = "echo bearer authentication docs && cat readme.md"
+    log.record(
+        tool_name="bash",
+        input_data={"command": command},
+        outcome="success",
+        approver="readonly-rule",
+        cwd=str(tmp_path),
+    )
+    line = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert command in line

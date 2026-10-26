@@ -151,3 +151,27 @@ def test_task_workers_do_not_consume_another_project_scope(tmp_path):
     assert claimed_a is not None and claimed_a.id == task_a
     assert claimed_b is not None and claimed_b.id == task_b
     assert claimed_a.scope != claimed_b.scope
+
+
+def test_poison_task_fails_after_max_recovery_attempts(tmp_path):
+    """夜间③ P2-19：worker 硬死亡的任务靠租约恢复重派，超过上限必须转 failed，
+    不能无限占用 worker 槽位。"""
+    manager = DurableTaskManager(tmp_path / "tasks.db")
+    task_id = manager.add("doomed work")
+
+    first = manager.claim_next("worker-1", lease_seconds=-1)
+    assert first is not None and first.attempts == 1
+
+    # 每轮：worker 拿到任务后硬死亡（lease 已过期），恢复路径重派。
+    for round_index in range(4):
+        assert manager.requeue_expired() == 1
+        next_task = manager.claim_next(f"worker-{round_index}", lease_seconds=-1)
+        assert next_task is not None
+        assert next_task.attempts == round_index + 2
+
+    # attempts 已到上限(5)：恢复路径必须清出而不是继续重派。
+    manager.requeue_expired()
+    task = manager.get(task_id)
+    assert task is not None
+    assert task.status == "failed"
+    assert "max recovery attempts" in (task.error or "")
