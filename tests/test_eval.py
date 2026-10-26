@@ -82,13 +82,17 @@ def test_builtin_eval_dir_ships_the_builtin_scenarios():
     assert eval_dir is not None
     scenarios = load_eval_scenarios(eval_dir)
     names = [scenario.name for scenario in scenarios]
-    assert len(names) == 5
+    assert len(names) == 9
     assert set(names) == {
         "read-task-details",
         "denied-privileged-call",
         "multi-turn-search-converge",
         "repeat-call-loop-guard",
         "memory-recall-target-first",
+        "refund-policy-multiturn",
+        "dinner-booking-clarify",
+        "memory-recall-entity-noise",
+        "memory-recall-temporal-future",
     }
 
 
@@ -183,7 +187,7 @@ def test_all_builtin_scenarios_pass_offline(tmp_path):
     results = run_eval_scenarios(scenarios, cwd=str(tmp_path))
 
     assert [result.passed for result in results] == [True] * len(scenarios)
-    assert len(results) == 5
+    assert len(results) == 9
     assert all(result.failure_reasons == [] for result in results)
 
 
@@ -422,6 +426,10 @@ def test_eval_list_lists_builtin_scenarios():
     assert "denied-privileged-call" in result.output
     assert "multi-turn-search-converge" in result.output
     assert "memory-recall-target-first" in result.output
+    assert "refund-policy-multiturn" in result.output
+    assert "dinner-booking-clarify" in result.output
+    assert "memory-recall-entity-noise" in result.output
+    assert "memory-recall-temporal-future" in result.output
 
 
 def test_eval_run_writes_report_and_exits_zero(tmp_path):
@@ -429,11 +437,11 @@ def test_eval_run_writes_report_and_exits_zero(tmp_path):
 
     assert result.exit_code == 0
     assert "PASS\tread-task-details" in result.output
-    assert "total=5 passed=5 failed=0" in result.output
+    assert "total=9 passed=9 failed=0" in result.output
     report_path = tmp_path / REPORT_RELATIVE
     assert report_path.is_file()
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["summary"]["total"] == 5
+    assert report["summary"]["total"] == 9
     assert all(entry["comparison"]["verdict"] == "new" for entry in report["scenarios"])
 
 

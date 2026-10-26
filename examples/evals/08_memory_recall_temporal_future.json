@@ -1,0 +1,28 @@
+{
+  "name": "memory-recall-temporal-future",
+  "description": "Memory recall eval: a future plan must outrank same-topic past events when the query asks when something will happen (temporal-layer mismatch scales the past rows down)",
+  "memory_eval": {
+    "seed": [
+      {"content": "the queue service moves to ivory cluster node 1", "importance": 0.9, "temporal_kind": "past_event"},
+      {"content": "the queue service moves to ivory cluster node 2", "importance": 0.9, "temporal_kind": "past_event"},
+      {"content": "the queue service moves to ivory cluster node 3", "importance": 0.9, "temporal_kind": "past_event"},
+      {"content": "the queue service moves to ivory cluster node 4", "importance": 0.9, "temporal_kind": "past_event"},
+      {"content": "the queue service moves to ivory cluster node 5", "importance": 0.9, "temporal_kind": "past_event"},
+      {"content": "the queue service moves to ivory cluster node 6", "importance": 0.9, "temporal_kind": "past_event"},
+      {
+        "content": "the Ivory switch for our queue service is planned",
+        "importance": 0.4,
+        "entities": ["Ivory"],
+        "temporal_kind": "future_plan"
+      }
+    ],
+    "queries": [
+      {
+        "query": "when will the queue service move to Ivory",
+        "target": 6,
+        "distractors": [0, 1, 2, 3, 4, 5],
+        "top_k": 3
+      }
+    ]
+  }
+}
