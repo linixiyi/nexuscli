@@ -118,6 +118,7 @@ SLASH_COMMANDS = [
     "/effort",
     "/snapshot",
     "/restore",
+    "/turn-resume",
 ]
 
 

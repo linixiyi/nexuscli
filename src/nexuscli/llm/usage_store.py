@@ -159,16 +159,37 @@ class UsageStore:
                 ),
             )
 
+    def prune(self, keep_days: int = 90, *, now: datetime | None = None) -> int:
+        """Delete rows older than the retention window; returns removed count.
+
+        One row per completed turn grows ``usage.db`` without limit otherwise
+        (the retention sweep was the piece intentionally not ported from the
+        ZCode reference — this restores just that piece, with a fixed default
+        window and no background job). ``now`` is the same test seam as
+        ``record_turn``/``stats``.
+        """
+        ref = now or datetime.now()
+        cutoff = (ref - timedelta(days=keep_days)).strftime(_TS_FORMAT)
+        with self._connect() as conn:
+            cursor = conn.execute("delete from turn_usage where ts < ?", (cutoff,))
+            return int(cursor.rowcount)
+
     def stats(self, days: int = 7, *, now: datetime | None = None) -> dict[str, Any]:
         """Aggregate the trailing ``days``-day window; ``now`` is a test seam.
 
         An empty (or fully out-of-window) table yields all zeros with empty
         ``by_model`` and ``by_source`` lists — ``coalesce`` guarantees the zero
         defaults. ``by_source`` splits the same window by row provenance
-        (``repl`` vs ``subagent``).
+        (``repl`` vs ``subagent``). The stats path doubles as the retention
+        sweep's touchpoint: a best-effort prune runs first (aggregation never
+        fails because of it), so the trailing window is also the kept window.
         """
         if days < 1:
             raise ValueError("days must be >= 1")
+        try:
+            self.prune(now=now)
+        except sqlite3.Error:
+            pass
         since = ((now or datetime.now()) - timedelta(days=days)).strftime(_TS_FORMAT)
         with self._connect() as conn:
             total = conn.execute(

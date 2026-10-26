@@ -198,3 +198,25 @@ def test_usage_slash_keeps_turn_display_and_adds_stats(tmp_path, monkeypatch):
     _run_slash("/usage stats abc", bad_console, tmp_path, config, agent)
     # "abc" is not a digit string: it normalizes to the 7-day default table.
     assert "last 7 day(s)" in _console_text(bad_console)
+
+
+def test_stats_prunes_rows_older_than_retention_window(tmp_path):
+    """夜间③ P2-16：stats 顺带做保留窗口清理，usage.db 不再无界增长。"""
+    from nexuscli.llm.usage_store import UsageStore
+    from nexuscli.types import Usage
+
+    store = UsageStore(tmp_path / "usage.db")
+    usage = Usage(input_tokens=10, output_tokens=5, total_tokens=15)
+    store.record_turn(model="m-old", provider="p", usage=usage, ts="2026-01-01 10:00:00")
+    store.record_turn(model="m-new", provider="p", usage=usage, ts="2026-09-29 10:00:00")
+
+    fixed_now = datetime(2026, 9, 29, 12, 0)
+    summary = store.stats(days=7, now=fixed_now)
+
+    assert summary["turns"] == 1
+    conn = sqlite3.connect(tmp_path / "usage.db")
+    try:
+        remaining = conn.execute("select count(*) from turn_usage").fetchone()[0]
+    finally:
+        conn.close()
+    assert remaining == 1

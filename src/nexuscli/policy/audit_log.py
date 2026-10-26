@@ -21,6 +21,12 @@ _TOKEN_PATTERNS = (
     re.compile(r"AKIA[0-9A-Z]{12,}"),
 )
 
+# 值级掩码的补充：bash command 串里的凭证不在任何 SENSITIVE_KEYS 键下，上面的
+# 键名闸抓不到。Bearer 要求词边界与最小长度、JWT 要求 eyJ 开头的三段式
+# base64url，避免把普通命令文本误伤成掩码。
+_BEARER_PATTERN = re.compile(r"\b(bearer\s+)[A-Za-z0-9\-._~+/]{20,}", re.IGNORECASE)
+_JWT_PATTERN = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}")
+
 
 class AuditLog:
     def __init__(self, path: str | Path):
@@ -86,6 +92,8 @@ class AuditLog:
 
     @staticmethod
     def _mask_tokens(text: str) -> str:
+        text = _JWT_PATTERN.sub("***", text)
+        text = _BEARER_PATTERN.sub(r"\1***", text)
         for pattern in _TOKEN_PATTERNS:
             text = pattern.sub("***", text)
         return text

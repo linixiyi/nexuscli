@@ -183,11 +183,32 @@ class DurableTaskManager:
             ).fetchone()
         return bool(row and row[0] == "canceled")
 
-    def requeue_expired(self) -> int:
+    def requeue_expired(self, *, max_attempts: int = 5) -> int:
+        """Requeue running tasks whose lease expired; cull poison tasks first.
+
+        A worker that died hard (kill -9/OOM) leaves its task to lease
+        recovery — without an attempts ceiling that path re-dispatches the
+        task forever and a poison task pins a worker slot permanently. Tasks
+        at or past the ceiling are marked ``failed`` with the reason instead
+        of requeued. The count returned stays the requeued-row count (the
+        pre-ceiling semantics); culled tasks are visible via ``get``/``list``.
+        """
         now = _now()
         scope_clause = " and scope = ?" if self.scope else ""
-        params = [now, now, *([self.scope] if self.scope else [])]
         with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                update tasks
+                set status = 'failed', updated_at = ?, worker_id = null,
+                    lease_expires_at = null,
+                    error = 'max recovery attempts exceeded ({max_attempts}); task marked failed'
+                where status = 'running'
+                  and (lease_expires_at is null or lease_expires_at <= ?)
+                  and attempts >= ?
+                  {scope_clause}
+                """,
+                [now, now, max_attempts, *([self.scope] if self.scope else [])],
+            )
             cursor = conn.execute(
                 f"""
                 update tasks
@@ -196,9 +217,10 @@ class DurableTaskManager:
                     error = coalesce(error, 'worker lease expired; task requeued')
                 where status = 'running'
                   and (lease_expires_at is null or lease_expires_at <= ?)
+                  and attempts < ?
                   {scope_clause}
                 """,
-                params,
+                [now, now, max_attempts, *([self.scope] if self.scope else [])],
             )
             return int(cursor.rowcount)
 

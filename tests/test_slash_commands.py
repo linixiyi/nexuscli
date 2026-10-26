@@ -242,3 +242,11 @@ def test_expand_command_old_format_command_unchanged(tmp_path):
     assert expansion.prompt == "Deploy now"
     assert expansion.mode == ""
     assert expansion.allowed_tools == ()
+
+
+def test_turn_resume_is_listed():
+    """夜间③ P2-6：/turn-resume 已实现且有 docs 专节，必须进 SLASH_COMMANDS
+    （/help 可列、Tab 可补全）。"""
+    from nexuscli.entrypoints.repl import SLASH_COMMANDS
+
+    assert "/turn-resume" in SLASH_COMMANDS
