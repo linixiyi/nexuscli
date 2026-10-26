@@ -47,6 +47,7 @@
 <li><a href="#effort-推理力度">/effort 推理力度</a></li>
 <li><a href="#workflow-与-expert">/workflow 与 /expert</a></li>
 <li><a href="#compact-手动压缩">/compact 手动压缩</a></li>
+<li><a href="#turn-resume-回合级恢复">/turn-resume 回合级恢复</a></li>
 </ul>
 </div>
 
@@ -134,7 +135,14 @@
 <pre><code class="language-text">/compact                 # 立即压缩一次当前会话历史
 /compact 权限规则的实现细节  # 指定保留重点，摘要会优先保留相关内容
 </code></pre>
-<p><code>/compact</code> 走与自动压缩相同的确定性流程（不额外调用 LLM）：近端消息原样保留、旧轮次汇总为摘要，并输出压缩统计（tokens before/after 与被摘要的消息条数），方便确认压缩收益。历史为空时会友好提示，不会报错。自动压缩的触发阈值、microcompact 与 provider 超限重试的完整口径见 <a href="memory-context.html">memory-context.md</a>。</p><div class="pager"><a href="config.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔧 配置</span></a><a href="tools.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧰 内置工具与输入面补充口径</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/repl-commands.md" target="_blank" rel="noopener">docs/repl-commands.md</a> 构建生成 · 源文件与站点内容同步</p>
+<p><code>/compact</code> 走与自动压缩相同的确定性流程（不额外调用 LLM）：近端消息原样保留、旧轮次汇总为摘要，并输出压缩统计（tokens before/after 与被摘要的消息条数），方便确认压缩收益。历史为空时会友好提示，不会报错。自动压缩的触发阈值、microcompact 与 provider 超限重试的完整口径见 <a href="memory-context.html">memory-context.md</a>。</p>
+<h2 id="turn-resume-回合级恢复"><a class="toclink" href="#turn-resume-回合级恢复">/turn-resume 回合级恢复</a></h2>
+<p><code>/turn-resume</code>（无参数）列出当前工作区的回合 checkpoint；<code>/turn-resume &lt;id&gt;</code> 接续一个被
+中止的 react 回合：从 checkpoint 重建对话历史并<strong>沿用原 run_id</strong>，在途工具调用按原始 id
+经工具日志分流（已完成 → 复用结果；结果未知 → fail-closed 不自动重放），随后从本轮继续。
+checkpoint 每 react 轮写两次（执行前 in-flight / 轮末覆盖）；明文落盘于
+<code>~/.nexuscli/turn_checkpoints/</code>，可能含工具结果中的文件内容。REPL 的 Ctrl+C 仍是中止——
+本命令的价值是中止后可从最近完整轮接续。</p><div class="pager"><a href="config.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔧 配置</span></a><a href="tools.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧰 内置工具与输入面补充口径</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/repl-commands.md" target="_blank" rel="noopener">docs/repl-commands.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>
