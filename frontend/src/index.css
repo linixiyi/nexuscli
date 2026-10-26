@@ -1466,3 +1466,28 @@ details code {
     transition: none !important;
   }
 }
+
+/* ------------------------------------------------------------------
+ * Browser surfaces（2026-10-27_workbench-ui-polish）：浏览器自带的部件
+ * 也属于设计系统——选区、caret、表格数字、下划线偏移从调色板取值，
+ * 不留给 UA 默认。
+ * ------------------------------------------------------------------ */
+::selection {
+  background: #3665e626;
+}
+
+textarea,
+input {
+  caret-color: var(--blue);
+}
+
+.statusbar,
+.data-table,
+.stat-card,
+.detail-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  text-underline-offset: 2.5px;
+}
