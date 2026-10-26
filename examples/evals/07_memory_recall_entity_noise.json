@@ -1,0 +1,28 @@
+{
+  "name": "memory-recall-entity-noise",
+  "description": "Memory recall eval: an entity-anchored target must rank first while six same-word realm-checklist distractors share every other query term",
+  "memory_eval": {
+    "seed": [
+      {"content": "auth service configuration checklist for realm 1", "importance": 0.9},
+      {"content": "auth service configuration checklist for realm 2", "importance": 0.9},
+      {"content": "auth service configuration checklist for realm 3", "importance": 0.9},
+      {"content": "auth service configuration checklist for realm 4", "importance": 0.9},
+      {"content": "auth service configuration checklist for realm 5", "importance": 0.9},
+      {"content": "auth service configuration checklist for realm 6", "importance": 0.9},
+      {
+        "content": "Bluefin delegates its logins to Keycloak",
+        "importance": 0.4,
+        "kind": "decision",
+        "entities": ["Bluefin", "Keycloak"]
+      }
+    ],
+    "queries": [
+      {
+        "query": "Bluefin Keycloak auth service configuration",
+        "target": 6,
+        "distractors": [0, 1, 2, 3, 4, 5],
+        "top_k": 3
+      }
+    ]
+  }
+}

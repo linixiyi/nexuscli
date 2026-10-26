@@ -167,6 +167,8 @@ def build_report(results: list[EvalRunResult], previous: dict[str, Any] | None) 
             "failure_reasons": list(result.failure_reasons),
             "tool_sequence": list(result.tool_sequence),
             "turns": result.turns,
+            # Conversation rounds actually run (1 for a single-round scenario).
+            "rounds": result.rounds,
             "total_tool_calls": total_tool_calls,
             "comparison": {
                 "previous": previous_status,

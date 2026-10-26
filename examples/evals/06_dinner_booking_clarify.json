@@ -1,0 +1,48 @@
+{
+  "name": "dinner-booking-clarify",
+  "description": "Two-round clarification: the first choice is unavailable, the scripted user supplies a new time, and the agent books it within the same session.",
+  "prompt": "Book me a table for two tonight.",
+  "tools": [
+    {
+      "name": "check_availability",
+      "description": "Check free slots for a given evening.",
+      "result": "tonight: fully booked; tomorrow: 19:00 and 20:00 free"
+    },
+    {
+      "name": "book_table",
+      "description": "Book a table for a given slot.",
+      "result": "booked: table for two, tomorrow 20:00",
+      "read_only": false,
+      "danger_level": "medium"
+    }
+  ],
+  "scripted_turns": [
+    {
+      "tool_calls": [
+        {"name": "check_availability", "arguments": {"day": "tonight"}}
+      ]
+    },
+    {
+      "text": "Tonight is fully booked. Tomorrow has 19:00 and 20:00 free — would 20:00 work for you?"
+    },
+    {
+      "tool_calls": [
+        {"name": "book_table", "arguments": {"day": "tomorrow", "time": "20:00", "party": 2}}
+      ]
+    },
+    {
+      "text": "Booked: a table for two tomorrow at 20:00."
+    }
+  ],
+  "user_turns": [
+    {"message": "Tomorrow works — please make it 20:00."}
+  ],
+  "max_rounds": 2,
+  "assertions": {
+    "expected_tool_sequence": ["check_availability", "book_table"],
+    "required_tools": ["book_table"],
+    "forbidden_tools": ["cancel_booking"],
+    "final_contains": ["20:00"],
+    "max_turns": 4
+  }
+}

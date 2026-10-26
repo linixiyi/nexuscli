@@ -48,9 +48,37 @@ and regression counts per tier so a regression report can show *which* tier
 is degrading. The key is optional and defaults to ``medium``; when present it
 must be exactly one of the three tier names (case-sensitive, no ``null``).
 
-Validation is strict on purpose: unknown keys and wrong shapes raise
-:class:`EvalSchemaError` with the file path and a human-readable reason, so a
-typo in a scenario file fails loudly instead of silently weakening the run.
+``user_turns`` turns the scenario into a multi-round user simulation: after
+the agent produces its final text for the current round, the scripted user
+speaks again and the *same* agent session continues with that message as the
+next user turn. Each entry is either ``{"message": "..."}`` (one more round)
+or the end marker ``{"end": true}`` (the user stops talking; the conversation
+ends). Running out of entries ends the conversation too, so an explicit
+marker is optional. ``scripted_turns`` stays one flat list across all rounds —
+the fake LLM replays it in order, and a round ends exactly where a text-only
+turn ends it today, so each round's segment must end with a ``text`` turn.
+``max_rounds`` is the scenario-level hard cap on the total number of rounds
+(round 1 is the initial ``prompt``; each user message starts the next one);
+when the cap is reached the rest of the user script is truncated. Both keys
+are optional; a scenario without ``user_turns`` runs exactly one round and
+behaves exactly as before.
+
+``memory_eval`` switches the scenario to the memory-recall track, which runs
+without the agent loop at all: the scenario seeds a hermetic temp-DB
+``MemoryManager`` (see the runner) and asserts recall ranking. It declares
+``seed`` (the memory rows to save, with the ``importance`` / ``kind`` /
+``entities`` / ``temporal_kind`` metadata that constructs adversarial
+distractors) and ``queries`` (one assertion per entry: the ``query``, its
+``target`` seed index must land inside the recall ``top_k``, and no
+``distractors`` seed may rank ahead of the target). Because both tracks
+cannot share one scenario, a ``memory_eval`` scenario must not declare any
+agent-loop key (``prompt``, ``scripted_turns``, ``tools``, ``assertions``,
+``permission_deny``, ``hitl_mode``, ``user_turns``, ``max_rounds``).
+
+Validation is strict on purpose: unknown keys (at every level, top level
+included) and wrong shapes raise :class:`EvalSchemaError` with the file path
+and a human-readable reason, so a typo in a scenario file fails loudly
+instead of silently weakening the run.
 """
 
 from __future__ import annotations
@@ -59,6 +87,12 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from nexuscli.memory.signals import (
+    TEMPORAL_KIND_ORDER,
+    TEMPORAL_KINDS,
+    normalize_text,
+)
 
 _DANGER_LEVELS = {"safe", "medium", "high"}
 _HITL_MODES = {"auto", "never", "always"}
@@ -86,6 +120,32 @@ _TOOL_KEYS = {
     "danger_level",
 }
 _TURN_KEYS = {"text", "tool_calls"}
+_USER_TURN_KEYS = {"message", "end"}
+_MEMORY_EVAL_KEYS = {"seed", "queries"}
+_MEMORY_SEED_KEYS = {"content", "importance", "kind", "entities", "temporal_kind"}
+_MEMORY_QUERY_KEYS = {"query", "target", "distractors", "top_k"}
+# Recall window asserted per memory query when the scenario omits ``top_k``
+# (the same convention as the recall eval tests).
+DEFAULT_MEMORY_TOP_K = 5
+# Keys that only make sense on the agent-loop track; a ``memory_eval``
+# scenario must not declare any of them.
+_AGENT_LOOP_KEYS: tuple[str, ...] = (
+    "prompt",
+    "tools",
+    "scripted_turns",
+    "assertions",
+    "permission_deny",
+    "hitl_mode",
+    "user_turns",
+    "max_rounds",
+)
+_SCENARIO_KEYS = {
+    "name",
+    "description",
+    "difficulty",
+    "memory_eval",
+    *_AGENT_LOOP_KEYS,
+}
 
 
 class EvalSchemaError(ValueError):
@@ -114,6 +174,58 @@ class ScriptedTurn:
 
 
 @dataclass(slots=True)
+class ScriptedUserTurn:
+    """One scripted-user entry: a follow-up message, or the end marker.
+
+    ``end=True`` marks "the user stops talking"; an end marker never carries a
+    message (the loader rejects the combination).
+    """
+
+    message: str = ""
+    end: bool = False
+
+
+@dataclass(slots=True)
+class MemorySeedEntry:
+    """One seeded memory row of a ``memory_eval`` scenario.
+
+    ``content`` is required; the rest is the adversarial metadata ``save()``
+    accepts — ``importance`` in ``[0, 1]``, a free-form ``kind``, explicit
+    ``entities`` and the temporal layer (``current_state`` / ``past_event`` /
+    ``future_plan``). ``None`` / empty fields fall back to ``save()`` defaults.
+    """
+
+    content: str
+    importance: float | None = None
+    kind: str | None = None
+    entities: list[str] = field(default_factory=list)
+    temporal_kind: str | None = None
+
+
+@dataclass(slots=True)
+class MemoryQuerySpec:
+    """One recall assertion of a ``memory_eval`` scenario.
+
+    ``target`` is the seed index that must land inside the recall window of
+    ``top_k`` results; every seed index in ``distractors`` must not rank ahead
+    of it. ``distractors`` may be empty (then only the target is asserted).
+    """
+
+    query: str
+    target: int
+    distractors: list[int] = field(default_factory=list)
+    top_k: int = DEFAULT_MEMORY_TOP_K
+
+
+@dataclass(slots=True)
+class MemoryEvalSpec:
+    """The scripted memory-recall evaluation of a ``memory_eval`` scenario."""
+
+    seed: list[MemorySeedEntry]
+    queries: list[MemoryQuerySpec]
+
+
+@dataclass(slots=True)
 class EvalAssertions:
     """The seven supported per-scenario assertions (all optional).
 
@@ -137,6 +249,16 @@ class EvalScenario:
 
     ``difficulty`` is always one of :data:`DIFFICULTY_LEVELS` (the loader
     fills in :data:`DEFAULT_DIFFICULTY` when the file omits the key).
+
+    ``user_turns`` is empty for a plain single-round scenario; when present,
+    each entry starts one more round after the agent's final text (see the
+    module docstring). ``max_rounds`` is the optional hard cap on the total
+    round count; ``None`` means the user script's own length is the limit.
+
+    ``memory_eval`` is ``None`` for an agent-loop scenario; when present the
+    scenario runs on the memory-recall track instead (``prompt`` / ``turns``
+    are empty and the runner seeds a temp-DB MemoryManager — see the module
+    docstring). The loader guarantees the two tracks never mix.
     """
 
     name: str
@@ -149,6 +271,9 @@ class EvalScenario:
     hitl_mode: str
     difficulty: str
     source: str
+    user_turns: list[ScriptedUserTurn] = field(default_factory=list)
+    max_rounds: int | None = None
+    memory_eval: MemoryEvalSpec | None = None
 
 
 def load_eval_scenarios(path: str | Path) -> list[EvalScenario]:
@@ -204,27 +329,55 @@ def builtin_eval_dir() -> Path | None:
 
 
 def _scenario_from_mapping(data: dict[str, Any], *, source: str) -> EvalScenario:
+    unknown = set(data) - _SCENARIO_KEYS
+    if unknown:
+        raise EvalSchemaError(
+            f"{source}: unknown scenario key(s) {sorted(unknown)}; "
+            f"supported: {sorted(_SCENARIO_KEYS)}"
+        )
     name = data.get("name")
     if not isinstance(name, str) or not name.strip():
         raise EvalSchemaError(f"{source}: 'name' must be a non-empty string")
-    prompt = data.get("prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
-        raise EvalSchemaError(f"{source}: 'prompt' must be a non-empty string")
     description = data.get("description", "")
     if not isinstance(description, str):
         raise EvalSchemaError(f"{source}: 'description' must be a string when present")
 
-    tools = _parse_tools(data.get("tools", []), source=source)
-    turns = _parse_turns(data.get("scripted_turns"), source=source)
-    assertions = _parse_assertions(data.get("assertions", {}), source=source)
-    permission_deny = _parse_string_list(
-        data.get("permission_deny", []), "'permission_deny'", source=source
-    )
-    hitl_mode = data.get("hitl_mode", "auto")
-    if hitl_mode not in _HITL_MODES:
-        raise EvalSchemaError(
-            f"{source}: 'hitl_mode' must be one of {sorted(_HITL_MODES)}, got {hitl_mode!r}"
+    # The two execution tracks are mutually exclusive: a memory-recall
+    # scenario runs without the agent loop, so the agent-loop keys must all be
+    # absent (the check reports every offending key at once).
+    memory_eval: MemoryEvalSpec | None = None
+    if "memory_eval" in data:
+        mixed = [key for key in _AGENT_LOOP_KEYS if key in data]
+        if mixed:
+            raise EvalSchemaError(
+                f"{source}: 'memory_eval' scenarios run without the agent loop and must not "
+                f"declare agent-loop key(s): {mixed}"
+            )
+        memory_eval = _parse_memory_eval(data["memory_eval"], source=source)
+
+    if memory_eval is None:
+        prompt = data.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise EvalSchemaError(f"{source}: 'prompt' must be a non-empty string")
+        tools = _parse_tools(data.get("tools", []), source=source)
+        turns = _parse_turns(data.get("scripted_turns"), source=source)
+        assertions = _parse_assertions(data.get("assertions", {}), source=source)
+        permission_deny = _parse_string_list(
+            data.get("permission_deny", []), "'permission_deny'", source=source
         )
+        hitl_mode = data.get("hitl_mode", "auto")
+        if hitl_mode not in _HITL_MODES:
+            raise EvalSchemaError(
+                f"{source}: 'hitl_mode' must be one of {sorted(_HITL_MODES)}, got {hitl_mode!r}"
+            )
+    else:
+        # Unused on the memory track; the dataclass keeps one shape for both.
+        prompt = ""
+        tools = []
+        turns = []
+        assertions = EvalAssertions()
+        permission_deny = []
+        hitl_mode = "auto"
     # Absent -> default tier; present means it must be exactly one of the three
     # names (``null``, ``""``, ``"Short"`` and non-strings are all rejected).
     difficulty = data.get("difficulty", DEFAULT_DIFFICULTY)
@@ -240,6 +393,19 @@ def _scenario_from_mapping(data: dict[str, Any], *, source: str) -> EvalScenario
                 f"{source}: deny rule {rule!r} targets tool {parsed_tool!r} which the "
                 "scenario does not define"
             )
+    user_turns: list[ScriptedUserTurn] = []
+    if "user_turns" in data:
+        user_turns = _parse_user_turns(data["user_turns"], source=source)
+    # Present-but-null is rejected like any other wrong shape (same strictness
+    # as the other top-level optional keys, e.g. ``difficulty``); only an
+    # absent key means "no cap".
+    max_rounds: int | None = None
+    if "max_rounds" in data:
+        max_rounds = data["max_rounds"]
+        if not _is_positive_int(max_rounds):
+            raise EvalSchemaError(
+                f"{source}: 'max_rounds' must be a positive integer, got {max_rounds!r}"
+            )
     return EvalScenario(
         name=name,
         prompt=prompt,
@@ -251,6 +417,9 @@ def _scenario_from_mapping(data: dict[str, Any], *, source: str) -> EvalScenario
         hitl_mode=hitl_mode,
         difficulty=difficulty,
         source=source,
+        user_turns=user_turns,
+        max_rounds=max_rounds,
+        memory_eval=memory_eval,
     )
 
 
@@ -340,6 +509,195 @@ def _parse_turns(raw: Any, *, source: str) -> list[ScriptedTurn]:
             )
         turns.append(ScriptedTurn(text=text, tool_calls=tool_calls))
     return turns
+
+
+def _parse_user_turns(raw: Any, *, source: str) -> list[ScriptedUserTurn]:
+    """Validate the optional ``user_turns`` list (the scripted user's script).
+
+    Each entry is ``{"message": "<non-empty>"}`` (one more round) or the end
+    marker ``{"end": true}`` (the user stops talking). An end marker must not
+    carry a message, and a message entry cannot be blank — a silent empty user
+    turn would start a round the author never wrote.
+    """
+    if not isinstance(raw, list) or not raw:
+        raise EvalSchemaError(f"{source}: 'user_turns' must be a non-empty list when present")
+    user_turns: list[ScriptedUserTurn] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise EvalSchemaError(f"{source}: user_turns[{index}] must be an object")
+        unknown = set(item) - _USER_TURN_KEYS
+        if unknown:
+            raise EvalSchemaError(
+                f"{source}: user_turns[{index}] has unknown key(s): {sorted(unknown)}"
+            )
+        end = item.get("end", False)
+        if not isinstance(end, bool):
+            raise EvalSchemaError(
+                f"{source}: user_turns[{index}].end must be a boolean, got {end!r}"
+            )
+        message_raw = item.get("message")
+        if end and message_raw is not None:
+            raise EvalSchemaError(
+                f"{source}: user_turns[{index}] is an end marker and must not carry a 'message'"
+            )
+        if not end and (not isinstance(message_raw, str) or not message_raw.strip()):
+            raise EvalSchemaError(
+                f"{source}: user_turns[{index}].message must be a non-empty string"
+            )
+        user_turns.append(ScriptedUserTurn(message=message_raw or "", end=end))
+    return user_turns
+
+
+def _parse_memory_eval(raw: Any, *, source: str) -> MemoryEvalSpec:
+    """Validate the ``memory_eval`` block: seeded rows plus per-query assertions."""
+    if not isinstance(raw, dict):
+        raise EvalSchemaError(f"{source}: 'memory_eval' must be an object, got {raw!r}")
+    unknown = set(raw) - _MEMORY_EVAL_KEYS
+    if unknown:
+        raise EvalSchemaError(
+            f"{source}: memory_eval has unknown key(s) {sorted(unknown)}; supported: "
+            f"{sorted(_MEMORY_EVAL_KEYS)}"
+        )
+    seed_raw = raw.get("seed")
+    if not isinstance(seed_raw, list) or not seed_raw:
+        raise EvalSchemaError(f"{source}: memory_eval.seed must be a non-empty list")
+    seed = [
+        _parse_memory_seed_item(item, index, source=source) for index, item in enumerate(seed_raw)
+    ]
+    _reject_duplicate_seed_content(seed, source=source)
+    queries_raw = raw.get("queries")
+    if not isinstance(queries_raw, list) or not queries_raw:
+        raise EvalSchemaError(f"{source}: memory_eval.queries must be a non-empty list")
+    queries = [
+        _parse_memory_query_item(item, index, seed_count=len(seed), source=source)
+        for index, item in enumerate(queries_raw)
+    ]
+    return MemoryEvalSpec(seed=seed, queries=queries)
+
+
+def _parse_memory_seed_item(raw: Any, index: int, *, source: str) -> MemorySeedEntry:
+    if not isinstance(raw, dict):
+        raise EvalSchemaError(f"{source}: memory_eval.seed[{index}] must be an object")
+    unknown = set(raw) - _MEMORY_SEED_KEYS
+    if unknown:
+        raise EvalSchemaError(
+            f"{source}: memory_eval.seed[{index}] has unknown key(s) {sorted(unknown)}; "
+            f"supported: {sorted(_MEMORY_SEED_KEYS)}"
+        )
+    content = raw.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise EvalSchemaError(
+            f"{source}: memory_eval.seed[{index}].content must be a non-empty string"
+        )
+    importance = raw.get("importance")
+    if importance is not None and (
+        isinstance(importance, bool)
+        or not isinstance(importance, int | float)
+        or not 0 <= importance <= 1
+    ):
+        raise EvalSchemaError(
+            f"{source}: memory_eval.seed[{index}].importance must be a number between 0 and 1, "
+            f"got {importance!r}"
+        )
+    kind = raw.get("kind")
+    if kind is not None and (not isinstance(kind, str) or not kind.strip()):
+        raise EvalSchemaError(
+            f"{source}: memory_eval.seed[{index}].kind must be a non-empty string when present"
+        )
+    entities_raw = raw.get("entities")
+    entities: list[str] = []
+    if entities_raw is not None:
+        if not isinstance(entities_raw, list) or not all(
+            isinstance(entity, str) for entity in entities_raw
+        ):
+            raise EvalSchemaError(
+                f"{source}: memory_eval.seed[{index}].entities must be a list of strings"
+            )
+        entities = list(entities_raw)
+    temporal_kind = raw.get("temporal_kind")
+    if temporal_kind is not None and temporal_kind not in TEMPORAL_KINDS:
+        raise EvalSchemaError(
+            f"{source}: memory_eval.seed[{index}].temporal_kind must be one of "
+            f"{list(TEMPORAL_KIND_ORDER)}, got {temporal_kind!r}"
+        )
+    return MemorySeedEntry(
+        content=content,
+        importance=importance,
+        kind=kind,
+        entities=entities,
+        temporal_kind=temporal_kind,
+    )
+
+
+def _parse_memory_query_item(
+    raw: Any, index: int, *, seed_count: int, source: str
+) -> MemoryQuerySpec:
+    if not isinstance(raw, dict):
+        raise EvalSchemaError(f"{source}: memory_eval.queries[{index}] must be an object")
+    unknown = set(raw) - _MEMORY_QUERY_KEYS
+    if unknown:
+        raise EvalSchemaError(
+            f"{source}: memory_eval.queries[{index}] has unknown key(s) {sorted(unknown)}; "
+            f"supported: {sorted(_MEMORY_QUERY_KEYS)}"
+        )
+    query = raw.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise EvalSchemaError(
+            f"{source}: memory_eval.queries[{index}].query must be a non-empty string"
+        )
+    target = raw.get("target")
+    if not _is_seed_index(target, seed_count):
+        raise EvalSchemaError(
+            f"{source}: memory_eval.queries[{index}].target must be a seed index between 0 and "
+            f"{seed_count - 1}, got {target!r}"
+        )
+    distractors: list[int] = []
+    distractors_raw = raw.get("distractors")
+    if distractors_raw is not None:
+        if not isinstance(distractors_raw, list):
+            raise EvalSchemaError(
+                f"{source}: memory_eval.queries[{index}].distractors must be a list of seed indexes"
+            )
+        for position, distractor in enumerate(distractors_raw):
+            if not _is_seed_index(distractor, seed_count):
+                raise EvalSchemaError(
+                    f"{source}: memory_eval.queries[{index}].distractors[{position}] must be a "
+                    f"seed index between 0 and {seed_count - 1}, got {distractor!r}"
+                )
+        distractors = list(distractors_raw)
+    top_k = raw.get("top_k")
+    if top_k is None:
+        top_k = DEFAULT_MEMORY_TOP_K
+    elif not _is_positive_int(top_k):
+        raise EvalSchemaError(
+            f"{source}: memory_eval.queries[{index}].top_k must be a positive integer, "
+            f"got {top_k!r}"
+        )
+    return MemoryQuerySpec(query=query, target=target, distractors=distractors, top_k=top_k)
+
+
+def _is_seed_index(value: Any, seed_count: int) -> bool:
+    """True for an in-range seed index; ``True``/``False`` are not indexes."""
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < seed_count
+
+
+def _reject_duplicate_seed_content(seed: list[MemorySeedEntry], *, source: str) -> None:
+    """Reject seed rows that memory-side dedup would merge into one row.
+
+    ``save()`` keys rows by normalized content, so a duplicate seed would map
+    two indexes onto one memory id and corrupt the query assertions. The
+    check uses the same normalization that defines content identity.
+    """
+    seen: dict[str, int] = {}
+    for index, entry in enumerate(seed):
+        normalized = normalize_text(entry.content)
+        first = seen.get(normalized)
+        if first is not None:
+            raise EvalSchemaError(
+                f"{source}: memory_eval.seed[{index}] duplicates the content of seed[{first}]; "
+                "memory dedup would merge them, so seed contents must be distinct"
+            )
+        seen[normalized] = index
 
 
 def _parse_assertions(raw: Any, *, source: str) -> EvalAssertions:
