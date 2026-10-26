@@ -429,11 +429,11 @@ def test_eval_run_writes_report_and_exits_zero(tmp_path):
 
     assert result.exit_code == 0
     assert "PASS\tread-task-details" in result.output
-    assert "total=4 passed=4 failed=0" in result.output
+    assert "total=5 passed=5 failed=0" in result.output
     report_path = tmp_path / REPORT_RELATIVE
     assert report_path.is_file()
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["summary"]["total"] == 4
+    assert report["summary"]["total"] == 5
     assert all(entry["comparison"]["verdict"] == "new" for entry in report["scenarios"])
 
 
