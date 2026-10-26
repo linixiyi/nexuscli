@@ -308,8 +308,8 @@ def test_builtin_repeat_scenario_converges_at_the_loop_guard_interception_point(
     caps — so the scenario pins the interception boundary from both sides."""
     eval_dir = builtin_eval_dir()
     assert eval_dir is not None, "repository ships examples/evals"
-    matches = sorted(eval_dir.glob("04_*.json"))
-    assert matches, "builtin scenario 04_ not found"
+    matches = sorted(eval_dir.glob("*repeat_call_loop_guard*.json"))
+    assert matches, "builtin scenario repeat-call-loop-guard not found"
     scenario = load_eval_scenario(matches[0])
     assert scenario.name == "repeat-call-loop-guard"
     assert scenario.assertions.required_tools == ["poll_job"]
