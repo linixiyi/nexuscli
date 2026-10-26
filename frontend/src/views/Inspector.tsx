@@ -41,14 +41,17 @@ function ToolDetail({ tool }: { tool: ToolInvocation }): JSX.Element {
 
 function ReportPanel({
   report,
+  tools,
   threadId,
   events,
   onTool,
 }: {
   report: ThreadReport;
+  tools: ToolInvocation[];
   threadId: string;
   events: WorkbenchEvent[];
-  onTool: () => void;
+  /** 点击某条证据 → 跳执行 tab 并选中该工具（复用 Inspector.choose 通路）。 */
+  onTool: (seq: number) => void;
 }): JSX.Element {
   const [copied, setCopied] = useState(false);
   return (
@@ -107,17 +110,32 @@ function ReportPanel({
       <p className="detail-label">本轮模型结论</p>
       <Markdown text={report.text || "本轮没有已提交的最终答复。"} />
       <p className="detail-label">执行事实与来源</p>
+      {/* U6（2026-10-27_workbench-ux-round2）：逐工具列出证据（名称 + 状态字），替换原来
+          的单行聚合按钮；每行点击跳执行 tab 并选中该工具。视觉复用 tool-row 结构 +
+          evidence-list 容器。 */}
       <div className="evidence-list">
-        <button type="button" onClick={onTool}>
-          <span className="success">
-            <StatusIcon status="completed" size={14} />
-          </span>
-          <span>
-            {report.tools} 次工具调用
-            <small>执行事实来自线程事件流</small>
-          </span>
-          <ChevronRight size={14} />
-        </button>
+        {tools.length === 0 && <p className="muted">本轮没有工具调用，执行事实仅来自模型文本。</p>}
+        {tools.map((tool) => {
+          const status = tool.result === null ? "approval" : tool.result.isError ? "failed" : "success";
+          return (
+            <button
+              type="button"
+              className="tool-row"
+              key={tool.seq}
+              data-testid="evidence-tool-row"
+              onClick={() => onTool(tool.seq)}
+            >
+              <span className={`tool-state ${status}`}>
+                <StatusIcon status={status} size={14} />
+              </span>
+              <span className="tool-row-content">
+                <strong>{tool.name}</strong>
+                <small>{tool.result === null ? "等待输出" : tool.result.isError ? "失败" : "已完成"}</small>
+              </span>
+              <ChevronRight size={14} />
+            </button>
+          );
+        })}
       </div>
       <p className="report-note">
         累计 {report.tokens} tokens · 执行事实来自会话转录与用量台账；模型结论不代替检查证据。
@@ -162,9 +180,10 @@ export function Inspector({ workbench, approvals, connected, onDecision }: Props
           report !== null ? (
             <ReportPanel
               report={report}
+              tools={tools}
               threadId={threadId}
               events={workbench?.events ?? []}
-              onTool={() => setTab("execution")}
+              onTool={choose}
             />
           ) : (
             <div className="panel-empty">

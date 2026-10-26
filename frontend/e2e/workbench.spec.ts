@@ -13,6 +13,11 @@
 //      不抛 SequenceGap）
 //   4. 会话列表：侧栏渲染工作会话/会话回放两组列表（2026-10-26 UI 重构后侧栏承载）
 //   5. 任务/用量面板：副标题用户文案（U7 断言同步，2026-10-27 UX 实测）
+//   6. W1 慢等待提示：阈值经 localStorage 键 nexuscli:slow-hint-ms 注入（2026-10-27
+//      workbench-ux-round2；ChatPanel.tsx 顶部注释），UI 发 turn 后 3s 内出现提示
+//   7. U6 报告证据：结果 tab「执行事实与来源」逐工具行，点击跳执行详情
+//   8. W2 会话回放：植入 title 为空的 REPL 会话 → 条目显示「会话 YYYY-MM-DD HH:MM」，
+//      不再出现 "(untitled)" 裸文案（植入手段见 seedUntitledSession）
 //
 // 服务策略：起真服务 scripts/web_validation_server.py（A11/lane2 交付）；脚本或浏览器
 // 二进制缺失时整文件跳过并留说明（本地可选，CI 不强制）。turn 用例依赖离线 Demo
@@ -24,7 +29,7 @@
 // 被用例 4/5 复用）；无 cookie 冷加载显示认证门（用例 2），门上有粘贴换发入口。
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -55,6 +60,13 @@ let bootstrapToken = "";
 // （storageState 方案在本仓不可行：App 无 cookie 探针，冷加载恒为引导门）。
 let authedContext: BrowserContext | null = null;
 let authedPage: Page | null = null;
+// W2 用例要在服务端植入一条无标题 REPL 会话。validation server 把 HOME 指到自己的
+// tempfile.TemporaryDirectory（scripts/web_validation_server.py:98-101），e2e 拿不到该路径——
+// 但 Python tempfile 遵循 TMPDIR：主服务实例用 e2e 自有的 TMPDIR 启动，READY 后按前缀
+// nexuscli-web-validation-* 定位其根目录（sessions 在 <root>/.nexuscli/sessions，工作区
+// cwd 是 <root>/demo）。定位失败时 W2 用例如实跳过。
+let serverTmpDir: string | null = null;
+let serverRoot: string | null = null;
 
 test.beforeAll(async () => {
   if (!existsSync(validationServer)) {
@@ -76,6 +88,7 @@ test.beforeAll(async () => {
   }
   // 隔离 HOME/USERPROFILE：runtime DB（~/.nexuscli/runtime/runtime.db，api.py:123）不得写进真实用户目录
   const isolatedHome = mkdtempSync(path.join(tmpdir(), "nexuscli-e2e-"));
+  serverTmpDir = mkdtempSync(path.join(tmpdir(), "nexuscli-e2e-tmpdir-"));
   const pythonArgv = process.env.NEXUSCLI_E2E_PYTHON
     ? [process.env.NEXUSCLI_E2E_PYTHON, validationServer]
     : ["uv", "run", "python", validationServer];
@@ -86,6 +99,7 @@ test.beforeAll(async () => {
       ...process.env,
       HOME: isolatedHome,
       USERPROFILE: isolatedHome,
+      TMPDIR: serverTmpDir,
       NEXUSCLI_RUNTIME_API_KEY: apiKey,
     },
     stdio: "pipe",
@@ -142,6 +156,8 @@ test.beforeAll(async () => {
   origin = ready.origin;
   bootstrapToken = ready.token;
   harnessReady = true;
+  const rootName = readdirSync(serverTmpDir).find((name) => name.startsWith("nexuscli-web-validation-"));
+  serverRoot = rootName === undefined ? null : path.join(serverTmpDir, rootName);
   // 静态托管探测：_workbench_dist_root() 是 cwd 相对解析（api.py:1141-1145），而
   // validation server 把 server.cwd 指到临时 demo 工作区（scripts/web_validation_server.py
   // cwd=str(workspace)）——dist 不在其下时服务端返回「UI 未构建」空态页，/v1 API 不受影响。
@@ -158,6 +174,10 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await authedContext?.close();
   await stopServer();
+  // 服务端的 TemporaryDirectory 随进程退出自清；外层 TMPDIR 壳目录由本文件创建、本文件清。
+  if (serverTmpDir !== null) {
+    rmSync(serverTmpDir, { recursive: true, force: true });
+  }
 });
 
 async function stopServer(): Promise<void> {
@@ -536,4 +556,134 @@ test("任务/用量面板：副标题为用户文案（U7 同步）", async () =
   await page.locator(".view-switch").getByRole("button", { name: "用量" }).click();
   // U7：用量副标题同样用户化（旧文案「GET /v1/usage/summary（= UsageStore.stats 原样）」）
   await expect(page.getByText("近 7 天回合、Token 与成本汇总", { exact: false })).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// 2026-10-27_workbench-ux-round2：W1 慢等待提示 / U6 报告证据列表 / W2 会话回放可辨识
+// ---------------------------------------------------------------------------
+
+/** 与 Sidebar.formatSessionStamp 同口径的期望格式（本地时区；浏览器继承系统时区）。 */
+function expectedSessionStamp(unixSeconds: number): string {
+  const date = new Date(unixSeconds * 1000);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    ` ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
+/** 向服务端 sessions 目录植入一条 title 为空的 REPL 会话（首行 meta，形状对齐
+ *  store.py:696 与 reads.list_sessions 的 type:"meta" + cwd realpath 过滤）。 */
+function seedUntitledSession(root: string): { id: string; updatedAt: number } {
+  const dir = path.join(root, ".nexuscli", "sessions");
+  mkdirSync(dir, { recursive: true });
+  const updatedAt = Math.floor(Date.now() / 1000);
+  const id = `e2e-untitled-${updatedAt}`;
+  const meta = {
+    type: "meta",
+    id,
+    cwd: path.join(root, "demo"),
+    created_at: updatedAt,
+    updated_at: updatedAt,
+    model: "demo-model",
+    provider: "offline-demo",
+    title: "",
+    message_count: 0,
+    forked_from: "",
+  };
+  writeFileSync(path.join(dir, `${id}.jsonl`), `${JSON.stringify(meta)}\n`, "utf-8");
+  return { id, updatedAt };
+}
+
+test("W1：执行中事件停滞超过阈值出现慢等待提示，不改变 busy 语义", async () => {
+  test.skip(!harnessReady, skipReason);
+  test.skip(!servesWorkbench, uiSkipReason);
+  test.skip(authedPage === null, "前置用例未产出已认证页面（bootstrap 认证流失败）。");
+  const page = authedPage as Page;
+  // 前置清理：U2 用例的 UI turn 仍阻塞在 write_file 审批（nexuscli:pending 记录会让
+  // reload 后落成「有未确认的原请求」禁发态）。经 x-api-key 通道批准全部挂起审批，
+  // 让该 turn 真实走完；随后页面出「turn 完成」回执且 pending 记录随之清除。
+  const authHeaders = { "x-api-key": apiKey };
+  const apiRequest = authedContext!.request;
+  const listing = await apiRequest.get(`${origin}/v1/approvals`, { headers: authHeaders });
+  if (listing.ok()) {
+    const payload = (await listing.json()) as { approvals?: { id: string }[] };
+    for (const item of payload.approvals ?? []) {
+      const decision = await apiRequest.post(
+        `${origin}/v1/approvals/${encodeURIComponent(item.id)}/decision`,
+        { headers: authHeaders, data: { decision: "approve" } },
+      );
+      expect(decision.ok()).toBe(true);
+    }
+  }
+  await expect(page.locator(".notice-banner")).toContainText(/turn 完成|原请求已完成/, {
+    timeout: 30_000,
+  });
+  // W1 注入点（见 ChatPanel.tsx 顶部注释）：阈值键 nexuscli:slow-hint-ms，写 200ms 后
+  // reload 生效（组件挂载时读取）。demo 链 write_file 审批前必然有 ≥200ms 事件空窗。
+  await page.evaluate(() => window.localStorage.setItem("nexuscli:slow-hint-ms", "200"));
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator(".brand strong")).toHaveText("NexusCLI", { timeout: 20_000 });
+  // 新建会话发一个真实 UI turn（避开 U2 的在途线程）
+  await page.getByRole("button", { name: "新建会话" }).click();
+  await page.locator("textarea").first().fill("W1 链路验证：检查样例数据并生成检查报告。");
+  await expect(page.locator(".send-button")).toBeEnabled({ timeout: 10_000 });
+  await page.locator(".send-button").click();
+  // 提示在 3s 内出现（断言口径：200ms 阈值 + 审批前空窗，远小于 3s）
+  const hint = page.getByTestId("slow-wait-hint");
+  await expect(hint).toBeVisible({ timeout: 3_000 });
+  await expect(hint).toContainText("仍在等待模型响应…（网络慢或模型负载高时可另开会话）");
+  // 不自动取消：提示出现时 turn 仍在途（run-inline 未消失）
+  await expect(page.locator(".run-inline").first()).toBeVisible();
+  // 让 turn 真实走完（U6 用例依赖这条已完成线程的工具清单）：批准本线程的审批卡
+  const card = page.locator(".approval-card", { hasText: "本线程" }).first();
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await card.getByRole("button", { name: "批准" }).click();
+  await expect(page.locator(".view-report")).toBeVisible({ timeout: 30_000 });
+  // turn 终态后 busy 复位 → 提示随之消失（它只描述在途等待）
+  await expect(hint).toHaveCount(0);
+  // 还原阈值，避免影响后续用例的页面状态
+  await page.evaluate(() => window.localStorage.removeItem("nexuscli:slow-hint-ms"));
+});
+
+test("U6：结果 tab 的「执行事实与来源」逐工具列出，点击跳执行详情", async () => {
+  test.skip(!harnessReady, skipReason);
+  test.skip(!servesWorkbench, uiSkipReason);
+  test.skip(authedPage === null, "前置用例未产出已认证页面（bootstrap 认证流失败）。");
+  const page = authedPage as Page;
+  await page.getByRole("tab", { name: "结果" }).click();
+  const rows = page.getByTestId("evidence-tool-row");
+  // demo 链至少有 read_file；每行 = 工具名 + 状态字
+  const readRow = rows.filter({ hasText: "read_file" }).first();
+  await expect(readRow).toBeVisible({ timeout: 10_000 });
+  expect(await rows.count()).toBeGreaterThanOrEqual(1);
+  await expect(readRow).toContainText("已完成");
+  // 旧的单行聚合文案不再出现（替换，而非并存）
+  await expect(page.locator(".evidence-list").getByText(/次工具调用/)).toHaveCount(0);
+  // 点击证据行 → 跳执行 tab 并选中该工具（复用 choose 通路）
+  await readRow.click();
+  await expect(page.getByRole("tab", { name: /执行过程/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".tool-detail .detail-heading strong")).toHaveText("read_file");
+});
+
+test("W2：无标题 REPL 会话回退显示「会话 YYYY-MM-DD HH:MM」，不再出现 (untitled)", async () => {
+  test.skip(!harnessReady, skipReason);
+  test.skip(!servesWorkbench, uiSkipReason);
+  test.skip(authedPage === null, "前置用例未产出已认证页面（bootstrap 认证流失败）。");
+  test.skip(
+    serverRoot === null,
+    "未能定位 validation server 的临时根目录（TMPDIR 探测失败），无法植入无标题会话。",
+  );
+  const page = authedPage as Page;
+  const seeded = seedUntitledSession(serverRoot as string);
+  // 侧栏在挂载与路由切换时重新拉会话列表（Sidebar useEffect [route]）——reload 后必达
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator(".brand strong")).toHaveText("NexusCLI", { timeout: 20_000 });
+  const stamp = expectedSessionStamp(seeded.updatedAt);
+  const entry = page.locator(".session-item").filter({ hasText: `会话 ${stamp}` }).first();
+  await expect(entry).toBeVisible({ timeout: 10_000 });
+  await expect(entry.locator("strong")).toHaveText(`会话 ${stamp}`);
+  await expect(entry).toContainText("0 条消息");
+  // 裸 "(untitled)" 文案在整个侧栏不允许出现
+  await expect(page.locator(".sidebar").getByText("(untitled)")).toHaveCount(0);
 });

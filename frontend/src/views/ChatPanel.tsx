@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
-import { ArrowDown, ArrowRight, FileText, MessageSquare, Radio, Sparkles, SquareTerminal } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowRight,
+  FileText,
+  Hourglass,
+  MessageSquare,
+  Radio,
+  Sparkles,
+  SquareTerminal,
+} from "lucide-react";
 
 import type { WorkbenchEvent, WorkbenchState } from "../state";
 import { Composer, type ComposerMode } from "./Composer";
@@ -41,6 +50,25 @@ export function deriveChatMessages(events: WorkbenchEvent[]): ChatMessage[] {
 }
 
 const EXAMPLE_TASK = "检查样例 Python 仓库，执行检查脚本并生成检查报告。";
+
+// W1（2026-10-27_workbench-ux-round2）慢等待反馈：busy 且 SSE 事件计数停滞超过阈值时，
+// run-inline 下追加一行渐进提示；不改变 busy 语义、不自动取消。事件推进（events.length
+// 变化）即重置计时——SSE 心跳是注释行、不入 events（state.ts applyEvent），不会误重置。
+// 阈值默认 30s；真等 30s 对 e2e 太久，故可经 localStorage 键 `nexuscli:slow-hint-ms`
+// （正整数毫秒）注入，e2e 写 200 后 reload 再发任务即可触发（demo 链 write_file 审批前
+// 的空窗必然超过 200ms）。组件挂载时读取一次。
+const SLOW_HINT_STORAGE_KEY = "nexuscli:slow-hint-ms";
+const SLOW_HINT_DEFAULT_MS = 30_000;
+
+function readSlowHintMs(): number {
+  try {
+    const raw = window.localStorage.getItem(SLOW_HINT_STORAGE_KEY);
+    const parsed = raw === null ? Number.NaN : Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : SLOW_HINT_DEFAULT_MS;
+  } catch {
+    return SLOW_HINT_DEFAULT_MS; // localStorage 不可用（隐私模式等）→ 默认阈值
+  }
+}
 
 type Props = {
   workbench: WorkbenchState | null;
@@ -107,6 +135,16 @@ export function ChatPanel({ workbench, busy, canPost, disabledHint, waitingAppro
       setNewContent(true);
     }
   }, [eventCount]);
+
+  // W1：busy 期间每次事件推进都重新起一个阈值计时器；到点仍无新事件 → 慢等待提示态。
+  const [slowHintMs] = useState(readSlowHintMs);
+  const [slowWaiting, setSlowWaiting] = useState(false);
+  useEffect(() => {
+    setSlowWaiting(false);
+    if (!busy) return;
+    const timer = window.setTimeout(() => setSlowWaiting(true), slowHintMs);
+    return () => window.clearTimeout(timer);
+  }, [busy, eventCount, slowHintMs]);
 
   const send = (): void => {
     const text = draft;
@@ -197,6 +235,14 @@ export function ChatPanel({ workbench, busy, canPost, disabledHint, waitingAppro
                 不能谎报「执行中」（kitagent 有 approval 态区分）。 */}
             <span>{waitingApproval ? "等待审批 · 请在右侧面板批准" : "执行中"}</span>
             <span className="muted">工具调用与审批在右侧面板</span>
+          </div>
+        )}
+        {/* 慢等待提示只在真等模型时出现：审批挂起期的阻塞源是用户决策，
+            两套等待文案并存会自相矛盾（round2 复核观察）。 */}
+        {busy && slowWaiting && !waitingApproval && (
+          <div className="run-inline" data-testid="slow-wait-hint">
+            <Hourglass size={14} />
+            <span>仍在等待模型响应…（网络慢或模型负载高时可另开会话）</span>
           </div>
         )}
       </div>
