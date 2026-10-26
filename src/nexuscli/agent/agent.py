@@ -209,7 +209,10 @@ class Agent:
         try:
             # UserPromptSubmit hooks gate the message before it reaches any
             # runner: a blocked hook refuses the input without calling the LLM.
-            if has_hooks(self.config, "UserPromptSubmit"):
+            # React owns its gate here; the plan/team runners fire the same
+            # gate on their own prompts so every entry path is covered exactly
+            # once (an Agent.run(mode=plan/team) would double-fire otherwise).
+            if self.mode == "react" and has_hooks(self.config, "UserPromptSubmit"):
                 gate = await fire_event(
                     self.config,
                     "UserPromptSubmit",
@@ -240,9 +243,10 @@ class Agent:
                 with suppress(Exception):
                     snapshot.create("post-turn")
 
-        # Stop hooks fire once the turn loop ended normally; a block is only a
-        # notice to the user, it never forces the agent to keep running.
-        if has_hooks(self.config, "Stop"):
+        # Stop hooks fire once the react turn loop ended normally; a block is
+        # only a notice to the user, it never forces the agent to keep
+        # running. Plan/team runners fire their own Stop notice.
+        if self.mode == "react" and has_hooks(self.config, "Stop"):
             stop = await fire_event(self.config, "Stop", {}, self.cwd)
             if stop.blocked:
                 yield {

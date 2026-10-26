@@ -11,6 +11,7 @@ from typing import Any
 
 from nexuscli.agent.query import query
 from nexuscli.config import NexusCliConfig
+from nexuscli.hooks.runner import fire_event, has_hooks
 from nexuscli.llm.base import LlmClient, is_transient_api_error
 from nexuscli.plan.planner import extract_json_object
 from nexuscli.prompt import PromptAssembler
@@ -349,6 +350,27 @@ class AgentOrchestrator:
         self.total_turns = 0
 
     async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
+        # UserPromptSubmit hooks gate the prompt before any planning work: a
+        # blocked hook refuses the input without calling the LLM. The react
+        # loop runs the same gate in Agent.run, so every entry path is covered
+        # exactly once.
+        if has_hooks(self.config, "UserPromptSubmit"):
+            gate = await fire_event(
+                self.config,
+                "UserPromptSubmit",
+                {"prompt": message},
+                self.cwd,
+            )
+            if gate.blocked:
+                yield {
+                    "type": "error",
+                    "error": RuntimeError(
+                        f"Prompt rejected by user-prompt-submit hook: {gate.reason}"
+                    ),
+                }
+                return
+            if gate.additional_context:
+                message = f"{message}\n\n{gate.additional_context}"
         # Automatic turn snapshots are opt-in (features.auto_snapshot): a full
         # workspace copy per turn is too slow on some disks. Keeping the service
         # unconstructed also skips its pointless mkdir. Manual /snapshot and
@@ -398,6 +420,16 @@ class AgentOrchestrator:
         if costs:
             done["cost"] = costs
         yield done
+        # Stop hooks fire once the team loop ended normally; a block is only a
+        # notice to the user, never a forced continuation (same semantics as
+        # the react loop).
+        if has_hooks(self.config, "Stop"):
+            stop = await fire_event(self.config, "Stop", {}, self.cwd)
+            if stop.blocked:
+                yield {
+                    "type": "text_delta",
+                    "text": f"\nStop hook: {stop.reason or 'blocked by hook'}\n",
+                }
 
     async def _plan_steps(self, message: str) -> list[ExecutionStep]:
         """Run the planner subagent, retrying transient failures and bad output.

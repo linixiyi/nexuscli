@@ -274,7 +274,7 @@ JSONL 布局、恢复命令面、usage 续算双口径、fork 语义与快照配
 
 ## 🔌 MCP
 
-NexusCLI 可以连接 MCP server，并把远端工具动态注册为 `mcp__<server-name>__<tool-name>`；也可以把自身作为 MCP server 暴露给外部客户端：`uv run nexuscli mcp serve --transport stdio` 或 `uv run nexuscli mcp serve --transport http --port 3000`。
+NexusCLI 可以连接 MCP server，并把远端工具动态注册为 `mcp__<server-name>__<tool-name>`；也可以把自身作为 MCP server 暴露给外部客户端：`uv run nexuscli mcp serve --transport stdio`，或带凭证门的 HTTP 传输 `NEXUSCLI_MCP_API_KEY=<key> uv run nexuscli mcp serve --transport http --port 3000`（未配置 key 拒绝启动，缺/错 key 一律 401；`tools/call` 与其他入口同走审计与守卫链）。
 
 > ⚠️ **部署边界**：作为 MCP server 运行时，NexusCLI 会在协议层强制关闭人工审批（`hitl_mode = "never"`），这意味着接入该 server 的任何客户端都获得了**无需审批的完整工具能力（包括执行命令、读写文件）**。只把 server 暴露给可信客户端；HTTP 传输默认只绑定 localhost，不要手动开放到公网。
 

@@ -605,3 +605,23 @@ def test_plain_echo_runs_without_prompting(tmp_path: Path, sandbox_home: Path):
 
     assert not result.is_error, result.content
     assert prompts == []
+
+
+def test_full_access_command_guard_off_skips_write_scope(
+    tmp_path: Path, sandbox_home: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """P1-5：REPL Auto（hitl never + command guard 关）不应被写域守卫拦下——
+    write_file 在同一模式下因 path guard 关闭而成功，bash 域外写被拒是自相矛盾。
+    """
+    temp = tmp_path / "tmp"
+    temp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temp))
+
+    def callback(_request):
+        raise AssertionError("full-access mode must not prompt the write-scope guard")
+
+    context = _make_context(tmp_path, callback=callback, hitl_mode="never")
+    context.config.policy.command_guard_enabled = False
+    result = _run("echo hi > ../outside-full-access.txt", context)
+
+    assert not result.is_error

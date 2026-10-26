@@ -111,3 +111,15 @@ def test_team_plan_worker_write_is_hard_denied(tmp_path: Path) -> None:
     # The gate rides on a per-run config copy: the shared session config must
     # come back unchanged or concurrent react workers would be gated too.
     assert config.policy.plan_mode is False
+
+
+def test_plan_run_config_enables_plan_mode_on_a_copy(tmp_path: Path) -> None:
+    """P1-3：REPL /plan 必须与 -p --mode plan 同口径——per-run 副本打开只读
+    闸门，且会话 config 不被污染（plan_mode 不得泄漏进主 agent）。
+    """
+    from nexuscli.entrypoints.repl import _plan_run_config
+
+    config = load_config(project_root=tmp_path)
+    run_config = _plan_run_config(config)
+    assert run_config.policy.plan_mode is True
+    assert config.policy.plan_mode is False

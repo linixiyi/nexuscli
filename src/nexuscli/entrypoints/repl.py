@@ -124,6 +124,20 @@ SLASH_COMMANDS = [
 PermissionMode = Literal["default", "auto", "plan"]
 
 
+def _plan_run_config(config: NexusCliConfig) -> NexusCliConfig:
+    """与 ``-p --mode plan`` 同口径的 per-run 配置副本。
+
+    cli.py 对 ``--mode plan`` 打开 plan_mode 只读闸门并注释了原因；REPL /plan
+    此前直接用会话 config，既没打开闸门（可写文件，与另外两个入口语义相反），
+    也不能原地改会话 config（会泄漏进主 agent）。深拷贝副本两件事一起解决。
+    """
+    from copy import deepcopy
+
+    run_config = deepcopy(config)
+    run_config.policy.plan_mode = True
+    return run_config
+
+
 @dataclass
 class PermissionModeController:
     """Apply one of the three interactive permission modes to the live config."""
@@ -630,7 +644,7 @@ async def _handle_slash(
             plan_agent = PlanExecuteAgent(
                 llm_client=agent.llm_client,
                 tool_registry=registry,
-                config=config,
+                config=_plan_run_config(config),
                 cwd=cwd,
                 approval_callback=agent.approval_callback,
                 use_journal=True,
