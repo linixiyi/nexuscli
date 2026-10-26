@@ -60,3 +60,19 @@
   (来自网关 listing 的 `capabilities.vision`),`None` 才回落名字启发式;按
   `supports_images` 之类名字门槛会误判。——来源:2026-10-18_verify-zero-and-yellow
   缺陷修复「supports_images 名称门槛」;现状 `src/nexuscli/llm/model_profiles.py:24-26`
+
+## 可选依赖
+
+- 重可选能力按「四步套路」进,不引入时应用零感知(来源:2026-10-25_kitagent-alignment
+  交接文档,kitagent `core/engine/router.py:111-124` 与 `core/graph/checkpoint.py:56-60`
+  实读;仓库既有雏形:`read_file` 的 pypdf、telemetry 的 no-op):
+  ① extras 按能力分组、粒度到二级——「能用」与「能恢复/持久化」分档(参照 kitagent 的
+  `graph` 与 `graph-sqlite` 之别);
+  ② 框架 import 只出现在专属模块边界,核心模块顶层零引用;
+  ③ 惰性导入(配置选中该能力时才 import)+ `exc.name` 检查——缺依赖翻译成带安装指引的
+  类型化错误,其他 import 失败**原样抛**(内部 bug 不被友好提示掩盖);启动早期 ensure
+  快速失败(在外设/provider 构造之前);
+  ④ pytest marker 声明外部前提。
+- 引入时机:第二个实现者出现才值得付抽象成本(kitagent 的 Protocol+Router 是 loop/graph
+  两引擎倒逼出来的);单一实现者阶段保持直连,只守住 EngineResult sum type 返回合同
+  (F11,`src/nexuscli/agent/results.py`)。

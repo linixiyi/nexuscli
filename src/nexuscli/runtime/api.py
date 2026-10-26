@@ -307,15 +307,34 @@ class RuntimeApiServer:
         print(f"NexusCLI Runtime API listening on http://127.0.0.1:{bound_port}", flush=True)
         if self.workbench:
             print(f"Workbench: http://127.0.0.1:{bound_port}/", flush=True)
-            print(
-                f"打开一键链接完成认证: http://127.0.0.1:{bound_port}/#bootstrap="
-                f"{self.web_session.bootstrap_token}",
-                flush=True,
+            bootstrap_url = (
+                f"http://127.0.0.1:{bound_port}/#bootstrap={self.web_session.bootstrap_token}"
             )
+            print(f"打开一键链接完成认证: {bootstrap_url}", flush=True)
+            self._write_workbench_link_file(bootstrap_url)
         try:
             server.serve_forever()
         finally:
             self._stop.set()
+
+    def _write_workbench_link_file(self, bootstrap_url: str) -> None:
+        """workbench 一键链接落盘（2026-10-26_workbench-kitagent-ui task_0006）。
+
+        动机：口令一次性，而服务常被后台/他人终端拉起，用户翻不到启动日志——把
+        当前实例的一键链接写进状态目录，gate 页与用户都有可执行的恢复路径。文件
+        权限 0600（内嵌一次性口令，等同凭证）；每次启动覆盖（口令本就随进程重生）。
+        落盘失败仅提示，不阻断服务启动。
+        """
+        try:
+            link_path = Path.home() / ".nexuscli" / "workbench-link.txt"
+            link_path.parent.mkdir(parents=True, exist_ok=True)
+            # os.open 直接以 0600 创建（复审 F7）：write-then-chmod 会在 umask 权限下
+            # 留出含一次性口令的弱权限窗口。
+            fd = os.open(link_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(f"{bootstrap_url}\n")
+        except OSError as exc:
+            print(f"一键链接落盘失败（仅影响找回入口，不影响认证）: {exc}", flush=True)
 
     def work_forever(self) -> None:
         """Run only durable task workers, without exposing the HTTP API."""

@@ -21,6 +21,7 @@ export class SequenceGap extends Error {}
 
 /** NexusCLI 语义事件名（规范名，与运行时事件类型的映射见 mapEventName）。 */
 export type WorkbenchEventKind =
+  | "turn.started"
   | "text_delta"
   | "tool_call"
   | "tool_result"
@@ -36,11 +37,14 @@ export type WorkbenchEventKind =
  * - tool_call / tool_result / turn.completed / approval_suspended 与线上名一致
  *   （api.py:533-545、approvals.py:155-162）；approval_resolved 为 A10 审批事件
  *   面的解决侧（本文件按同名接受，payload 形状宽松解析）。
- * - 其余事件（thread.created / turn.started / error / done / 心跳注释行）返回
- *   null：不进事件流，但仍推进 seq 游标（见 applyEvent）。
+ * - turn.started（2026-10-26_workbench-kitagent-ui G16）映射为用户消息事件，
+ *   seq 游标语义不变；其余事件（thread.created / error / done / 心跳注释行）
+ *   返回 null：不进事件流，但仍推进 seq 游标（见 applyEvent）。
  */
 export function mapEventName(event: string): WorkbenchEventKind | null {
   switch (event) {
+    case "turn.started":
+      return "turn.started";
     case "message.delta":
     case "text_delta":
       return "text_delta";
@@ -60,6 +64,7 @@ export function mapEventName(event: string): WorkbenchEventKind | null {
 }
 
 export type WorkbenchEvent =
+  | { kind: "turn.started"; seq: number; message: string; mode: string }
   | { kind: "text_delta"; seq: number; text: string }
   | { kind: "tool_call"; seq: number; name: string; repr: string; callId: string }
   | {
@@ -118,6 +123,15 @@ function frameToEvent(
   data: Record<string, unknown>,
 ): WorkbenchEvent {
   switch (kind) {
+    case "turn.started":
+      // 2026-10-26_workbench-kitagent-ui G16：聊天面板需要用户消息（回放/刷新场景），
+      // turn.started 的 payload 是 {message, mode}（api.py _run_turn 落库形状）。
+      return {
+        kind,
+        seq,
+        message: asString(data.message),
+        mode: asString(data.mode),
+      };
     case "text_delta":
       return { kind, seq, text: asString(data.text) };
     case "tool_call":
@@ -186,15 +200,15 @@ function payloadSeq(data: Record<string, unknown>): number | null {
 export function applyEvent(state: WorkbenchState, frame: SseFrame): WorkbenchState {
   const seq = payloadSeq(frame.data);
   if (seq === null) {
-    // A10 合帧旁路（跨 lane 契约）：text_delta 合并帧不含行级 seq（data.text 已含
-    // 该段全部文本），帧 id 是段末行的 events 行 id——游标直接跳到段末，文本无丢失；
-    // 无 id 信息的帧原样返回。
-    if (
-      (frame.event === "message.delta" || frame.event === "text_delta") &&
-      frame.id > state.seq
-    ) {
-      const merged = frameToEvent("text_delta", frame.id, frame.data);
-      return { ...state, seq: frame.id, events: [...state.events, merged] };
+    // A10 合帧旁路（跨 lane 契约）：text_delta 合并帧不含 per-thread seq（data.text
+    // 已含该段全部文本）；帧 id 是 events 表**全局行 id**（api.py:1114-1117——重放
+    // 游标，与 per-thread seq 是两套计数）。合帧只追加文本事件，**不得把全局 id 写进
+    // seq 游标**：真实库中全局行 id 普遍大于 per-thread seq（跨线程、跨重启累积），
+    // 一旦污染游标，其后所有正常 seq 帧都会走 `seq <= state.seq` 被静默吞掉
+    // （2026-10-26 复审 F1；demo/e2e 全新 HOME 首线程 id==seq 掩蔽了它）。
+    if (frame.event === "message.delta" || frame.event === "text_delta") {
+      const merged = frameToEvent("text_delta", 0, frame.data);
+      return { ...state, events: [...state.events, merged] };
     }
     return state;
   }
