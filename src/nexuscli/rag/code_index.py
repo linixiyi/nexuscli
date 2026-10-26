@@ -63,6 +63,39 @@ def format_hit_stats(stats: SearchStats) -> str:
     )
 
 
+def bm25_idf(df: int, corpus_size: int) -> float:
+    """Inverse document frequency for one term: ``log(1 + (N - df + 0.5) / (df + 0.5))``."""
+    return math.log(1 + (corpus_size - df + 0.5) / (df + 0.5))
+
+
+def bm25_score(
+    terms: list[str],
+    df: dict[str, int],
+    corpus_size: int,
+    avgdl: float,
+    doc_length: int,
+    lowered: str,
+) -> float:
+    """BM25 score of one document against ``terms`` (pure function, no index access).
+
+    Term frequency is the substring count of each term in ``lowered``; ``df``
+    maps every term to its document frequency over a corpus of ``corpus_size``
+    documents with average length ``avgdl``. Shared by the code index (which
+    scores its SQLite candidate window) and the memory recall path (which
+    computes the same statistics in memory over one recall batch).
+    """
+    score = 0.0
+    for term in terms:
+        tf = lowered.count(term)
+        if tf == 0:
+            continue
+        idf = bm25_idf(df[term], corpus_size)
+        score += (
+            idf * (tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * doc_length / avgdl))
+        )
+    return score
+
+
 class CodeIndex:
     def __init__(self, root: str | Path, db_path: str | Path | None = None):
         self.root = Path(root).resolve()
@@ -149,35 +182,13 @@ class CodeIndex:
 
         scored: list[CodeSearchResult] = []
         for path, line, content, lowered in docs:
-            score = self._bm25_score(terms, df, corpus_size, avgdl, len(lowered), lowered)
+            score = bm25_score(terms, df, corpus_size, avgdl, len(lowered), lowered)
             scored.append(CodeSearchResult(path, line, content, score))
         scored.sort(key=lambda item: (-item.score, item.path, item.line))
 
         top = scored[:limit] if limit > 0 else []
         stats.returned = len(top)
         return top, stats
-
-    @staticmethod
-    def _bm25_score(
-        terms: list[str],
-        df: dict[str, int],
-        corpus_size: int,
-        avgdl: float,
-        doc_length: int,
-        lowered: str,
-    ) -> float:
-        score = 0.0
-        for term in terms:
-            tf = lowered.count(term)
-            if tf == 0:
-                continue
-            idf = math.log(1 + (corpus_size - df[term] + 0.5) / (df[term] + 0.5))
-            score += (
-                idf
-                * (tf * (BM25_K1 + 1))
-                / (tf + BM25_K1 * (1 - BM25_B + BM25_B * doc_length / avgdl))
-            )
-        return score
 
     def _iter_files(self, base: Path):
         for path in base.rglob("*"):

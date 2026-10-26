@@ -6,9 +6,17 @@ NexusCLI 把记忆分成三层：
 
 - 短期记忆：当前 thread/session 的原始消息、工具调用和工具结果
 - 静态长期记忆：`AGENTS.md`、`NEXUS.md`、`.nexuscli/NEXUS.md` 及自定义 prompt 文件；人工维护、可版本控制；`/init [notes]` 可让 Agent 检查工作区并生成或增量更新根 `AGENTS.md`，写入经 write_file 审批
-- 动态长期记忆：按项目 scope 隔离的 SQLite 记录；包含 kind、source、importance、confidence、TTL、访问次数和内容哈希
+- 动态长期记忆：按项目 scope 隔离的 SQLite 记录；包含 kind、source、importance、confidence、TTL、访问次数、内容哈希，以及实体标签、事件时间 `event_at` 和时态层 `temporal_kind`
 
-动态记忆不会再无条件取"最近 8 条"。每个请求会按当前问题自动召回 Top-K，并把结果放进明确标注为 untrusted data 的动态 Prompt；模型觉得候选不足时，还可以调用 `search_memory` 深搜。写入端会拒绝空值/超长值，通过规范化哈希去重，并按项目容量淘汰低价值记录。
+动态记忆不会再无条件取"最近 8 条"。每个请求会按当前问题自动召回 Top-K，并把结果放进明确标注为 untrusted data 的动态 Prompt；模型觉得候选不足时，还可以调用 `search_memory` 深搜。
+
+**召回：多信号融合**。相关性不再只看词面——每次召回对 scope 内候选并行打三路内容分：词法覆盖（权重 0.40）、BM25（0.25，在召回 batch 上内存现算词频与文档频次，复用 `rag/code_index.py` 提升为模块级纯函数的 `bm25_score`，按查询词 idf 总量归一到 [0,1]，不读代码索引文件）与实体重合（0.15，`save_memory`/`search_memory` 的可选 `entities` 参数优先，缺省用轻量启发式抽取：引号词、连续大写词、`pyproject.toml` 式标识符、camelCase、`@handle`）。三路按权重加权并归一到 0.80 的内容预算，再叠加 importance（0.08）、confidence（0.06）与 hotness（0.06）；三路内容分全零的条目直接记 0 分，metadata 再高也不会把无关记忆顶进结果。信号源是可替换的 `MemorySignal` 接口：`VectorSignal` 稠密向量位已留好但默认缺席（仓库不引 embedding 依赖），需要时经 `MemoryManager(signals=...)` 注入，激活信号的权重会自动重归一，排序尺度不随插拔回路数漂移。
+
+**召回：时间感知分层**。每条记忆带 `temporal_kind`（current_state / past_event / future_plan）与可选事件时间 `event_at`，动态 Prompt 的记忆行也加 `temporal=` 标注；查询的时态意图用中英文关键词表判别（"plan/接下来"→未来、"ago/上次"→过去，过去与未来标记并存时不做时态加权），意图与条目层级错配时融合分乘 0.85，已过 `event_at` 的 future_plan 按 past_event 匹配。旧库升级由 schema 迁移（`user_version` 门控，一次性）回填：旧行按 kind 映射（fact→past_event，preference/constraint/decision/correction→current_state），实体由同一启发式补齐。
+
+**召回：OpenViking 搬运件**。hotness 衰减信号搬运自 OpenViking（AGPL-3.0，commit 9a57854）`retrieve/memory_lifecycle.py` 的 `hotness_score`——sigmoid(访问频次) × 指数时间衰减，本仓半衰期取 30 天，替代旧的 recency/access 打分对；文件保留上游版权头并注明 Ported from，公式未改动。
+
+**写入：ADD-only 收窄**。同内容哈希再次到达不覆盖既有声明——kind、source、expires_at、temporal_kind 保持原值，只累积不变更；importance/confidence 取 max、实体取并集、`event_at` 仅在为空时补、`updated_at` 照常刷新（访问信号不算内容覆盖）。去重、TTL 与容量淘汰语义不变，写入端仍拒绝空值/超长值。`save_memory` 接受 `entities`/`event_at`/`temporal_kind` 参数，`search_memory` 接受 `entities`/`temporal_kind`，REPL `/save` 支持 `kind=` / `temporal=` / `event_at=` / `entities=` 前置选项。
 
 Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态前缀承载身份、规则和项目指令；动态后缀承载当前时间、cwd、模型、工具以及与当前问题相关的记忆。
 

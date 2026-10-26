@@ -518,16 +518,23 @@ async def _handle_slash(
     elif command == "/memory":
         await _memory_command(arg, console, cwd, config)
     elif command == "/save":
-        if not arg:
-            console.print("[red]Usage:[/red] /save <fact>")
+        options, fact = _parse_save_options(arg)
+        if not fact:
+            console.print(f"[red]Usage:[/red] {_SAVE_USAGE}")
+            console.print(f"[dim]{_SAVE_OPTIONS_HELP}[/dim]")
         else:
-            memory_id = MemoryManager(
-                config.memory.long_term_db_path,
-                scope=cwd,
-                max_entries=config.memory.max_long_term_entries,
-                max_content_length=config.memory.max_memory_chars,
-            ).save(arg, source="manual", importance=0.8)
-            console.print(f"Saved memory #{memory_id}")
+            try:
+                memory_id = MemoryManager(
+                    config.memory.long_term_db_path,
+                    scope=cwd,
+                    max_entries=config.memory.max_long_term_entries,
+                    max_content_length=config.memory.max_memory_chars,
+                ).save(fact, source="manual", importance=0.8, **options)
+            except ValueError as exc:
+                console.print(f"[red]Cannot save memory:[/red] {exc}")
+                console.print(f"[dim]{_SAVE_OPTIONS_HELP}[/dim]")
+            else:
+                console.print(f"Saved memory #{memory_id}")
     elif command == "/config":
         # A full config dump is hundreds of lines and scrolls the conversation
         # away. The fields a user actually checks before a run fit on one screen;
@@ -868,6 +875,41 @@ async def _handle_slash(
     else:
         console.print(f"[red]Unknown command:[/red] {command}")
     return False
+
+
+_SAVE_USAGE = "/save <fact>"
+# No square brackets here: rich would read "[kind=...]" as a markup tag and
+# swallow it, which is exactly what the usage line must not do.
+_SAVE_OPTIONS_HELP = (
+    "Optional key=value tokens before the fact: kind=<kind> "
+    "temporal=<current_state|past_event|future_plan> event_at=<ISO-8601> entities=<a,b>"
+)
+_SAVE_OPTION_KEYS = {"kind": "kind", "temporal": "temporal_kind", "event_at": "event_at"}
+
+
+def _parse_save_options(arg: str) -> tuple[dict[str, Any], str]:
+    """Split ``/save`` arguments into MemoryManager.save keyword options and the fact.
+
+    Leading ``key=value`` tokens (kind / temporal / event_at / entities) are
+    options; the first token that is not one of them starts the fact text, so
+    a plain ``/save <fact>`` keeps working unchanged (inner spacing preserved).
+    """
+    options: dict[str, Any] = {}
+    rest = arg.strip()
+    while rest:
+        parts = rest.split(None, 1)
+        key, separator, value = parts[0].partition("=")
+        if not separator or not value:
+            break
+        key = key.casefold()
+        if key in _SAVE_OPTION_KEYS:
+            options[_SAVE_OPTION_KEYS[key]] = value
+        elif key == "entities":
+            options["entities"] = [item for item in value.split(",") if item.strip()]
+        else:
+            break
+        rest = parts[1].strip() if len(parts) > 1 else ""
+    return options, rest
 
 
 # Kept in repl.py (not commands/usage.py): tests/test_usage_history.py

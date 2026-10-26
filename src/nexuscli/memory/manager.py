@@ -1,25 +1,45 @@
 from __future__ import annotations
 
 import hashlib
-import math
-import re
+import json
 import sqlite3
-import unicodedata
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from nexuscli.memory.memory_lifecycle import hotness_score
+from nexuscli.memory.signals import (
+    DEFAULT_TEMPORAL_KIND,
+    HOTNESS_HALF_LIFE_DAYS,
+    TEMPORAL_KINDS,
+    WEIGHT_CONFIDENCE,
+    WEIGHT_HOTNESS,
+    WEIGHT_IMPORTANCE,
+    MemorySignal,
+    SignalQuery,
+    content_scores,
+    default_signals,
+    derive_temporal_kind,
+    effective_temporal_kind,
+    extract_entities,
+    normalize_entities,
+    normalize_text,
+    temporal_kind_for_kind,
+    temporal_multiplier,
+)
+from nexuscli.memory.signals import (
+    MAX_ENTITIES as _MAX_ENTITIES,
+)
 
 DEFAULT_MAX_ENTRIES_PER_SCOPE = 1_000
 DEFAULT_MAX_CONTENT_LENGTH = 8_000
 _MAX_METADATA_LENGTH = 128
 _ENTRY_COLUMNS = """
     id, scope, content, created_at, kind, source, importance, confidence,
-    updated_at, expires_at, access_count, content_hash
+    updated_at, expires_at, access_count, content_hash, entities, event_at, temporal_kind
 """
-_WORD_RE = re.compile(r"[a-z0-9_]+")
-_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 
 
 @dataclass(slots=True)
@@ -36,6 +56,9 @@ class MemoryEntry:
     expires_at: str | None = None
     access_count: int = 0
     content_hash: str = ""
+    entities: list[str] = field(default_factory=list)
+    event_at: str | None = None
+    temporal_kind: str = DEFAULT_TEMPORAL_KIND
 
 
 class MemoryManager:
@@ -46,11 +69,17 @@ class MemoryManager:
         *,
         max_entries: int = DEFAULT_MAX_ENTRIES_PER_SCOPE,
         max_content_length: int = DEFAULT_MAX_CONTENT_LENGTH,
+        signals: Sequence[MemorySignal] | None = None,
     ):
         self.db_path = Path(db_path).expanduser()
         self.scope = str(scope)
         self.max_entries = _positive_int(max_entries, "max_entries")
         self.max_content_length = _positive_int(max_content_length, "max_content_length")
+        # Relevance signals are injectable so tests (and future vector support)
+        # can swap the set; the default is lexical + BM25 + entity.
+        self.signals: list[MemorySignal] = (
+            list(signals) if signals is not None else default_signals()
+        )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
@@ -63,7 +92,19 @@ class MemoryManager:
         importance: float = 0.5,
         confidence: float = 1.0,
         expires_at: str | datetime | None = None,
+        entities: Iterable[str] | None = None,
+        event_at: str | datetime | None = None,
+        temporal_kind: str | None = None,
     ) -> int:
+        """Store a memory; the write path is ADD-only.
+
+        A second arrival of the same normalised content (same ``content_hash``)
+        accumulates onto the existing row instead of redefining it: ``kind``,
+        ``source``, ``expires_at`` and ``temporal_kind`` keep their original
+        declaration, ``importance`` / ``confidence`` take the max, ``entities``
+        are unioned, ``event_at`` is only filled when it was empty, and
+        ``updated_at`` is refreshed. Dedup, TTL and quota semantics are unchanged.
+        """
         cleaned = _clean_content(content)
         if len(cleaned) > self.max_content_length:
             raise ValueError(f"memory content exceeds {self.max_content_length} characters")
@@ -71,7 +112,11 @@ class MemoryManager:
         normalized_source = _validate_metadata(source, "source")
         normalized_importance = _validate_score(importance, "importance")
         normalized_confidence = _validate_score(confidence, "confidence")
-        normalized_expiry = _normalize_optional_timestamp(expires_at)
+        normalized_expiry = _normalize_optional_timestamp(expires_at, "expires_at")
+        normalized_event_at = _normalize_optional_timestamp(event_at, "event_at")
+        explicit_entities = normalize_entities(entities)
+        normalized_entities = explicit_entities or extract_entities(cleaned)
+        normalized_temporal = derive_temporal_kind(normalized_kind, cleaned, temporal_kind)
         now = _now_iso()
         content_hash = _hash_content(cleaned)
 
@@ -89,21 +134,21 @@ class MemoryManager:
             if row:
                 existing = _entry_from_row(row)
                 memory_id = existing.id
+                merged_entities = sorted(set(existing.entities) | set(normalized_entities))
                 conn.execute(
                     """
                     update memories
-                    set content = ?, kind = ?, source = ?, importance = ?, confidence = ?,
-                        updated_at = ?, expires_at = ?
+                    set content = ?, importance = ?, confidence = ?, updated_at = ?,
+                        entities = ?, event_at = coalesce(event_at, ?)
                     where id = ? and scope = ?
                     """,
                     (
                         cleaned,
-                        normalized_kind,
-                        normalized_source,
                         max(existing.importance, normalized_importance),
                         max(existing.confidence, normalized_confidence),
                         now,
-                        normalized_expiry if normalized_expiry is not None else existing.expires_at,
+                        _entities_to_json(merged_entities),
+                        normalized_event_at,
                         memory_id,
                         self.scope,
                     ),
@@ -113,8 +158,9 @@ class MemoryManager:
                     """
                     insert into memories(
                         scope, content, created_at, kind, source, importance, confidence,
-                        updated_at, expires_at, access_count, content_hash
-                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                        updated_at, expires_at, access_count, content_hash,
+                        entities, event_at, temporal_kind
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                     """,
                     (
                         self.scope,
@@ -127,6 +173,9 @@ class MemoryManager:
                         now,
                         normalized_expiry,
                         content_hash,
+                        _entities_to_json(normalized_entities),
+                        normalized_event_at,
+                        normalized_temporal,
                     ),
                 )
                 memory_id = int(cursor.lastrowid)
@@ -172,13 +221,24 @@ class MemoryManager:
         kinds: Iterable[str] | None = None,
         min_score: float = 0.0,
         mark_access: bool = True,
+        entities: Iterable[str] | None = None,
+        temporal_kind: str | None = None,
     ) -> list[MemoryEntry]:
+        """Relevance-ranked recall over the scope.
+
+        ``entities`` adds explicit query entities on top of the heuristic ones;
+        ``temporal_kind`` overrides the keyword-table temporal intent (one of
+        ``current_state`` / ``past_event`` / ``future_plan``).
+        """
         normalized_limit = _normalize_limit(limit)
         if normalized_limit == 0:
             return []
         cleaned_query = " ".join(str(query or "").split())
         if not cleaned_query:
             return self.list(normalized_limit)
+        signal_query = SignalQuery.build(
+            cleaned_query, entities=entities, temporal_kind=temporal_kind
+        )
 
         normalized_kinds = None
         if kinds is not None:
@@ -207,12 +267,13 @@ class MemoryManager:
             ).fetchall()
 
         now = datetime.now(UTC)
-        ranked: list[tuple[float, MemoryEntry]] = []
-        for row in rows:
-            entry = _entry_from_row(row)
-            score = _relevance_score(cleaned_query, entry, now)
-            if score > 0 and score >= float(min_score):
-                ranked.append((score, entry))
+        entries = [_entry_from_row(row) for row in rows]
+        scores = _relevance_scores(signal_query, entries, now, self.signals)
+        ranked: list[tuple[float, MemoryEntry]] = [
+            (score, entry)
+            for score, entry in zip(scores, entries, strict=True)
+            if score > 0 and score >= float(min_score)
+        ]
         ranked.sort(
             key=lambda item: (
                 item[0],
@@ -319,7 +380,10 @@ class MemoryManager:
                     updated_at text not null default '',
                     expires_at text,
                     access_count integer not null default 0,
-                    content_hash text not null default ''
+                    content_hash text not null default '',
+                    entities text not null default '[]',
+                    event_at text,
+                    temporal_kind text not null default ''
                 )
                 """
             )
@@ -348,6 +412,14 @@ class MemoryManager:
                 conn.execute(
                     "alter table memories add column content_hash text not null default ''"
                 )
+            if "entities" not in columns:
+                conn.execute("alter table memories add column entities text not null default '[]'")
+            if "event_at" not in columns:
+                conn.execute("alter table memories add column event_at text")
+            if "temporal_kind" not in columns:
+                conn.execute(
+                    "alter table memories add column temporal_kind text not null default ''"
+                )
 
             # The dedup pass rewrites every row; guard it with a version marker
             # so constructing a manager (which the REPL does per command) does
@@ -357,6 +429,12 @@ class MemoryManager:
                 conn.execute("drop index if exists idx_memories_scope_hash")
                 self._normalize_and_deduplicate(conn)
                 conn.execute("pragma user_version = 1")
+            # Version 2 adds the temporal layer and entity tags: rows written
+            # before it get temporal_kind from their kind and entities from the
+            # heuristic extractor, once, behind the same marker.
+            if version < 2:
+                self._backfill_temporal_and_entities(conn)
+                conn.execute("pragma user_version = 2")
             conn.execute("create index if not exists idx_memories_scope on memories(scope, id)")
             conn.execute(
                 """
@@ -377,6 +455,29 @@ class MemoryManager:
                 """
             )
             self._enforce_quota(conn)
+
+    def _backfill_temporal_and_entities(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            select id, content, kind, entities, temporal_kind
+            from memories
+            where temporal_kind not in (?, ?, ?) or entities = '' or entities = '[]'
+            order by id
+            """,
+            tuple(sorted(TEMPORAL_KINDS)),
+        ).fetchall()
+        for row in rows:
+            content = str(row["content"] or "")
+            temporal_kind = str(row["temporal_kind"] or "")
+            if temporal_kind not in TEMPORAL_KINDS:
+                temporal_kind = temporal_kind_for_kind(str(row["kind"] or "fact"))
+            entities = _entities_from_json(row["entities"])
+            if not entities:
+                entities = extract_entities(content)
+            conn.execute(
+                "update memories set temporal_kind = ?, entities = ? where id = ?",
+                (temporal_kind, _entities_to_json(entities), int(row["id"])),
+            )
 
     def _normalize_and_deduplicate(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute(
@@ -510,6 +611,9 @@ class MemoryManager:
 
 
 def _entry_from_row(row: sqlite3.Row) -> MemoryEntry:
+    temporal_kind = str(row["temporal_kind"] or "")
+    if temporal_kind not in TEMPORAL_KINDS:
+        temporal_kind = temporal_kind_for_kind(str(row["kind"]))
     return MemoryEntry(
         id=int(row["id"]),
         scope=str(row["scope"]),
@@ -523,7 +627,28 @@ def _entry_from_row(row: sqlite3.Row) -> MemoryEntry:
         expires_at=str(row["expires_at"]) if row["expires_at"] is not None else None,
         access_count=int(row["access_count"]),
         content_hash=str(row["content_hash"]),
+        entities=_entities_from_json(row["entities"]),
+        event_at=str(row["event_at"]) if row["event_at"] is not None else None,
+        temporal_kind=temporal_kind,
     )
+
+
+def _entities_to_json(entities: Iterable[str]) -> str:
+    # ADD-only 并集的上限（复审 iter1-F3）：同 hash 多次到达且每次带不同实体列表时，
+    # 不设帽会让列内容按 32×到达次数无界增长（纯存储膨胀）。按排序确定性截断。
+    return json.dumps(sorted(set(entities))[:_MAX_ENTITIES], ensure_ascii=False)
+
+
+def _entities_from_json(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    try:
+        data = json.loads(str(raw))
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return sorted({str(item) for item in data if isinstance(item, str) and item})
 
 
 def _clean_content(content: str) -> str:
@@ -536,13 +661,8 @@ def _clean_content(content: str) -> str:
 
 
 def _hash_content(content: str) -> str:
-    normalized = _normalize_text(content)
+    normalized = normalize_text(content)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
-def _normalize_text(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    return " ".join(normalized.split())
 
 
 def _validate_metadata(value: str, field: str) -> str:
@@ -600,12 +720,14 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _normalize_optional_timestamp(value: str | datetime | None) -> str | None:
+def _normalize_optional_timestamp(
+    value: str | datetime | None, field: str = "expires_at"
+) -> str | None:
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
     parsed = _parse_timestamp(value)
     if parsed is None:
-        raise ValueError("expires_at must be a valid ISO-8601 timestamp")
+        raise ValueError(f"{field} must be a valid ISO-8601 timestamp")
     return parsed.isoformat()
 
 
@@ -648,41 +770,39 @@ def _merge_expiry(left: str | None, right: str | None) -> str | None:
     return max(left, right)
 
 
-def _lexical_features(value: str) -> set[str]:
-    normalized = _normalize_text(value)
-    features = set(_WORD_RE.findall(normalized))
-    for sequence in _CJK_RE.findall(normalized):
-        characters = list(sequence)
-        features.update(characters)
-        features.update(
-            "".join(characters[index : index + 2]) for index in range(len(characters) - 1)
+def _relevance_scores(
+    query: SignalQuery,
+    entries: Sequence[MemoryEntry],
+    now: datetime,
+    signals: Sequence[MemorySignal],
+) -> list[float]:
+    """Fuse the content signals with importance, confidence and hotness.
+
+    Content relevance (lexical + BM25 + entity, see :mod:`signals`) gates the
+    score: an entry none of the signals matched stays at 0.0 regardless of its
+    metadata, which is what keeps unrelated memories out of the results. Above
+    the gate, metadata terms break ties and the OpenViking hotness decay
+    (access frequency x recency) replaces the old recency/access pair. Finally
+    a temporal intent on the query scales down entries of another temporal
+    layer (a future plan whose event time has passed counts as a past event).
+    """
+    relevance = content_scores(query, entries, signals)
+    scores: list[float] = []
+    for entry, content_relevance in zip(entries, relevance, strict=True):
+        if content_relevance <= 0:
+            scores.append(0.0)
+            continue
+        anchor = _parse_timestamp(entry.updated_at) or _parse_timestamp(entry.created_at) or now
+        hotness = hotness_score(
+            max(entry.access_count, 0), anchor, now, half_life_days=HOTNESS_HALF_LIFE_DAYS
         )
-        if len(sequence) > 1:
-            features.add(sequence)
-    return features
-
-
-def _relevance_score(query: str, entry: MemoryEntry, now: datetime) -> float:
-    normalized_query = _normalize_text(query)
-    normalized_content = _normalize_text(entry.content)
-    query_features = _lexical_features(normalized_query)
-    content_features = _lexical_features(normalized_content)
-    if not query_features:
-        return 0.0
-    overlap = query_features & content_features
-    substring_match = normalized_query in normalized_content
-    if not overlap and not substring_match:
-        return 0.0
-    coverage = len(overlap) / len(query_features)
-    lexical = min(1.0, 0.8 * coverage + (0.2 if substring_match else 0.0))
-    updated_at = _parse_timestamp(entry.updated_at) or _parse_timestamp(entry.created_at) or now
-    age_days = max((now - updated_at).total_seconds(), 0.0) / 86_400
-    recency = 1.0 / (1.0 + age_days / 30.0)
-    access = min(math.log1p(max(entry.access_count, 0)) / math.log(11), 1.0)
-    return (
-        0.72 * lexical
-        + 0.12 * entry.importance
-        + 0.08 * entry.confidence
-        + 0.06 * recency
-        + 0.02 * access
-    )
+        total = (
+            content_relevance
+            + WEIGHT_IMPORTANCE * entry.importance
+            + WEIGHT_CONFIDENCE * entry.confidence
+            + WEIGHT_HOTNESS * hotness
+        )
+        event_at = _parse_timestamp(entry.event_at) if entry.event_at else None
+        layer = effective_temporal_kind(entry.temporal_kind, event_at, now)
+        scores.append(total * temporal_multiplier(query.intent, layer))
+    return scores

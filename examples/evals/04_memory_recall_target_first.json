@@ -1,0 +1,43 @@
+{
+  "name": "memory-recall-target-first",
+  "description": "Multi-signal memory recall end to end: three same-word distractors and one entity-anchored target are saved, then an adversarial query must put the target first. The frozen search_memory result is the real handler output for exactly this batch; a lexical-only ranking at the same limit returns only the three distractors.",
+  "prompt": "Save these deploy-environment facts to long-term memory, then recall what is relevant about the Bluefin auth setup and summarize the key fact.",
+  "tools": [
+    {
+      "name": "save_memory",
+      "description": "Save an explicit or durable fact to long-term project memory (eval stub; requires_approval is false only because the offline eval has no approver, the real tool gates writes with an approval prompt).",
+      "result": "Saved memory #1",
+      "read_only": false,
+      "requires_approval": false,
+      "danger_level": "medium"
+    },
+    {
+      "name": "search_memory",
+      "description": "Search relevance-ranked long-term project memory.",
+      "result": "#4 [decision, importance=0.50, temporal=current_state] Bluefin delegates its logins to Keycloak\n#2 [fact, importance=0.90, temporal=past_event] auth service configuration checklist for realm two\n#1 [fact, importance=0.90, temporal=past_event] auth service configuration checklist for realm one"
+    }
+  ],
+  "scripted_turns": [
+    {
+      "tool_calls": [
+        {"name": "save_memory", "arguments": {"content": "auth service configuration checklist for realm one", "importance": 0.9}},
+        {"name": "save_memory", "arguments": {"content": "auth service configuration checklist for realm two", "importance": 0.9}},
+        {"name": "save_memory", "arguments": {"content": "auth service configuration checklist for realm three", "importance": 0.9}},
+        {"name": "save_memory", "arguments": {"content": "Bluefin delegates its logins to Keycloak", "kind": "decision", "entities": ["Bluefin", "Keycloak"]}}
+      ]
+    },
+    {
+      "tool_calls": [
+        {"name": "search_memory", "arguments": {"query": "Bluefin Keycloak auth service configuration", "limit": 3}}
+      ]
+    },
+    {
+      "text": "Per long-term memory, the key fact is that Bluefin delegates its logins to Keycloak (memory #4); the other recalled entries are generic auth service configuration checklists."
+    }
+  ],
+  "assertions": {
+    "expected_tool_sequence": ["save_memory", "save_memory", "save_memory", "save_memory", "search_memory"],
+    "final_contains": ["Bluefin delegates its logins to Keycloak", "Keycloak"],
+    "max_turns": 3
+  }
+}

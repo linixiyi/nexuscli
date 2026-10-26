@@ -32,7 +32,7 @@
 | 工具与扩展 | 文件/Shell/检索/联网/记忆内置工具（写文件自动 py_compile 诊断），MCP client+server，代码索引 BM25 检索 | [docs/tools.md](docs/tools.md) |
 | Skill 系统 | builtin/user/project 分层 + Agent Skills 规范目录扫描、Top-K 匹配懒加载、`save_skill` 经 HITL 沉淀 | [docs/skills.md](docs/skills.md) |
 | 斜杠命令与插件 | 自定义斜杠命令（frontmatter/占位符/输出注入）与 `.nexuscli/plugins` 本地插件并入 | [docs/slash-commands.md](docs/slash-commands.md) |
-| 记忆与持久化 | 静态项目记忆 + SQLite 动态长期记忆（去重/TTL/相关性召回），会话 JSONL 自动持久化、`-c`/`--resume`/`/fork` 跨进程恢复 | [docs/sessions.md](docs/sessions.md) |
+| 记忆与持久化 | 静态项目记忆 + SQLite 动态长期记忆（去重/TTL/多信号时态召回），会话 JSONL 自动持久化、`-c`/`--resume`/`/fork` 跨进程恢复 | [docs/sessions.md](docs/sessions.md) |
 | 快照 | 按需快照与恢复，Agent 可经 `vfs_ls` / `vfs_read` 挂载只读视图做改前对比 | [docs/sessions.md](docs/sessions.md#快照) |
 | 安全与治理 | HITL 人工确认（五键位 + run 级授权）、deny>ask>allow 权限规则、七个生命周期 Hooks、JSONL 审计日志、环境清洗护栏 | [docs/permissions.md](docs/permissions.md) |
 | Runtime API | 有历史的 thread / turn / 事件日志 HTTP 接入，持久化后台任务队列（lease/heartbeat、原子抢占、项目隔离） | [docs/runtime-api.md](docs/runtime-api.md) |
@@ -326,7 +326,7 @@ team_result = engine.team_complete("让多个 Agent 并行检查核心模块")
 | 内置斜杠命令 | [docs/repl-commands.md](docs/repl-commands.md) | 完整命令表、/model 选择器、usage 双口径与会话增强 |
 | 内置工具补充 | [docs/tools.md](docs/tools.md) | pdf/rg 差异、vfs 只读视图、BM25 检索与图片输入 |
 | Skill 匹配与沉淀 | [docs/skills.md](docs/skills.md) | 分层加载、Top-K 匹配与 save_skill 沉淀 |
-| 记忆与上下文压缩 | [docs/memory-context.md](docs/memory-context.md) | 记忆三层、动态召回、压缩预算与 provider 超限重试 |
+| 记忆与上下文压缩 | [docs/memory-context.md](docs/memory-context.md) | 记忆三层、多信号时态召回、压缩预算与 provider 超限重试 |
 | Plan-and-Execute | [docs/plan-execute.md](docs/plan-execute.md) | 图级 checkpoint、续跑与协作式中断 |
 | 会话与快照 | [docs/sessions.md](docs/sessions.md) | 持久化、恢复与 usage 台账续算、快照与回放 |
 | 权限与会话模式 | [docs/permissions.md](docs/permissions.md) | allow/deny/ask、命令级判定、审批透传与会话权限模式 |

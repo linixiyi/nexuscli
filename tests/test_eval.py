@@ -77,16 +77,17 @@ def _simple_scenario_data(**overrides) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_builtin_eval_dir_ships_three_scenarios():
+def test_builtin_eval_dir_ships_the_builtin_scenarios():
     eval_dir = builtin_eval_dir()
     assert eval_dir is not None
     scenarios = load_eval_scenarios(eval_dir)
     names = [scenario.name for scenario in scenarios]
-    assert len(names) == 3
+    assert len(names) == 4
     assert set(names) == {
         "read-task-details",
         "denied-privileged-call",
         "multi-turn-search-converge",
+        "memory-recall-target-first",
     }
 
 
@@ -180,7 +181,7 @@ def test_all_builtin_scenarios_pass_offline(tmp_path):
 
     results = run_eval_scenarios(scenarios, cwd=str(tmp_path))
 
-    assert [result.passed for result in results] == [True, True, True]
+    assert [result.passed for result in results] == [True] * len(scenarios)
     assert all(result.failure_reasons == [] for result in results)
 
 
@@ -405,6 +406,7 @@ def test_eval_list_lists_builtin_scenarios():
     assert "read-task-details" in result.output
     assert "denied-privileged-call" in result.output
     assert "multi-turn-search-converge" in result.output
+    assert "memory-recall-target-first" in result.output
 
 
 def test_eval_run_writes_report_and_exits_zero(tmp_path):
@@ -412,11 +414,11 @@ def test_eval_run_writes_report_and_exits_zero(tmp_path):
 
     assert result.exit_code == 0
     assert "PASS\tread-task-details" in result.output
-    assert "total=3 passed=3 failed=0" in result.output
+    assert "total=4 passed=4 failed=0" in result.output
     report_path = tmp_path / REPORT_RELATIVE
     assert report_path.is_file()
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["summary"]["total"] == 3
+    assert report["summary"]["total"] == 4
     assert all(entry["comparison"]["verdict"] == "new" for entry in report["scenarios"])
 
 
