@@ -40,7 +40,7 @@
 | 定时任务 | `nexuscli cron` 离线任务注册表，触发由外部调度器驱动 | [docs/cron.md](docs/cron.md) |
 | 上下文压缩 | 80% 预算触发，先无损 microcompact 再有损摘要；provider 真实超限自动压缩重试一次 | [docs/memory-context.md](docs/memory-context.md) |
 | 会话增强 | `/fork` 分叉、`/goal` 长程目标、`/effort` 推理力度、`/history` 跨会话检索、usage 双口径 | [docs/repl-commands.md](docs/repl-commands.md) |
-| 评测回归 | 离线任务级 eval：脚本化假 LLM 驱动真实 Agent，七种断言（轨迹序列/子集/禁用工具/回合与调用数上限）对累计轨迹判定；支持多轮用户模拟（脚本化用户在 agent 产出后追问同一会话、轮数硬上限）与记忆召回评测（临时库 seed 记忆，目标条目进 recall 前 K、干扰条目不排前）；回归以 `regression` 形式暴露并按 short/medium/long 难度分档定位，turns/工具调用数成本上涨显式告警但不改判定，可当 CI 门禁 | [docs/eval.md](docs/eval.md) |
+| 评测回归 | 离线任务级 eval：脚本化假 LLM 驱动真实 Agent，七种断言（轨迹序列/子集/禁用工具/回合与调用数上限）对累计轨迹判定；支持多轮用户模拟（脚本化用户在 agent 产出后追问同一会话、轮数硬上限）与记忆召回评测（临时库 seed 记忆，目标条目进 recall 前 K、干扰条目不排前）；回归以 `regression` 形式暴露并按 short/medium/long 难度分档定位，turns/工具调用数成本上涨显式告警但不改判定，可当 CI 门禁；另有真模型轨道 `eval run --real`——真实 LLM 走正常配置链驱动只读 builtin 工具面（白名单外失败关闭拒绝并留审计），pass^k 稳定性、真实 token 成本（含 cache/reasoning 拆分）与 LLM-as-judge 评分写入独立的 last-real-report.json（夜跑口径，不做 CI 门禁） | [docs/eval.md](docs/eval.md) |
 | 可观测性 | trace_id 贯穿审计与 LLM 请求头、可选 OTel span、模型 IO 脱敏落盘、usage 落库 | [docs/observability.md](docs/observability.md) |
 | 代码索引 | `/index` 建本地词法索引，`/search` 与 `search_code` 按纯 Python BM25 相关性排序 | [docs/tools.md](docs/tools.md#代码索引与检索) |
 | 图片输入 | `@image:` 引用本地/远程图片，自动压缩缩放，按模型能力自动降级 | [docs/tools.md](docs/tools.md#图片输入) |

@@ -57,14 +57,21 @@ from nexuscli.entrypoints.slash_commands import (
 from nexuscli.eval import (
     EvalSchemaError,
     PreviousReportError,
+    build_real_report,
     build_report,
     builtin_eval_dir,
+    builtin_real_eval_dir,
+    format_real_report,
     format_report,
     load_eval_scenarios,
     load_previous_report,
+    load_real_eval_scenarios,
     run_eval_scenarios,
+    run_real_scenarios,
+    write_real_report,
     write_report,
 )
+from nexuscli.eval.real import RealTrackError
 from nexuscli.llm import create_llm_client
 from nexuscli.mcp import (
     McpConfigError,
@@ -577,15 +584,46 @@ def eval_run(
         bool, typer.Option("--all", help="Run every built-in scenario (the default)")
     ] = False,
     cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
+    real: Annotated[
+        bool,
+        typer.Option(
+            "--real",
+            help=(
+                "Run the real-model track: a real LLM (normal config chain) drives the "
+                "real read-only builtin tools; writes are fail-closed denied and audited"
+            ),
+        ),
+    ] = False,
+    repeat: Annotated[
+        int,
+        typer.Option(
+            "--repeat",
+            min=1,
+            help="Real track only: run every scenario k times serially (default 1)",
+        ),
+    ] = 1,
 ) -> None:
-    """Run scripted eval scenarios offline and diff against the previous report.
+    """Run eval scenarios and write the track's report.
 
-    The report is written to ``<cwd>/.nexuscli/evals/last-report.json``; the
-    next run reads it back and marks pass->fail as regressions and fail->pass
-    as fixes. Exits 1 when any scenario fails.
+    Default (hermetic) track: scripted eval scenarios run fully offline and
+    diff against the previous report at ``<cwd>/.nexuscli/evals/last-report.json``;
+    the next run marks pass->fail as regressions and fail->pass as fixes.
+    Exits 1 when any scenario fails.
+
+    ``--real`` switches to the real-model track: the scenario set is
+    ``examples/evals/real/`` (or ``--file``), a real LLM is built from the
+    normal config chain, only the read-only builtin tools execute, write calls
+    are fail-closed denied and audited, and the report goes to
+    ``<cwd>/.nexuscli/evals/last-real-report.json`` (the hermetic baseline is
+    never touched). Exits 1 on any failed run or when no API key is configured.
     """
     _ = all_scenarios  # --all is the default behaviour; kept as an explicit flag
     root = (cwd or Path.cwd()).resolve()
+    if real:
+        _eval_run_real(file, root, repeat=repeat)
+        return
+    if repeat != 1:
+        raise typer.BadParameter("--repeat only applies to the real track (--real)")
     target: Path
     if file is not None:
         target = file
@@ -612,6 +650,34 @@ def eval_run(
     report = build_report(results, previous=previous)
     report_path = write_report(root, report)
     for line in format_report(report):
+        typer.echo(line)
+    typer.echo(f"Report written to {report_path}")
+    if report["summary"]["failed"]:
+        raise typer.Exit(1)
+
+
+def _eval_run_real(file: Path | None, root: Path, *, repeat: int) -> None:
+    """The ``--real`` branch of ``eval run`` (see the command docstring)."""
+    target = file if file is not None else builtin_real_eval_dir()
+    if target is None:
+        typer.echo("No real-track eval scenarios found (examples/evals/real is missing).", err=True)
+        raise typer.Exit(1)
+    try:
+        scenarios = load_real_eval_scenarios(target)
+    except EvalSchemaError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    if not scenarios:
+        typer.echo(f"No real-track eval scenarios in {target}", err=True)
+        raise typer.Exit(1)
+    try:
+        results = run_real_scenarios(scenarios, root=str(root), repeat=repeat)
+    except RealTrackError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    report = build_real_report(results, repeat=repeat)
+    report_path = write_real_report(root, report)
+    for line in format_real_report(report):
         typer.echo(line)
     typer.echo(f"Report written to {report_path}")
     if report["summary"]["failed"]:

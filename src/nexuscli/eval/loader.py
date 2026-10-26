@@ -75,6 +75,17 @@ cannot share one scenario, a ``memory_eval`` scenario must not declare any
 agent-loop key (``prompt``, ``scripted_turns``, ``tools``, ``assertions``,
 ``permission_deny``, ``hitl_mode``, ``user_turns``, ``max_rounds``).
 
+The real-model track (``nexuscli eval run --real``, see ``eval/real.py``)
+loads scenarios from ``examples/evals/real/`` through
+:func:`load_real_eval_scenarios` with its own minimal schema: ``name``,
+``prompt``, an ``assertions`` subset of the same seven keys, and an optional
+``judge`` block (rubric + score threshold + optional judge-model override).
+There are no stub tools and no scripted turns against a real model, so the
+hermetic-only keys (``scripted_turns``, ``tools``, ``memory_eval``, ...) are
+rejected outright as track conflicts. ``expected_tool_sequence`` is accepted
+but discouraged for real models (the docs say so): it stays usable for
+smoke-checking a fixed wiring, but it is brittle against real LLM variance.
+
 Validation is strict on purpose: unknown keys (at every level, top level
 included) and wrong shapes raise :class:`EvalSchemaError` with the file path
 and a human-readable reason, so a typo in a scenario file fails loudly
@@ -146,6 +157,25 @@ _SCENARIO_KEYS = {
     "memory_eval",
     *_AGENT_LOOP_KEYS,
 }
+
+# ---------------------------------------------------------------------------
+# Real-model track schema (loaded by `nexuscli eval run --real`)
+# ---------------------------------------------------------------------------
+# Minimal and strict on purpose: a real scenario is a prompt plus assertions
+# plus an optional judge — nothing else. Every hermetic-only key is a track
+# conflict and is rejected with a dedicated message (stub tools, scripted
+# turns and the memory-recall track are meaningless against a real LLM).
+_REAL_SCENARIO_KEYS = {"name", "prompt", "assertions", "judge"}
+_REAL_CONFLICT_KEYS: tuple[str, ...] = (
+    "tools",
+    "scripted_turns",
+    "memory_eval",
+    "permission_deny",
+    "hitl_mode",
+    "user_turns",
+    "max_rounds",
+)
+_REAL_JUDGE_KEYS = {"rubric", "threshold", "model"}
 
 
 class EvalSchemaError(ValueError):
@@ -276,6 +306,38 @@ class EvalScenario:
     memory_eval: MemoryEvalSpec | None = None
 
 
+@dataclass(slots=True)
+class RealJudgeSpec:
+    """The LLM-as-judge block of a real-track scenario.
+
+    ``rubric`` lists the criteria the judge scores the run's final answer
+    against; ``threshold`` (0–1) is the minimum score the answer must reach.
+    ``model`` optionally overrides the judge model; ``None`` means the judge
+    follows the run's own provider/model (see the real-track runner).
+    """
+
+    rubric: list[str]
+    threshold: float
+    model: str | None = None
+
+
+@dataclass(slots=True)
+class RealEvalScenario:
+    """A validated real-model track scenario.
+
+    Deliberately a different type from :class:`EvalScenario`: the real track
+    has no stub tools, no scripted turns and no memory spec, and keeping the
+    types apart makes it impossible to hand a hermetic scenario to the real
+    runner (or vice versa) by accident.
+    """
+
+    name: str
+    prompt: str
+    assertions: EvalAssertions
+    judge: RealJudgeSpec | None
+    source: str
+
+
 def load_eval_scenarios(path: str | Path) -> list[EvalScenario]:
     """Load one scenario file, or every ``*.json`` file under a directory.
 
@@ -321,6 +383,123 @@ def builtin_eval_dir() -> Path | None:
         if candidate.is_dir():
             return candidate
     return None
+
+
+# ---------------------------------------------------------------------------
+# Real-model track loading
+# ---------------------------------------------------------------------------
+
+
+def load_real_eval_scenarios(path: str | Path) -> list[RealEvalScenario]:
+    """Load one real-track scenario file, or every ``*.json`` under a directory.
+
+    Directory loading is sorted by file name so runs are deterministic. Raises
+    :class:`EvalSchemaError` with the file path named for unreadable files,
+    invalid JSON, and any schema violation — hermetic-only keys included.
+    """
+    root = Path(path)
+    if root.is_dir():
+        files = sorted(root.glob("*.json"))
+        scenarios: list[RealEvalScenario] = []
+        for file in files:
+            scenarios.append(load_real_eval_scenario(file))
+        return scenarios
+    return [load_real_eval_scenario(root)]
+
+
+def load_real_eval_scenario(file: str | Path) -> RealEvalScenario:
+    """Load and validate a single real-track scenario JSON file."""
+    path = Path(file)
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise EvalSchemaError(f"{path}: cannot read scenario file: {exc}") from exc
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise EvalSchemaError(f"{path}: invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise EvalSchemaError(f"{path}: scenario must be a JSON object")
+    return _real_scenario_from_mapping(data, source=str(path))
+
+
+def builtin_real_eval_dir() -> Path | None:
+    """Locate the repository's ``examples/evals/real`` directory, if it exists.
+
+    Same resolution order as :func:`builtin_eval_dir`; ``None`` when missing
+    (the real track is its own scenario set, never the hermetic one).
+    """
+    for base in (Path(__file__).resolve().parents[3], Path.cwd()):
+        candidate = base / "examples" / "evals" / "real"
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _real_scenario_from_mapping(data: dict[str, Any], *, source: str) -> RealEvalScenario:
+    conflict = [key for key in _REAL_CONFLICT_KEYS if key in data]
+    if conflict:
+        raise EvalSchemaError(
+            f"{source}: real-track scenarios must not declare hermetic-track key(s) "
+            f"{conflict}; the real track runs a real LLM on the real read-only builtin "
+            "tools, so stub tools and scripted turns do not apply"
+        )
+    unknown = set(data) - _REAL_SCENARIO_KEYS
+    if unknown:
+        raise EvalSchemaError(
+            f"{source}: unknown scenario key(s) {sorted(unknown)}; "
+            f"real-track scenarios support: {sorted(_REAL_SCENARIO_KEYS)}"
+        )
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise EvalSchemaError(f"{source}: 'name' must be a non-empty string")
+    prompt = data.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise EvalSchemaError(f"{source}: 'prompt' must be a non-empty string")
+    assertions = _parse_assertions(data.get("assertions", {}), source=source)
+    judge: RealJudgeSpec | None = None
+    if "judge" in data:
+        judge = _parse_judge(data["judge"], source=source)
+    return RealEvalScenario(
+        name=name,
+        prompt=prompt,
+        assertions=assertions,
+        judge=judge,
+        source=source,
+    )
+
+
+def _parse_judge(raw: Any, *, source: str) -> RealJudgeSpec:
+    """Validate the ``judge`` block: rubric + threshold, optional model override."""
+    if not isinstance(raw, dict):
+        raise EvalSchemaError(f"{source}: 'judge' must be an object, got {raw!r}")
+    unknown = set(raw) - _REAL_JUDGE_KEYS
+    if unknown:
+        raise EvalSchemaError(
+            f"{source}: judge has unknown key(s) {sorted(unknown)}; "
+            f"supported: {sorted(_REAL_JUDGE_KEYS)}"
+        )
+    rubric_raw = raw.get("rubric")
+    if rubric_raw is None:
+        raise EvalSchemaError(f"{source}: judge.rubric is required (a non-empty list of strings)")
+    rubric = _parse_string_list(rubric_raw, "'judge.rubric'", source=source)
+    if not rubric or any(not item.strip() for item in rubric):
+        raise EvalSchemaError(
+            f"{source}: judge.rubric must be a non-empty list of non-empty strings"
+        )
+    threshold = raw.get("threshold")
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, int | float)
+        or not 0 <= threshold <= 1
+    ):
+        raise EvalSchemaError(
+            f"{source}: judge.threshold must be a number between 0 and 1, got {threshold!r}"
+        )
+    model = raw.get("model")
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise EvalSchemaError(f"{source}: judge.model must be a non-empty string when present")
+    return RealJudgeSpec(rubric=rubric, threshold=float(threshold), model=model)
 
 
 # ---------------------------------------------------------------------------

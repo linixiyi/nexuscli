@@ -1,18 +1,28 @@
-# Eval — Offline Task-Level Regression
+# Eval — Task-Level Regression: Hermetic + Real-Model Tracks
 
-`nexuscli eval` is an offline evaluation harness for task-level agent
-behavior. Instead of calling a real LLM, a **scripted (fake) LLM client**
-drives the real `Agent` through JSON scenarios; assertions then check the
-tool-call sequence and the final output. A scenario can also be a
-**multi-round user simulation** — a scripted user keeps talking to the *same*
-agent session while the assertions watch every round — or a **memory-recall
-evaluation**, which seeds a throwaway database and judges the ranking of the
-real recall chain without any agent loop. Consecutive runs are diffed so a
-change that breaks an agent workflow shows up as a **regression** before it
-reaches production. Every report also records deterministic **cost metrics**
-(turns and tool calls, warned on growth) and groups results by **difficulty
-tier**, so a regression report says *which* tier degraded and whether the run
-got more expensive — without either ever changing a PASS/FAIL verdict.
+`nexuscli eval` is a two-track evaluation harness for task-level agent
+behavior. The default **hermetic track** guards the wiring you control: a
+**scripted (fake) LLM client** drives the real `Agent` through JSON
+scenarios; assertions then check the tool-call sequence and the final
+output. A scenario can also be a **multi-round user simulation** — a
+scripted user keeps talking to the *same* agent session while the
+assertions watch every round — or a **memory-recall evaluation**, which
+seeds a throwaway database and judges the ranking of the real recall chain
+without any agent loop. Consecutive runs are diffed so a change that breaks
+an agent workflow shows up as a **regression** before it reaches
+production. Every report also records deterministic **cost metrics** (turns
+and tool calls, warned on growth) and groups results by **difficulty tier**,
+so a regression report says *which* tier degraded and whether the run got
+more expensive — without either ever changing a PASS/FAIL verdict.
+
+The optional **real-model track** (`nexuscli eval run --real`) asks what the
+script cannot: how the *real* model — the one your normal config chain
+selects — behaves on the real read-only builtin tools, what it really costs,
+and how stable it is across repeats (pass^k) on open-ended answers
+(LLM-as-judge). It writes its own report and is nightly/manual evidence by
+design: real billing and provider variance make it the wrong thing to gate
+CI on, so the hermetic track stays the gate and this track stays honest
+about quality. See [Real-model track](#real-model-track---real).
 
 ## Commands
 
@@ -29,6 +39,18 @@ summary line and a per-tier `difficulty:` line; it writes the report to
 `<cwd>/.nexuscli/evals/last-report.json` and exits `1` when any scenario
 failed (CI-friendly). Cost warnings and tier counts are informational and
 never affect the exit code.
+
+The real-model track adds two flags to `eval run` (see
+[Real-model track](#real-model-track---real) for the full picture):
+
+```bash
+nexuscli eval run --real             # real-model track (examples/evals/real)
+nexuscli eval run --real --repeat k  # every real scenario k times, serially
+nexuscli eval run --real --file path # one real-track scenario file/directory
+```
+
+`--repeat` defaults to `1` and only applies to `--real` — passing it on the
+hermetic track is a usage error, not a silent no-op.
 
 ## Scenario schema
 
@@ -240,7 +262,7 @@ A turn is one scripted LLM response. A turn with `tool_calls` gets
 with only `text` ends the react loop — which on a `user_turns` scenario ends
 the *round*, and the scripted user's next message starts the next one.
 
-## How a scenario runs
+## How a scenario runs (hermetic track)
 
 The runner reuses the same fake-LLM injection pattern as the agent unit tests
 (`tests/test_agent_turns.py`): a `ScriptedLlmClient` replays `scripted_turns`
@@ -387,26 +409,235 @@ difficulty: short total=0 passed=0 failed=0 regressions=0 | medium total=8 passe
 Report written to <cwd>/.nexuscli/evals/last-report.json
 ```
 
+## Real-model track (`--real`)
+
+The hermetic track proves the wiring with a fixed script; the real-model
+track measures the thing the script stands in for. `nexuscli eval run
+--real` builds a real LLM client through the **normal config chain**
+(`load_config` → `create_llm_client`, so `~/.nexuscli/config.json`, the
+project's `.nexuscli/config.json`, `.env` and the `NEXUSCLI_*` environment
+all apply), drives the real builtin tools with it, and reports real token
+cost. Runs are serial with one fresh client per repetition; the scenario's
+`max_turns` assertion caps the react loop as usual, and a run that hits the
+runner's budget or the loop guard fails with `react loop terminated early:
+…` — an unconverged real run must not look like a pass with truncated
+output. The track is nightly/manual evidence, deliberately **not** a CI
+gate: every repetition bills real tokens and a flaky provider would fail a
+gate for the wrong reason.
+
+### Safety model: read-only surface, fail-closed writes
+
+Unattended runs must never write. Three stacked layers enforce it:
+
+- **Read-only tool subset.** The registry mounts the real builtin tools
+  (no MCP, no plugins), but only a curated read-only subset may *execute*:
+  `read_file`, `list_dir`, `glob`, `glob_files`, `grep`, `grep_code`,
+  `directory_tree`, `get_file_info`, `web_search`, `web_fetch`,
+  `search_code`, `task_output`, `todo_read`.
+  Every other builtin gets a computed `permissions.deny` rule — deny beats
+  ask/allow, so even a user config that allows `write_file` cannot punch
+  through. The subset is curated **by name**, not derived from the tools'
+  `is_read_only` flag: that flag is too loose for unattended runs, because
+  three flagged-read-only builtins actually mutate user state —
+  `todo_write` writes `.nexuscli/todo.json` (the default read-only flag),
+  `search_memory`'s recall runs with the default `mark_access=True` (an
+  `access_count` UPDATE plus a DELETE of expired rows on the user's real
+  memory DB per call), and `load_skill` records usage counters to
+  `~/.nexuscli/skills/usage.json` whenever the agent's skill buffer is
+  active (which it always is). All three stay outside the allowlist and are
+  denied+audited like any other write, so "unattended runs never write" is
+  literal — the audit log remains the track's only documented write.
+- **Fail-closed approval, same as `-p` without `--yes`.** There is no
+  approval callback, so anything that still reaches the approval gate
+  (`requires_approval` tools, `ask` rules) is denied. `hitl_mode` is pinned
+  to `auto` for the track so a user's `always`/`never` cannot accidentally
+  close or widen the surface.
+- **Audit pinned on.** Every denied call attempt goes through the real gate
+  chain and is written to the audit log (approver `permission-rule`, or
+  `hitl` for the approval-gate backstop) — a write attempt is a *known*
+  tool whose model-visible result is
+  `Tool "write_file" was denied by permission rule: write_file`, never an
+  unaudited "tool not found".
+
+### Real scenario schema
+
+Real scenarios are their own set (`examples/evals/real/`; `--file` accepts
+one file or a directory of `*.json` from anywhere) and load through a
+separate, deliberately minimal schema. Allowed keys are exactly `name`,
+`prompt`, `assertions` and an optional `judge`:
+
+```jsonc
+{
+  "name": "real-repo-question-answer",   // required, non-empty
+  "prompt": "Read pyproject.toml ...",   // required, non-empty
+  "assertions": {                        // optional: the same seven checks as
+    "max_turns": 6,                      // the hermetic track, judged against
+    "forbidden_tools": ["write_file"]    // the real run's observed trajectory
+  },
+  "judge": {                             // optional: LLM-as-judge scoring
+    "rubric": [                          // required, non-empty criteria the
+      "The answer states that the project's name is nexuscli"
+    ],
+    "threshold": 0.6,                    // required: 0..1 minimum score
+    "model": "glm-5.2"                   // optional: judge model override
+  }
+}
+```
+
+Validation is strict with the file named in every error. The hermetic-only
+keys are rejected outright as **track conflicts** (`scripted_turns`,
+`tools`, `memory_eval`, `permission_deny`, `hitl_mode`, `user_turns`,
+`max_rounds`) — stub tools and scripted turns are meaningless against a real
+model, and the two tracks use distinct scenario dataclasses so one cannot be
+fed to the other runner by accident. Other unknown keys (including
+`description` and `difficulty`) fail with the supported list in the message.
+`expected_tool_sequence` is accepted but **discouraged** for real models:
+any reordering the model chooses fails it, so prefer `required_tools` plus
+`forbidden_tools` unless the order really is the contract.
+
+### LLM-as-judge
+
+When a scenario declares `judge`, the run's final answer is scored against
+the rubric by a judge call on the **same client factory** as the run itself.
+Without `judge.model` the judge follows the run's provider/model; with it,
+the factory builds the judge a client with just the model swapped. The judge
+is prompted for a strict two-line reply that parses deterministically:
+
+```
+SCORE: 0.8
+REASON: one short sentence citing the rubric evidence
+```
+
+- `score >= threshold` passes the check; below it the run FAILS with
+  `judge score 0.20 is below threshold 0.60: <explanation>` — score and
+  evidence travel together in the failure reason.
+- An unparsable reply (no `SCORE:` line) scores `0.0` **fail-closed**, with
+  the raw excerpt quoted in the explanation, so a confused judge model can
+  never silently pass a run.
+- The judge call's own token usage is folded into the run's usage total, so
+  the report's cost includes judging. (The cost figure is priced with the
+  run's own model profile; token counts stay exact even when
+  `judge.model` points elsewhere.)
+- The judge evaluator is injectable — a plain callable seam, the same
+  pattern as the fake LLM — which is how the track's judge behavior is
+  tested with zero network.
+
+### pass^k, real cost, and the report
+
+`--repeat k` runs every scenario k times serially (default `1`, minimum 1).
+The report keeps **every** repetition and adds the stability and cost
+aggregation. It is written to
+`<cwd>/.nexuscli/evals/last-real-report.json` — never to the hermetic
+baseline `last-report.json` — and carries no comparison block on purpose:
+nightly real-track comparisons are read by a human, not diffed by the tool.
+
+```jsonc
+// one scenario entry
+{
+  "name": "real-repo-question-answer",
+  "source": "examples/evals/real/02_repo_question_answer.json",
+  "pass_k": {                              // pass^k verdict for the scenario
+    "repeat": 3, "passed_runs": 3, "failed_runs": 0, "all_pass": true
+  },
+  "cost": {
+    "runs": 3,
+    "total_usage": {                       // cache/reasoning splits preserved
+      "input_tokens": 300, "output_tokens": 90, "cache_hit_tokens": 120,
+      "cache_miss_tokens": 180, "reasoning_tokens": 24, "total_tokens": 390
+    },
+    "avg_usage": {"input_tokens": 100.0, "output_tokens": 30.0},
+    "total_cost": {"usd": {"total_cost": 0.0214}}   // summed per currency
+  },
+  "runs": [
+    {
+      "index": 1,                          // the repetition number
+      "status": "pass",
+      "failure_reasons": [],
+      "tool_sequence": ["read_file"],
+      "turns": 2,
+      "usage": {"input_tokens": 100, "output_tokens": 30, "total_tokens": 130},
+      "cost": {"usd": {"total_cost": 0.0071}},
+      "judge": {"score": 0.9, "threshold": 0.6, "passed": true,
+                 "explanation": "names nexuscli from pyproject.toml",
+                 "model": null}            // null = judge followed the run model
+    }
+    // ... one entry per repetition, nothing dropped
+  ]
+}
+```
+
+```jsonc
+"summary": {
+  "total_runs": 6, "passed": 6, "failed": 0,
+  "scenarios_total": 2, "scenarios_all_pass": 2, "all_pass_rate": 1.0,
+  "total_usage": {"input_tokens": 600, "output_tokens": 180, "total_tokens": 780},
+  "total_cost": {"usd": {"total_cost": 0.0428}}
+}
+```
+
+`pass_k.all_pass` is the pass^k verdict: a scenario counts toward pass^k
+only when **all** of its repeats passed — the metric exists to surface
+`pass → fail` flakiness that a single run hides. The CLI prints one
+`PASS/FAIL <name> [run <i>/<k>]` line per repetition (FAIL lines carry the
+reasons), then a `total_runs=… passed=… failed=…` summary line, and exits
+`1` on any failed run.
+
+### No key, no run
+
+The credential and provider are validated **before** any scenario starts, so
+a missing key can never produce a partial run or a silent skip. Without an
+API key the command exits `1` with an actionable message naming the levers:
+`NEXUSCLI_API_KEY` (or the provider's variable such as `DEEPSEEK_API_KEY` /
+`GLM_API_KEY`), or `llm.api_key` in `~/.nexuscli/config.json` / the project's
+`.nexuscli/config.json`. An unknown provider without a `base_url` fails the
+same way. Two built-in real scenarios ship in `examples/evals/real/`:
+`01_readonly_converge.json` (count the workspace root's entries within a
+turn budget, write attempts forbidden) and `02_repo_question_answer.json`
+(read `pyproject.toml`, name the project, judge-scored against a rubric) —
+run them from a checkout with `uv run nexuscli eval run --real` and expect a
+small, visible token bill in the report.
+
 ## Scope and honest boundaries
 
-Scripted evals cover three kinds of wiring regression: **orchestration and
-tool-chain behavior** (the react loop, tool sequencing, permission gating,
-convergence within a turn budget, the shape of the final answer),
-**user-adversarial behavior** (a scripted user keeps a conversation going —
-e.g. insisting on a refund — while the assertions watch every round for
-policy compliance), and **memory-recall quality** (multi-signal ranking over
-seeded rows, the standing regression gate for the recall chain). They do
-**not** measure real LLM quality — the "model" is a fixed script, so prompt
-sensitivity, reasoning quality, hallucination behavior, and token cost /
-latency are all out of scope (the harness's `turns` / `total_tool_calls` cost
-metrics are deterministic step counts of the wiring, not model cost). Use
-this harness to guard the wiring you control; evaluate real model behavior
-separately.
+The two tracks split the question "how is the agent doing?" by what can be
+deterministic.
+
+**Hermetic track — guard the wiring you control.** Scripted evals cover three
+kinds of wiring regression: **orchestration and tool-chain behavior** (the
+react loop, tool sequencing, permission gating, convergence within a turn
+budget, the shape of the final answer), **user-adversarial behavior** (a
+scripted user keeps a conversation going — e.g. insisting on a refund —
+while the assertions watch every round for policy compliance), and
+**memory-recall quality** (multi-signal ranking over seeded rows, the
+standing regression gate for the recall chain). The "model" is a fixed
+script, so this track never measures prompt sensitivity, reasoning quality,
+hallucination behavior or latency — and its `turns` / `total_tool_calls`
+cost metrics are deterministic step counts of the wiring, not model cost.
+It stays the CI gate.
+
+**Real-model track — look at quality, stability and cost.** The `--real`
+track runs the configured provider/model on the real read-only tools and
+reports what a script cannot stand in for: real token cost with
+cache/reasoning splits, pass^k stability across repeats, and open-ended
+answer quality via the rubric-scored judge. It is nightly/manual evidence,
+not a gate: real billing and provider variance make a hard exit-code gate
+wrong here, and the report is meant to be read, not diffed.
+
+Still deliberately out of scope for both tracks: latency measurement, judge
+inter-model consistency (one rubric + one threshold pins one judge's
+behavior; agreement between different judge models is not asserted),
+per-round assertions (trajectory assertions see one cumulative run, memory
+assertions one final ranking), an assertion DSL or expression language,
+tier weights, and cost budget circuit-breakers (hermetic cost only warns;
+real cost is reported, never budgeted). The real track additionally does no
+regression diffing (each report stands alone), runs repeats serially rather
+than concurrently, and does not retry failed runs.
 
 ### Round boundaries
 
-What each round added — all of it hermetic (scripted fake LLM or seeded
-temp-DB memory, stub tools, no network, no real tokens):
+What each round added — the first two rounds all hermetic (scripted fake
+LLM or seeded temp-DB memory, stub tools, no network, no real tokens); the
+third is the deliberate exception:
 
 - **eval-harness-p1** — three trajectory assertions, `required_tools` /
   `max_tool_calls` / `max_total_tool_calls`, plus the built-in loop-guard
@@ -425,12 +656,24 @@ temp-DB memory, stub tools, no network, no real tokens):
   assertions) with the built-in `07_memory_recall_entity_noise.json` (entity
   anchor against same-word noise) and `08_memory_recall_temporal_future.json`
   (a future plan outranking same-topic past events) scenarios.
+- **add-real-model-eval-track** — the real-model track (`eval run --real`
+  / `--repeat`): its own minimal scenario schema (hermetic-only keys
+  rejected as track conflicts, file named in every error), the curated
+  read-only builtin subset with computed deny rules + fail-closed approval
+  (`-p` semantics) + pinned audit, real usage/cost collection from the
+  stream (judge calls included), the LLM-as-judge (same client factory,
+  per-scenario `judge.model` override, fail-closed `SCORE:` parsing,
+  injectable fake judge), pass^k plus per-scenario cost aggregation in the
+  independent `last-real-report.json`, and the built-in real scenarios
+  `01_readonly_converge.json` / `02_repo_question_answer.json`.
 
 What the harness still deliberately does **not** do:
 
-- **no real-model track** — every scenario is scripted or seeded; nothing
-  here calls a real LLM, scores model quality (`pass^k`, LLM-as-judge) or
-  measures tokens / latency;
+- **no real LLM on the hermetic track** — every hermetic scenario is
+  scripted or seeded; the hermetic track still never calls a real LLM, and
+  its baseline (`last-report.json`) is never touched by a `--real` run.
+  Real-model evaluation lives on the explicit `--real` track above, which
+  is nightly/manual and never a CI gate;
 - **no license change** — the harness ships under the repository's existing
   license, unchanged.
 
