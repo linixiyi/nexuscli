@@ -1,0 +1,19 @@
+{
+  "name": "real-readonly-converge",
+  "prompt": "This is an unattended read-only evaluation. Count how many entries the workspace root contains using the read-only tools, then reply with one short sentence stating that number. Do not modify anything.",
+  "assertions": {
+    "max_turns": 6,
+    "forbidden_tools": [
+      "write_file",
+      "edit_file",
+      "bash",
+      "execute_command",
+      "save_memory",
+      "save_skill",
+      "task",
+      "task_stop",
+      "revert_turn",
+      "todo_write"
+    ]
+  }
+}

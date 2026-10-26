@@ -1,0 +1,25 @@
+{
+  "name": "real-repo-question-answer",
+  "prompt": "Use the read-only tools to read the pyproject.toml file at the workspace root, then state the project's name in one short sentence.",
+  "assertions": {
+    "max_turns": 6,
+    "forbidden_tools": [
+      "write_file",
+      "edit_file",
+      "bash",
+      "execute_command",
+      "save_memory",
+      "save_skill",
+      "task",
+      "task_stop",
+      "revert_turn",
+      "todo_write"
+    ]
+  },
+  "judge": {
+    "rubric": [
+      "The answer states that the project's name is nexuscli (the name declared in pyproject.toml)"
+    ],
+    "threshold": 0.6
+  }
+}
