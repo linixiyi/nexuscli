@@ -24,6 +24,23 @@ type Props = {
   onClose: () => void;
 };
 
+// W2（2026-10-27_workbench-ux-round2）：REPL 会话 title 为空（或服务端兜底的 "(untitled)"）
+// 时回退显示「会话 YYYY-MM-DD HH:MM」——SessionMeta.updated_at 是 unix 秒，按本地时区
+// 格式化；多条无标题会话靠时间天然区分。不额外拉 transcript（零请求增量）。
+function formatSessionStamp(unixSeconds: number): string {
+  const date = new Date(unixSeconds * 1000);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    ` ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
+function sessionTitle(session: SessionMeta): string {
+  const title = typeof session.title === "string" ? session.title.trim() : "";
+  return title === "" || title === "(untitled)" ? `会话 ${formatSessionStamp(session.updated_at)}` : title;
+}
+
 export function Sidebar({ route, onNavigate, onClose }: Props): JSX.Element {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [localThreads, setLocalThreads] = useState<LocalThread[]>([]);
@@ -105,11 +122,12 @@ export function Sidebar({ route, onNavigate, onClose }: Props): JSX.Element {
           <button
             className={`session-item ${route.kind === "replay" && route.id === session.id ? "active" : ""}`}
             key={session.id}
+            title={`最近更新 ${formatSessionStamp(session.updated_at)}`}
             onClick={() => navigate({ kind: "replay", id: session.id })}
           >
             <History size={16} />
             <span>
-              <strong>{session.title || "(untitled)"}</strong>
+              <strong>{sessionTitle(session)}</strong>
               <small>
                 {session.message_count} 条消息 · {session.provider}/{session.model}
               </small>
