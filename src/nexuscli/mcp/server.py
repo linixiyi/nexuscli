@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -12,10 +13,16 @@ from nexuscli.config import load_config
 from nexuscli.net_guards import is_loopback_origin as _is_loopback_origin
 from nexuscli.tools import ToolRegistry, get_builtin_tools
 from nexuscli.tools.base import ToolContext
+from nexuscli.tools.executor import ToolExecutor
 
 # Protocol revision this server speaks. Clients negotiate against it during
 # initialize; bump only alongside the message shapes that change.
 MCP_PROTOCOL_VERSION = "2024-11-05"
+
+# HTTP 传输的工具调用没有交互审批者，端点本身必须凭证门禁：未配置时拒绝启动
+# （与 RuntimeApiServer 同款 fail-closed），请求缺/错 key 一律 401。stdio 不需要——
+# 客户端自己拉起的子进程与调用方同信任域。
+MCP_HTTP_API_KEY_ENV = "NEXUSCLI_MCP_API_KEY"
 
 
 def _build_registry() -> ToolRegistry:
@@ -73,11 +80,22 @@ async def _handle_request(request: dict[str, Any], cwd: str) -> dict[str, Any]:
                 "error": {"message": f'Tool "{name}" not found'},
             }
         config = load_config(project_root=cwd)
+        # 无人值守服务器保留 never 语义（由 HTTP 鉴权补齐访问控制），但调用必须
+        # 走与其他路径相同的 ToolExecutor 门序：此前直调 tool.execute 会静默
+        # 跳过审计日志、PreToolUse hooks、permission 规则与写域守卫。
         config.policy.hitl_mode = "never"
-        result = await tool.execute(
-            params.get("arguments") or {},
+        executor = ToolExecutor(registry)
+        results = await executor.execute_all(
+            [
+                {
+                    "id": str(request_id),
+                    "name": str(name),
+                    "arguments": params.get("arguments") or {},
+                }
+            ],
             ToolContext(cwd=cwd, config=config),
         )
+        result = results[0]
         return {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -93,8 +111,10 @@ async def serve_stdio(cwd: str | None = None) -> None:
     root = str(Path(cwd or ".").resolve())
     loop = asyncio.get_running_loop()
     while True:
-        line = await loop.run_in_executor(None, input)
+        # input() 本身必须在 try 内：stdin EOF 从 run_in_executor 里抛出的
+        # EOFError 才接得住，客户端关 stdin 才是设计的静默退出而非栈崩溃。
         try:
+            line = await loop.run_in_executor(None, input)
             request = json.loads(line)
             response = await _handle_request(request, root)
         except EOFError:
@@ -115,8 +135,14 @@ _SSE_UNSUPPORTED = (
     "SSE streaming (GET) is not supported by the NexusCLI MCP server.\n"
 )
 
+_UNAUTHORIZED = (
+    "Unauthorized: this MCP endpoint requires an API key. "
+    f"Set {MCP_HTTP_API_KEY_ENV} on the server and send it as "
+    "'Authorization: Bearer <key>' or 'x-api-key: <key>'.\n"
+)
 
-def _handler_class(root: str) -> type[BaseHTTPRequestHandler]:
+
+def _handler_class(root: str, api_key: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def _send(
             self,
@@ -137,6 +163,15 @@ def _handler_class(root: str) -> type[BaseHTTPRequestHandler]:
 
         def _send_text(self, status: int, text: str, **headers: str) -> None:
             self._send(status, text.encode("utf-8"), "text/plain; charset=utf-8", headers)
+
+        def _authorized(self) -> bool:
+            # 与 RuntimeApiServer._authorized 同款双头语义；api_key 为空时一律
+            # 拒绝（fail closed），不留无鉴权口子。
+            if not api_key:
+                return False
+            auth = self.headers.get("authorization", "")
+            token = self.headers.get("x-api-key", "")
+            return auth == f"Bearer {api_key}" or token == api_key
 
         def _reject_method(self) -> None:
             # 路径先判：未知 URL 不存在，比"方法不对"更准确。
@@ -165,6 +200,9 @@ def _handler_class(root: str) -> type[BaseHTTPRequestHandler]:
             if self.headers.get_content_type() != "application/json":
                 self._send_text(415, "Expected content-type: application/json\n")
                 return
+            if not self._authorized():
+                self._send_text(401, _UNAUTHORIZED)
+                return
             length = int(self.headers.get("content-length") or 0)
             raw = self.rfile.read(length).decode("utf-8")
             try:
@@ -181,13 +219,24 @@ def _handler_class(root: str) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def _make_server(port: int, root: str) -> ThreadingHTTPServer:
+def _make_server(port: int, root: str, api_key: str) -> ThreadingHTTPServer:
     """Build the loopback server without serving; port 0 picks a free port."""
-    return ThreadingHTTPServer(("127.0.0.1", port), _handler_class(root))
+    if not api_key:
+        raise ValueError(
+            f"MCP HTTP server requires an API key; set {MCP_HTTP_API_KEY_ENV}. "
+            "The endpoint executes tools with no interactive approver."
+        )
+    return ThreadingHTTPServer(("127.0.0.1", port), _handler_class(root, api_key))
 
 
 def serve_http(port: int = 3000, cwd: str | None = None) -> None:
+    api_key = os.environ.get(MCP_HTTP_API_KEY_ENV, "")
+    if not api_key:
+        raise ValueError(
+            f"MCP HTTP server requires an API key; set {MCP_HTTP_API_KEY_ENV}. "
+            "The endpoint executes tools with no interactive approver."
+        )
     root = str(Path(cwd or ".").resolve())
-    server = _make_server(port, root)
+    server = _make_server(port, root, api_key)
     print(f"NexusCLI MCP server listening on http://127.0.0.1:{port}", flush=True)
     server.serve_forever()

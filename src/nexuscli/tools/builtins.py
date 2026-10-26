@@ -670,7 +670,9 @@ async def _reject_outside_write_scope(command: str, context: ToolContext) -> Too
 
     Fail closed where the existing flow fails closed: with
     ``hitl_mode == "never"`` or without an approval callback no human can be
-    asked, mirroring the executor's handling of ask rules in never mode. An
+    asked, mirroring the executor's handling of ask rules in never mode.
+    Full-access runs (command guard disabled, REPL "Auto") skip the prompt
+    entirely — the user's standing choice covers the write scope. An
     ``approve_run`` answer is deliberately narrowed to a one-shot approve:
     this prompt confirms one command's write scope, not the tool for the
     rest of the run, so ``context.run_scope_approved`` is never touched.
@@ -691,6 +693,13 @@ async def _reject_outside_write_scope(command: str, context: ToolContext) -> Too
     # "always" keeps asking, mirroring the executor.
     permission = evaluate_permissions(context.config.permissions, "bash", {"command": command})
     if permission and permission.action == "allow" and context.config.policy.hitl_mode != "always":
+        return None
+    # Full-access mode (REPL "Auto") disables the command guard as the user's
+    # standing choice (README: 免审批 + 关闭守卫); re-asking here would
+    # contradict that choice while write_file sails through with the path
+    # guard off. The fail-closed branch below keeps protecting genuinely
+    # unattended runs whose guards are still on.
+    if not context.config.policy.command_guard_enabled:
         return None
     preview = ", ".join(targets[:5]) + ("..." if len(targets) > 5 else "")
     reason = f"Static analysis found a write target outside the workspace: {preview}"
