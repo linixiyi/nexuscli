@@ -1,0 +1,39 @@
+{
+  "name": "repeat-call-loop-guard",
+  "description": "The same poll call repeated three times is intercepted by the loop guard, then the agent reports within per-tool and total call caps",
+  "prompt": "Poll the deploy job until it finishes, then report the outcome.",
+  "tools": [
+    {
+      "name": "poll_job",
+      "description": "Poll a background job's status.",
+      "result": "job deploy-7 still running"
+    }
+  ],
+  "scripted_turns": [
+    {
+      "tool_calls": [
+        {"name": "poll_job", "arguments": {"job": "deploy-7"}}
+      ]
+    },
+    {
+      "tool_calls": [
+        {"name": "poll_job", "arguments": {"job": "deploy-7"}}
+      ]
+    },
+    {
+      "tool_calls": [
+        {"name": "poll_job", "arguments": {"job": "deploy-7"}}
+      ]
+    },
+    {
+      "text": "The third identical poll_job call was intercepted by the loop guard, so I stopped polling: job deploy-7 never reported finished."
+    }
+  ],
+  "assertions": {
+    "required_tools": ["poll_job"],
+    "max_tool_calls": {"poll_job": 3},
+    "max_total_tool_calls": 3,
+    "final_contains": ["loop guard"],
+    "max_turns": 4
+  }
+}
