@@ -37,7 +37,11 @@
   <aside class="toc">
     <div class="toc-title">目录</div>
     <div class="toc">
-<ul></ul>
+<ul>
+<li><a href="#端点清单">端点清单</a></li>
+<li><a href="#工作台浏览器会话bootstrapcookiecsrf">工作台浏览器会话（bootstrap/cookie/csrf）</a></li>
+<li><a href="#部署边界">部署边界</a></li>
+</ul>
 </div>
 
   </aside>
@@ -77,7 +81,158 @@ curl -sS http://127.0.0.1:8080/v1/tasks \
 <p>也可以只启动队列消费者，不暴露 HTTP：</p>
 <pre><code class="language-bash">uv run nexuscli worker --workers 2 --cwd .
 </code></pre>
-<p>任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。</p><div class="pager"><a href="workflows.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔀 动态工作流与 /expert</span></a><a href="workbench.html" class="next"><span class="dir">下一篇 →</span><span class="name">🖥️ 工作台（Workbench）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/runtime-api.md" target="_blank" rel="noopener">docs/runtime-api.md</a> 构建生成 · 源文件与站点内容同步</p>
+<p>任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。</p>
+<h2 id="端点清单"><a class="toclink" href="#端点清单">端点清单</a></h2>
+<!-- BEGIN GENERATED: endpoint-table (do not edit manually) -->
+<blockquote>
+<p>本节由 <code>scripts/generate_endpoint_docs.py</code> 从 <code>src/nexuscli/runtime/api.py</code> 的 <code>ROUTE_MANIFEST</code> 生成，<strong>请勿手改</strong>。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>路径</th>
+<th>鉴权</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/</code></td>
+<td>免鉴权（仅 --workbench）</td>
+<td>工作台静态资源 / SPA 回退 / 空态页（匹配非 /v1/* 的 GET）</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/workbench/bootstrap</code></td>
+<td>一次性口令</td>
+<td>口令一次性换发 HttpOnly cookie 会话与 x-csrf-token</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/threads</code></td>
+<td>api_key / cookie+csrf</td>
+<td id>创建线程，返回</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/threads/{thread_id}/turns</code></td>
+<td>api_key / cookie+csrf</td>
+<td>同步执行一个 turn（mode=react/plan/team），完成前阻塞</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/threads/{thread_id}/events/stream</code></td>
+<td>api_key / cookie / api_key 查询参数</td>
+<td>SSE 事件流：回放 + 实时 + 15s 心跳（?since=N 续传，16 连接上限）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/sessions</code></td>
+<td>api_key / cookie</td>
+<td>REPL 会话列表（?limit、?all 查询参数，按 cwd 过滤）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/sessions/{session_id}/transcript</code></td>
+<td>api_key / cookie</td>
+<td>会话转录分页读取（?offset、?limit 查询参数）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/usage/summary</code></td>
+<td>api_key / cookie</td>
+<td>用量聚合汇总（?days 查询参数）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/threads/{thread_id}/events</code></td>
+<td>api_key / cookie</td>
+<td>线程事件全量列表（text/event-stream 帧文本，按 id 升序）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/approvals</code></td>
+<td>api_key / cookie</td>
+<td>挂起审批列表</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/approvals/{approval_id}/decision</code></td>
+<td>api_key / cookie+csrf</td>
+<td>审批决策（decision=approve/deny，同动词幂等重放）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/workbench/permissions</code></td>
+<td>api_key / cookie</td>
+<td>会话权限快照（含 expected_revision）</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/v1/workbench/permissions</code></td>
+<td>api_key / cookie+csrf</td>
+<td>会话权限变更（expected_revision 乐观锁，即时重判挂起审批）</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/tasks</code></td>
+<td>api_key / cookie+csrf</td>
+<td>创建后台任务（mode=react/plan/team）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/tasks</code></td>
+<td>api_key / cookie</td>
+<td>后台任务列表</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/tasks/{task_id}</code></td>
+<td>api_key / cookie</td>
+<td>后台任务详情</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/tasks/{task_id}/cancel</code></td>
+<td>api_key / cookie+csrf</td>
+<td>取消后台任务（运行中取消不被迟到结果覆盖）</td>
+</tr>
+</tbody>
+</table>
+<!-- END GENERATED: endpoint-table -->
+
+<h2 id="工作台浏览器会话bootstrapcookiecsrf"><a class="toclink" href="#工作台浏览器会话bootstrapcookiecsrf">工作台浏览器会话（bootstrap/cookie/csrf）</a></h2>
+<p>上面的 curl 示例全部走外部自动化通道（<code>x-api-key</code> 头）。<code>--workbench</code> 启动的可视化
+工作台另有一套浏览器会话鉴权语义（实现见 <code>src/nexuscli/runtime/api.py</code> 的
+<code>_handle</code>/<code>_handle_bootstrap</code> 与 <code>src/nexuscli/runtime/websession.py</code>）：</p>
+<ul>
+<li><strong>一次性 bootstrap 口令</strong>：服务启动生成一次性口令并在终端打印
+  <code>http://127.0.0.1:&lt;port&gt;/#bootstrap=&lt;token&gt;</code> 一键链接；浏览器打开后前端读出 URL
+  片段中的口令（随即抹除，token 不留地址栏），<code>POST /v1/workbench/bootstrap</code> 一次性
+  换发——口令错误或重放一律 403。该端点免 cookie/key 门：口令本身即凭证。</li>
+<li><strong>HttpOnly cookie 会话</strong>：换发成功即 <code>Set-Cookie</code>（HttpOnly，JS 不可读；
+  SameSite=strict，跨站不携带），之后浏览器请求同源自动携带 cookie 作为凭证。</li>
+<li><strong>x-csrf-token</strong>：仅凭 cookie 通过会话门的变更请求（POST）必须另带 <code>x-csrf-token</code>
+  头（bootstrap 响应体返回，前端存内存不落 localStorage）——cookie 自动携带挡不住
+  跨源伪造，csrf 补上这一刀；api_key 通道豁免（外部程序没有 cookie，凭证本身就是
+  凭据）。</li>
+<li><strong>Origin 白名单</strong>：<code>/v1/*</code> 上任何带 <code>Origin</code> 头且来源非本机回环的请求一律 403，
+  且先于凭证判断（无凭证也拒绝跨源探测）；无 <code>Origin</code> 的 curl 等非浏览器客户端
+  不受影响。</li>
+<li><strong>三通道三选一</strong>：会话门接受 <code>x-api-key</code>/<code>Bearer</code> 头、SSE 的 <code>api_key</code> 查询参数
+  （仅 SSE 路径）、HttpOnly cookie 三者之一。外部通道原样保留，本文所有 curl 示例
+  无需改动。</li>
+</ul>
+<p>会话生命周期 = 进程生命周期：不持久化、不刷新，重启即新一轮口令；静态资源免鉴权
+（构建产物无用户数据）。功能面与端点清单见 <a href="workbench.html">workbench.md</a>。
+drift line</p>
+<h2 id="部署边界"><a class="toclink" href="#部署边界">部署边界</a></h2>
+<ul>
+<li>服务端只绑定 <code>127.0.0.1</code>，面向单用户本机自动化；不做多用户认证与公网部署。</li>
+<li><strong>AGPLv3 §13 源码提供义务</strong>：本项目按 AGPL-3.0-only 授权。把 Runtime API（或其修改版）作为网络服务对外提供时，须向交互用户提供对应源码（自托管即天然满足；修改后对外服务则须提供修改版源码）。</li>
+</ul><div class="pager"><a href="workflows.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔀 动态工作流与 /expert</span></a><a href="workbench.html" class="next"><span class="dir">下一篇 →</span><span class="name">🖥️ 工作台（Workbench）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/runtime-api.md" target="_blank" rel="noopener">docs/runtime-api.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>

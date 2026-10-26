@@ -6,7 +6,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![uv](https://img.shields.io/badge/uv-package%20manager-DE5FE9)
-![License](https://img.shields.io/badge/License-MIT-green)
+![License](https://img.shields.io/badge/License-AGPL_v3-blue?logo=gnu)
 ![Tests](https://github.com/linixiyi/nexuscli/actions/workflows/ci.yml/badge.svg)
 
 [架构总览](#-架构总览) · [文档站点](https://linixiyi.github.io/nexuscli/) · [运行教程](TUTORIAL.md) · [快速开始](#-快速开始)
@@ -380,4 +380,4 @@ uv run nexuscli --plain -p hello
 
 ## 📄 License
 
-MIT. See [LICENSE](LICENSE).
+AGPL-3.0-only. See [LICENSE](LICENSE). 第三方依赖沿用其自身许可（MIT/Apache/BSD 等，与 AGPLv3 单向兼容）；kitagent 移植代码的 MIT 出处声明随源码保留。

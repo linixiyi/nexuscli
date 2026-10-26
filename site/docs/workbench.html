@@ -58,8 +58,10 @@ Runtime API（标准库 <code>http.server</code>，零新增 Python 依赖）+ S
 <h2 id="快速开始"><a class="toclink" href="#快速开始">快速开始</a></h2>
 <p>仓库检出自带已构建的 <code>frontend/dist</code>，直接可用：</p>
 <pre><code class="language-bash">NEXUSCLI_RUNTIME_API_KEY=dev-key uv run nexuscli serve --workbench --port 8080
-# 打开 http://127.0.0.1:8080/
+# 打开终端打印的 http://127.0.0.1:8080/#bootstrap=… 一键链接完成一次性认证
 </code></pre>
+<p>启动时终端会打印 <code>#bootstrap=</code> 一键链接：前端读出 URL 片段里的一次性口令（随即抹除）
+换发 HttpOnly cookie 会话；直接打开首页而无口令时，页面会提示回终端复制该链接。</p>
 <p>自行构建前端（需要 Node.js 22 LTS 与 npm）：</p>
 <pre><code class="language-bash">cd frontend &amp;&amp; npm ci &amp;&amp; npm run build
 </code></pre>
@@ -78,7 +80,11 @@ Runtime API（标准库 <code>http.server</code>，零新增 Python 依赖）+ S
 <li><strong>审批卡片</strong>：Runtime 任务挂起的审批在页顶出现（Reason 行 + 批准/拒绝），2s 轮询</li>
 </ul>
 <h2 id="端点与-api"><a class="toclink" href="#端点与-api">端点与 API</a></h2>
-<p>工作台消费的端点（鉴权：<code>x-api-key</code> 头，SSE 额外支持 <code>api_key</code> 查询参数）：</p>
+<p>工作台消费的端点（鉴权：浏览器走「一次性 <code>#bootstrap</code> 口令 → HttpOnly SameSite=strict
+cookie → 变更请求（POST）另带 <code>x-csrf-token</code> 头 → Origin 白名单（带 <code>Origin</code> 头且非
+本机回环来源一律 403）」三件套；外部通道保留 <code>x-api-key</code> 头，SSE 额外支持 <code>api_key</code>
+查询参数。语义详见
+<a href="runtime-api.html#工作台浏览器会话bootstrapcookiecsrf">runtime-api.md</a>）：</p>
 <table>
 <thead>
 <tr>
@@ -121,7 +127,13 @@ Runtime API（标准库 <code>http.server</code>，零新增 Python 依赖）+ S
 <h2 id="部署边界与安全"><a class="toclink" href="#部署边界与安全">部署边界与安全</a></h2>
 <ul>
 <li>服务端硬绑定 <code>127.0.0.1</code>；无多用户认证、不做公网部署（与 MCP server 边界一致）</li>
-<li>静态资源免鉴权（无用户数据的构建产物）；<code>/v1/*</code> 全走 key</li>
+<li>
+<p><strong>AGPLv3 §13 源码提供义务</strong>：本项目按 AGPL-3.0-only 授权。经由网络与该服务交互的用户（浏览器访问工作台、调用 Runtime API 或 MCP server 的客户端），有权获取对应源码——自托管即天然满足（随仓库分发）；若修改后对外提供网络服务，须向你服务的每个用户提供修改版源码（含前端 <code>frontend/</code> 源码与其构建产物 <code>frontend/dist</code>）。</p>
+</li>
+<li>
+<p>静态资源免鉴权（无用户数据的构建产物）；<code>/v1/*</code> 全走鉴权（外部 <code>x-api-key</code> 或
+  bootstrap 换发的浏览器 cookie 会话，cookie 通道的变更请求另须 CSRF）</p>
+</li>
 <li>SSE 的 <code>api_key</code> 查询参数会出现在本机浏览器历史（浏览器 <code>EventSource</code> 无法设置自定义
   请求头，这是唯一出口）；缓解是仅绑定 localhost 且该端点只读</li>
 <li>会话转录端点返回用户对话正文（本机敏感数据），与 <code>nexuscli sessions</code> CLI 同暴露级别</li>

@@ -62,6 +62,8 @@ cookie → 变更请求（POST）另带 `x-csrf-token` 头 → Origin 白名单�
 ## 部署边界与安全
 
 - 服务端硬绑定 `127.0.0.1`；无多用户认证、不做公网部署（与 MCP server 边界一致）
+- **AGPLv3 §13 源码提供义务**：本项目按 AGPL-3.0-only 授权。经由网络与该服务交互的用户（浏览器访问工作台、调用 Runtime API 或 MCP server 的客户端），有权获取对应源码——自托管即天然满足（随仓库分发）；若修改后对外提供网络服务，须向你服务的每个用户提供修改版源码（含前端 `frontend/` 源码与其构建产物 `frontend/dist`）。
+
 - 静态资源免鉴权（无用户数据的构建产物）；`/v1/*` 全走鉴权（外部 `x-api-key` 或
   bootstrap 换发的浏览器 cookie 会话，cookie 通道的变更请求另须 CSRF）
 - SSE 的 `api_key` 查询参数会出现在本机浏览器历史（浏览器 `EventSource` 无法设置自定义

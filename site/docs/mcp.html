@@ -88,7 +88,7 @@ uv run nexuscli mcp serve --transport http --port 3000
   -d '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;tools/list&quot;,&quot;params&quot;:{}}'
 </code></pre>
 <blockquote>
-<p>⚠️ <strong>部署边界</strong>：作为 MCP server 运行时，NexusCLI 会在协议层强制关闭人工审批（<code>hitl_mode = "never"</code>），否则无法应答远端 <code>tools/call</code> 请求。这意味着接入该 server 的任何客户端都获得了<strong>无需审批的完整工具能力（包括执行命令、读写文件）</strong>。只把 server 暴露给可信客户端；HTTP 传输默认只绑定 localhost，不要手动开放到公网。</p>
+<p>⚠️ <strong>部署边界</strong>：作为 MCP server 运行时，NexusCLI 会在协议层强制关闭人工审批（<code>hitl_mode = "never"</code>），否则无法应答远端 <code>tools/call</code> 请求。这意味着接入该 server 的任何客户端都获得了<strong>无需审批的完整工具能力（包括执行命令、读写文件）</strong>。只把 server 暴露给可信客户端；HTTP 传输默认只绑定 localhost，不要手动开放到公网。 本项目按 AGPL-3.0-only 授权：把 MCP server（或其修改版）作为网络服务提供时，依 AGPLv3 §13 须向交互用户提供对应源码（自托管随仓库分发即满足）。</p>
 </blockquote>
 <p>Chrome DevTools MCP 会把浏览器页面和 DevTools 状态暴露给 Agent。不要随意把包含个人账号、敏感数据或生产后台的 Chrome 会话授权给 Agent。</p>
 <h2 id="工具级过滤allowed_tools--blocked_tools"><a class="toclink" href="#工具级过滤allowed_tools--blocked_tools">工具级过滤（allowed_tools / blocked_tools）</a></h2>
