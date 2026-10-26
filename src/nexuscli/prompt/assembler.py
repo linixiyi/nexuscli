@@ -150,9 +150,12 @@ class PromptAssembler:
             return "", ""
 
         def render(item: MemoryEntry) -> str:
+            # temporal= marks the memory's time layer (current_state / past_event /
+            # future_plan) so the model can tell a standing fact from history or
+            # a plan; the block structure itself is unchanged.
             return (
                 f"- [id={item.id} kind={item.kind} source={item.source} "
-                f"importance={item.importance:.2f}] {item.content}"
+                f"temporal={item.temporal_kind} importance={item.importance:.2f}] {item.content}"
             )
 
         binding = [item for item in memories if item.kind in {"preference", "constraint"}]

@@ -5,7 +5,7 @@ import contextlib
 import os
 from typing import Any
 
-from nexuscli.memory import MemoryManager
+from nexuscli.memory import TEMPORAL_KIND_ORDER, MemoryManager
 from nexuscli.policy import CommandGuard, FSScopeGuard, evaluate_permissions, sanitize_environment
 from nexuscli.rag import CodeIndex, format_hit_stats
 from nexuscli.skill import SkillRegistry, SkillStateStore
@@ -289,6 +289,29 @@ def get_builtin_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Optional ISO-8601 expiry for time-sensitive memory",
                     },
+                    "entities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional named entities the fact is about (people, projects, "
+                            "tools, files); extracted heuristically when omitted"
+                        ),
+                    },
+                    "event_at": {
+                        "type": "string",
+                        "description": (
+                            "Optional ISO-8601 time the event happened or the plan is due"
+                        ),
+                    },
+                    "temporal_kind": {
+                        "type": "string",
+                        "enum": list(TEMPORAL_KIND_ORDER),
+                        "description": (
+                            "Temporal layer: current_state (how things are now), past_event "
+                            "(what happened), future_plan (what is intended); derived from "
+                            "the content and kind when omitted"
+                        ),
+                    },
                 },
                 ["content"],
             ),
@@ -313,6 +336,18 @@ def get_builtin_tools() -> list[Tool]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Optional memory kinds",
+                    },
+                    "entities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional entities the query is about (boosts matches)",
+                    },
+                    "temporal_kind": {
+                        "type": "string",
+                        "enum": list(TEMPORAL_KIND_ORDER),
+                        "description": (
+                            "Optional temporal intent; inferred from the query when omitted"
+                        ),
                     },
                 },
                 ["query"],
@@ -826,9 +861,34 @@ async def _web_fetch(payload: dict[str, Any], _context: ToolContext) -> ToolResu
 # ---------------------------------------------------------------------------
 
 
+def _memory_entities(payload: dict[str, Any], tool_name: str) -> list[str] | ToolResult:
+    raw = payload.get("entities")
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        return ToolResult(f"{tool_name} entities must be an array of strings.", is_error=True)
+    return [item for item in raw if item.strip()]
+
+
+def _memory_temporal_kind(payload: dict[str, Any], tool_name: str) -> str | None | ToolResult:
+    raw = payload.get("temporal_kind")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if not isinstance(raw, str) or raw.strip().casefold() not in TEMPORAL_KIND_ORDER:
+        allowed = ", ".join(TEMPORAL_KIND_ORDER)
+        return ToolResult(f"{tool_name} temporal_kind must be one of: {allowed}.", is_error=True)
+    return raw.strip().casefold()
+
+
 async def _save_memory(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     if not context.config.features.memory or not context.config.memory.long_term_enabled:
         return ToolResult("Long-term memory is disabled.", is_error=True)
+    entities = _memory_entities(payload, "save_memory")
+    if isinstance(entities, ToolResult):
+        return entities
+    temporal_kind = _memory_temporal_kind(payload, "save_memory")
+    if isinstance(temporal_kind, ToolResult):
+        return temporal_kind
     manager = MemoryManager(
         context.config.memory.long_term_db_path,
         scope=context.cwd,
@@ -842,6 +902,9 @@ async def _save_memory(payload: dict[str, Any], context: ToolContext) -> ToolRes
         importance=float(payload.get("importance", 0.5)),
         confidence=float(payload.get("confidence", 1.0)),
         expires_at=payload.get("expires_at"),
+        entities=entities or None,
+        event_at=payload.get("event_at"),
+        temporal_kind=temporal_kind,
     )
     return ToolResult(f"Saved memory #{memory_id}")
 
@@ -852,6 +915,12 @@ async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolR
     raw_kinds = payload.get("kinds")
     if raw_kinds is not None and not isinstance(raw_kinds, list):
         return ToolResult("search_memory kinds must be an array of strings.", is_error=True)
+    entities = _memory_entities(payload, "search_memory")
+    if isinstance(entities, ToolResult):
+        return entities
+    temporal_kind = _memory_temporal_kind(payload, "search_memory")
+    if isinstance(temporal_kind, ToolResult):
+        return temporal_kind
     manager = MemoryManager(
         context.config.memory.long_term_db_path,
         scope=context.cwd,
@@ -863,11 +932,17 @@ async def _search_memory(payload: dict[str, Any], context: ToolContext) -> ToolR
         limit=int(payload.get("limit") or context.config.memory.recall_limit),
         kinds=[str(kind) for kind in raw_kinds] if raw_kinds else None,
         min_score=context.config.memory.recall_min_score,
+        entities=entities or None,
+        temporal_kind=temporal_kind,
     )
     if not rows:
         return ToolResult("(no relevant long-term memory)")
+    # `#{id} [...] content` line format is a stable contract: fields are only
+    # ever appended inside the bracket, never reordered or removed.
     content = "\n".join(
-        f"#{row.id} [{row.kind}, importance={row.importance:.2f}] {row.content}" for row in rows
+        f"#{row.id} [{row.kind}, importance={row.importance:.2f}, "
+        f"temporal={row.temporal_kind}] {row.content}"
+        for row in rows
     )
     return ToolResult(content, display_summary=f"Recalled {len(rows)} memories")
 

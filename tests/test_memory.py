@@ -87,8 +87,10 @@ def test_save_deduplicates_normalized_content_and_updates_metadata(tmp_path):
     rows = manager.list()
     assert len(rows) == 1
     assert rows[0].content == "nexuscli uses memory"
-    assert rows[0].kind == "preference"
-    assert rows[0].source == "agent"
+    # ADD-only write path: a repeated fact accumulates scores but never
+    # redefines the original declaration (kind/source stay as first saved).
+    assert rows[0].kind == "fact"
+    assert rows[0].source == "user"
     assert rows[0].importance == 0.9
     assert rows[0].confidence == 0.8
 
