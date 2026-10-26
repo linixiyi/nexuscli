@@ -19,7 +19,11 @@ NEXUSCLI_RUNTIME_API_KEY=dev-key uv run nexuscli serve --workbench --port 8080
 换发 HttpOnly cookie 会话；同时该链接会写入 `~/.nexuscli/workbench-link.txt`（权限
 0600，每次启动覆盖）。直接打开首页而无口令时，认证门支持**粘贴一键链接 / 口令换发**，
 并给出「查启动日志 / 读链接文件」两条恢复路径——服务在后台或他人终端运行时不再依赖
-翻日志。口令一次性（已用即 403）；服务重启即生成新口令并刷新链接文件。
+翻日志。口令一次性（已用即 403）；服务重启即生成新口令并刷新链接文件。刷新页面不
+影响可写性：csrf 只存内存（cookie 不受影响），前端刷新后自动调
+`POST /v1/workbench/reissue-csrf` 凭会话 cookie 取回当前 csrf——一次性的只有
+bootstrap 口令，csrf 可取回且重签不轮换（多标签页互不影响：第二标签页打开不会使
+已打开标签页失去写能力）；cookie 已失效（如服务重启）时回落认证门。
 
 自行构建前端（需要 Node.js 22 LTS 与 npm）：
 
@@ -57,6 +61,7 @@ cookie → 变更请求（POST）另带 `x-csrf-token` 头 → Origin 白名单�
 | 方法与路径 | 语义 |
 | --- | --- |
 | GET `/v1/threads/{id}/events/stream?since=N` | SSE 事件流：回放 + 实时 + 15s 心跳，16 连接上限 |
+| POST `/v1/workbench/reissue-csrf` | 凭有效会话 cookie 重签 `x-csrf-token`（刷新后自动恢复可写；无 cookie 401） |
 | GET `/v1/sessions` | REPL 会话列表（JSONL 首行 meta，updated_at 倒序，cwd 过滤） |
 | GET `/v1/sessions/{id}/transcript` | 会话转录分页读取（id 仅 `[0-9a-zA-Z-]+`） |
 | GET `/v1/usage/summary?days=N` | usage 聚合（`UsageStore.stats` 原样形状） |

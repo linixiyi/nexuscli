@@ -97,6 +97,12 @@ ROUTE_MANIFEST: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "POST",
+        "/v1/workbench/reissue-csrf",
+        "cookie 会话",
+        "凭有效会话 cookie 取回当前 x-csrf-token（无 cookie 401；不轮换，多标签页收敛）",
+    ),
+    (
+        "POST",
         "/v1/threads",
         "api_key / cookie+csrf",
         "创建线程，返回 {id}",
@@ -412,6 +418,23 @@ class RuntimeApiServer:
             and not self._stream_query_authorized(request, method, path)
         ):
             _send_json(request, 401, {"error": "unauthorized"})
+            return
+        # U2 csrf 重签：会话门（401）之后、CSRF 门（403）之前分流——来重签的
+        # 客户端本就没有有效 csrf，过不了 403 门。只认 cookie 会话通道：api_key
+        # 头通道对此端点无意义（换签的信任根是会话 cookie，无 cookie 一律 401
+        # 且不泄露任何信息）。幂等门不适用：本分支在其之前分流，重签无幂等
+        # 登记副作用。
+        if method == "POST" and path == "/v1/workbench/reissue-csrf":
+            if not cookie_authorized:
+                _send_json(request, 401, {"error": "unauthorized"})
+                return
+            csrf = self.web_session.reissue(cookie_value_from_header(request.headers.get("cookie")))
+            if csrf is None:  # 防御：与 authorize 同一比对口径，理论不可达
+                _send_json(request, 401, {"error": "unauthorized"})
+                return
+            # 响应不设新 cookie：会话 cookie 不变，只取回 csrf。不轮换（多标签页
+            # 收敛：第二标签页冷加载重签不得踢掉已打开标签页，websession.reissue）。
+            _send_json(request, 200, {"csrf": csrf})
             return
         # F14 CSRF：cookie 通道的变更请求必须带 x-csrf-token（api_key 通道豁免——
         # 外部程序无 cookie，凭证本身就是凭据）。A6 的 PATCH /v1/workbench/

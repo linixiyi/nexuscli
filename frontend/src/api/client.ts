@@ -37,26 +37,77 @@ export async function bootstrapWithToken(token: string): Promise<void> {
   setCsrfToken(payload.csrf);
 }
 
+let reissueInFlight: Promise<boolean> | null = null;
+
+/**
+ * 403 csrf 自愈（ux-iteration 复审 R1）：凭会话 cookie 重签 csrf 并更新内存态。
+ * 覆盖两类丢失：本页刷新（initialize 已处理，这里是兜底）与多标签页轮换——
+ * 单值 csrf 下后重签的标签页会使先打开标签页的令牌失效，后者的下一个变更请求
+ * 403 后经此重签重试一次即收敛（last-writer-wins + 自愈）。
+ */
+async function reissueCsrf(): Promise<boolean> {
+  if (reissueInFlight === null) {
+    reissueInFlight = fetch("/v1/workbench/reissue-csrf", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          return false;
+        }
+        const payload = (await response.json()) as { csrf?: unknown };
+        if (typeof payload.csrf !== "string" || payload.csrf === "") {
+          return false;
+        }
+        csrfToken = payload.csrf;
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => {
+        reissueInFlight = null;
+      });
+  }
+  return reissueInFlight;
+}
+
 export async function request<T>(
   path: string,
   init?: { method?: string; body?: unknown },
 ): Promise<T> {
   const hasBody = init?.body !== undefined;
   const method = init?.method ?? "GET";
-  const headers: Record<string, string> = {};
-  if (hasBody) {
-    headers["content-type"] = "application/json";
+  const send = async (): Promise<Response> => {
+    const headers: Record<string, string> = {};
+    if (hasBody) {
+      headers["content-type"] = "application/json";
+    }
+    // F15 修正：POST 一律附 csrf（cookie 通道变更请求必检；无体 POST 也不例外——
+    // createThreadId 即无体 POST，漏头会被 api.py CSRF 门 403）。
+    if (method === "POST") {
+      headers["x-csrf-token"] = csrfToken;
+    }
+    return fetch(path, {
+      method,
+      headers,
+      body: hasBody ? JSON.stringify(init?.body) : undefined,
+    });
+  };
+  let response = await send();
+  // CSRF 门 403 → 重签一次并重试一次（bootstrap 403 的文案不含 csrf，不受影响）。
+  if (response.status === 403 && method === "POST") {
+    let cause = "";
+    try {
+      const payload = (await response.clone().json()) as { error?: string };
+      if (typeof payload.error === "string") {
+        cause = payload.error;
+      }
+    } catch {
+      // 非 JSON 错误体
+    }
+    if (cause.includes("csrf") && (await reissueCsrf())) {
+      response = await send();
+    }
   }
-  // F15 修正：POST 一律附 csrf（cookie 通道变更请求必检；无体 POST 也不例外——
-  // createThreadId 即无体 POST，漏头会被 api.py CSRF 门 403）。
-  if (method === "POST") {
-    headers["x-csrf-token"] = csrfToken;
-  }
-  const response = await fetch(path, {
-    method,
-    headers,
-    body: hasBody ? JSON.stringify(init?.body) : undefined,
-  });
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
     try {

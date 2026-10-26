@@ -163,6 +163,29 @@ class WebSession:
             and secrets.compare_digest(presented, self.csrf)
         )
 
+    def reissue(self, cookie_value: str | None) -> str | None:
+        """U2 csrf 重签 + 多标签页收敛：持有效会话 cookie → 返回当前 csrf（不轮换）。
+
+        csrf 由「bootstrap 一次下发」放宽为「会话级衍生秘密」（spec §2.2，kitagent
+        同款语义）：浏览器刷新丢掉内存副本后，凭仍有效的会话 cookie 可取回当前值
+        恢复写能力（csrf 防的是跨源伪造，持 cookie 的同源客户端本就能发请求，取回
+        不降低防线）。cookie 比对与 authorize 同一 compare_digest 口径。
+
+        不轮换是 2026-10-27 复审修复（多标签页单值轮换回归）：早期实现「重签即
+        生成新值替换」，第二标签页冷加载自动重签会把已打开旧标签页持有的 csrf
+        踢成 403，旧标签页无页内恢复路径只能刷新——刷新又轮掉对方，乒乓。收敛
+        语义下 csrf 进程内恒定，任意多标签页重签取回同一值；单值语义不变（任何
+        时刻服务端恰有一个 csrf，spec §5 不引入多 csrf 值），§2.4「不受多标签页
+        影响」从只对重签方成立变为对全部标签页成立。不匹配返回 None（端点层映射
+        401）。
+        """
+
+        if not self.bootstrapped or not cookie_value:
+            return None
+        if not secrets.compare_digest(cookie_value, self.cookie):
+            return None
+        return self.csrf
+
 
 def session_cookie_header(value: str) -> str:
     """Set-Cookie 值：HttpOnly（JS 不可读）+ SameSite=strict（跨站不携带）+ path=/。"""
