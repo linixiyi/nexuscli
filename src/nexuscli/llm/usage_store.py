@@ -34,6 +34,7 @@ job, retention-window/cleanup policies, and the multi-currency account system.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -186,10 +187,8 @@ class UsageStore:
         """
         if days < 1:
             raise ValueError("days must be >= 1")
-        try:
+        with suppress(sqlite3.Error):
             self.prune(now=now)
-        except sqlite3.Error:
-            pass
         since = ((now or datetime.now()) - timedelta(days=days)).strftime(_TS_FORMAT)
         with self._connect() as conn:
             total = conn.execute(
