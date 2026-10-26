@@ -75,7 +75,7 @@
 
 ## /usage 双口径
 
-`/usage stats [N天]` 汇总本地 SQLite 用量库 `~/.nexuscli/usage.db`：近 N 天（缺省 7 天）的回合数、总 Token、总成本（USD/CNY）、按模型分布与按来源分布（By source）。落库为 best-effort：普通 REPL 回合（含自定义命令回合）记为 `source=repl`，值为该回合主代理自身的用量；`task` 工具委派的子代理与 `/workflow`、`/expert` 派发的工作流步骤，只要真实产出了 token，也各自落一行 `source=subagent`（记录器在 `run_subagent` 的 done 事件处，零 token 的空跑不落行），所以统计值覆盖 REPL 直连对话与委派回合两类；team/plan-and-execute 模式的 worker 回合与单次 `-p` 模式不落库。
+`/usage stats [N天]` 汇总本地 SQLite 用量库 `~/.nexuscli/usage.db`：近 N 天（缺省 7 天）的回合数、总 Token、总成本（USD/CNY）、按模型分布与按来源分布（By source）。落库为 best-effort：普通 REPL 回合（含自定义命令回合）记为 `source=repl`，值为该回合主代理自身的用量；`task` 工具委派的子代理与 `/workflow`、`/expert` 派发的工作流步骤，只要真实产出了 token，也各自落一行 `source=subagent`（记录器在 `run_subagent` 的 done 事件处，零 token 的空跑不落行），所以统计值覆盖 REPL 直连对话与委派回合两类；team/plan-and-execute 模式的 worker 回合与单次 `-p` 模式不落库。保留窗口：`usage.db` 按 90 天保留窗口清理，`stats` 查询时顺带 best-effort 删除窗口外旧行（`UsageStore.prune`），库体积不随使用时长无界增长。
 
 不带参数的 `/usage` 打印一张四行状态表而不是 JSON dump：`turn`（本回合 input/output）、`session`（历史累计回合数与总 Token）、`cost`（有成本数据时按币种列出）与 `note`（内置价格表为带日期的默认值）。底层仍是 `session_usage` 双口径：`historical_total`（恢复基线 + 本进程累计，两者之和等于当前转录的 usage 台账）与 `current_process`（仅本进程记录的回合），并附 `sources` 标注来源，供 SDK 与单次 `--json` 消费。`/clear`、`/resume`、`/fork` 都会同步重置基线与本进程累计，保证双口径始终对应当前转录。
 

@@ -52,7 +52,7 @@ curl -sS http://127.0.0.1:8080/v1/tasks \
 uv run nexuscli worker --workers 2 --cwd .
 ```
 
-任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。
+任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。恢复重派有上限：同一任务被租约恢复累计 5 次后不再重派，转 `failed` 并留原因（毒任务不占死 worker；`TaskStore.requeue_expired(max_attempts=...)` 可调，2026-10-27 起）。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。
 
 ## 端点清单
 

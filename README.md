@@ -212,6 +212,7 @@ Hooks 以 shell 命令挂在七个生命周期事件上，hook 进程 stdin 收 
 /expert <topic>              # 内置三步专家流程
 /skill list|load|on|off      # Skill 管理
 /snapshot / /restore         # 快照与恢复
+/turn-resume [id]            # 回合级恢复：列出候选或按 id 从检查点续跑
 /fork [title]                # 分叉当前会话
 /goal set|show|clear         # 会话长程目标
 /effort <档位>               # 会话内切换推理力度

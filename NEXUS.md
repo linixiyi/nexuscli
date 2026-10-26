@@ -100,6 +100,7 @@ src/nexuscli/
 - 交互式 `Auto (full access)` 是用户显式选择的会话级最高权限模式：不请求审批，并关闭路径与
   命令守卫；切回 `Default` 必须恢复启动时的原策略。
 - 非交互入口不能因为缺少审批界面而静默放行危险操作。
+- MCP HTTP 传输必须配置 `NEXUSCLI_MCP_API_KEY`（未配置拒绝启动，缺/错 key 一律 401）；`tools/call` 与其他入口同走 ToolExecutor 链（审计/hooks/规则/写域守卫），`hitl_mode=never` 的无人值守语义由凭证门补齐访问控制。
 - 不提交 `.env`、真实 API Key、Token、Cookie、私钥、用户级数据库或审计日志。
 - 日志、异常和测试输出不得泄露凭据；新增配置对外展示时必须继续脱敏。
 - 不使用破坏性 Git 命令覆盖用户改动；工作区不干净时只修改当前任务涉及的文件。

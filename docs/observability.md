@@ -8,7 +8,7 @@
 
 每个 REPL 进程会话有一条 16 位十六进制的 trace id（实现：`src/nexuscli/observability.py`，首个消费者惰性生成，之后进程内稳定）：
 
-- **审计日志**：执行器写每条审计记录时附 `trace_id` 字段（`policy/audit_log.py`；REPL 里 `/audit [N]` 即可看到）。无 trace id 的调用方字段为空串，老记录格式兼容。
+- **审计日志**：执行器写每条审计记录时附 `trace_id` 字段（`policy/audit_log.py`；REPL 里 `/audit [N]` 即可看到）。无 trace id 的调用方字段为空串，老记录格式兼容。脱敏是键名+值级两道闸：`SENSITIVE_KEYS` 键名匹配之外，值级掩码覆盖 `sk-`/`ghp_`/`AKIA` 令牌形态与 Bash 命令串里的 `Bearer <token>` / JWT 三段式（`tests/test_audit_redaction.py` 含防误伤反例）。
 - **LLM 请求头**：OpenAI-compatible 客户端在 `chat` 请求上附 `X-Request-ID: <trace_id>`（`llm/openai_compatible.py`）。刻意边界：`list_models` 走的 `/models` 请求不带该头，只有 chat 路径在切片内。
 
 同一会话内「这次模型调用 ↔ 这些工具审计」可用同一 id 对起来。作用域是**进程内**：跨进程传播明确不在切片内；子代理与主代理同进程，因此共享同一条 id。

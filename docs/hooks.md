@@ -23,6 +23,7 @@
 ```
 
 - 七个事件：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PermissionRequest`、`PostToolUse`、`PostToolUseFailure`、`Stop`；`matcher` 是对工具名的正则（默认 `*` 全匹配，仅工具事件使用）
+- 覆盖范围（2026-10-27 下沉后）：`UserPromptSubmit` 阻断门与 `Stop` 通知在三条执行路径同效——react 在 `Agent.run` 入口、plan/team 在各自 runner（`PlanExecuteAgent.run` / `AgentOrchestrator.run`）入口触发；经 `Agent.run(mode=plan/team)` 驱动时由内层 runner 触发，全程单次不叠加（`tests/test_hooks_lane_coverage.py` 锚定）
 - `PermissionRequest` 在审批决策前触发，可 deny/ask，payload 含 `tool_name` / `tool_input`；`PostToolUseFailure` 在工具失败时触发，payload 含 `tool_name` / `tool_input` / `error_message`，失败回合不再触发 `PostToolUse`
 - 每条 hook 是 `{"type": "command", "command": "...", "timeout": 60}`；进程 stdin 收到 JSON 载荷（`hook_event_name`、`session_id`、`cwd`，工具事件另有 `tool_name` / `tool_input`，`PostToolUse` 另有 `tool_response`，`PostToolUseFailure` 另有 `error_message`，`UserPromptSubmit` 另有 `prompt`）
 - 协议：**exit 2 阻断**（stderr 作为拒绝原因），exit 0 时 stdout 可输出 JSON（`decision: block` 或 `hookSpecificOutput.permissionDecision: deny/ask`）同样生效；超时与其他退出码只作为非阻断错误提示

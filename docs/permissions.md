@@ -105,7 +105,7 @@ OS 级沙箱（容器、受限令牌）是更大体量的外部依赖，同样�
 交互模式下按 `Shift+Tab` 可在三种会话权限模式间循环切换（`Default → Auto (full access) → plan (read-only) → Default`）：
 
 - `Default`：使用启动时的 HITL、工作区路径和命令安全策略。
-- `Auto (full access)`：当前会话内不再请求审批，并关闭路径与命令守卫。
+- `Auto (full access)`：当前会话内不再请求审批，并关闭路径与命令守卫（写域守卫亦随守卫关闭，域外写不再单独追问；headless 无审批回调时仍 fail-closed）。
 - `plan (read-only)`：只读约束态，非只读工具被硬拒绝；再次按 `Shift+Tab` 回到默认策略。
 
 plan 态不是免审批态：它会恢复启动时的 HITL 与安全策略，同时打开只读闸门——

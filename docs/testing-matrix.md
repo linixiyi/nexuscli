@@ -148,7 +148,10 @@
 | 6.10 | plan 态只读 | 见 2.4 | `test_plan_mode.py` | pty 实测 | ✅ |
 | 6.11 | `-p` 审批默认拒绝 + `--yes` 显式放行 | 脚本里跑要写文件 | `test_cli_single_prompt.py` | 实测默认被拒、`--yes` 放行 | ✅ |
 | 6.12 | 【已修】Runtime API 审批通道 | 机器人接进来跑任务 | `test_runtime.py` | 实测 `write_file` 被拒且文件未落盘 | ✅ |
-| 6.13 | 【已修】MCP server 浏览器安全 | 本机跑着别被网页打 | `test_mcp_http_security.py` | 实测 GET 405 / 错路径 404 / text/plain 415 / 跨源 403 / 同源 200 | ✅ |
+| 6.13 | 【已修】MCP server 浏览器安全 | 本机跑着别被网页打 | `test_mcp_http_security.py` | 实测 GET 405 / 错路径 404 / text/plain 415 / 跨源 403 / 同源 200 / 缺错 key 401 | ✅ |
+| 6.14 | 【已修】MCP HTTP 凭证门 | 无 key 的本机进程想白嫖工具 | `test_mcp_http_security.py` | 实测缺/错 key 401、未配置 `NEXUSCLI_MCP_API_KEY` 拒绝启动、带 key 调用落审计 | ✅ |
+| 6.15 | 【已修】写域守卫尊重 full-access | REPL Auto 模式下域外写被自相矛盾地拦 | `test_fs_scope.py` | 实测 Auto 组合不追问、headless 无回调仍 fail-closed | ✅ |
+| 6.16 | 【已修】hooks 三路径下沉 | /plan /team 绕过 UserPromptSubmit 门 | `test_hooks_lane_coverage.py` | 实测 plan/team 入口 exit 2 即拒且不调 LLM | ✅ |
 
 ## 七、记忆与上下文
 
