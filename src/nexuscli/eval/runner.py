@@ -14,12 +14,13 @@ normal Agent path (like the existing agent tests).
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
 from nexuscli.agent import Agent
 from nexuscli.config import NexusCliConfig
-from nexuscli.eval.loader import EvalScenario, ScriptedTool
+from nexuscli.eval.loader import DEFAULT_DIFFICULTY, EvalScenario, ScriptedTool
 from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 from nexuscli.tools.registry import ToolRegistry
 
@@ -33,7 +34,12 @@ _DEFAULT_TURN_BUDGET = 20
 
 @dataclass(slots=True)
 class EvalRunResult:
-    """What one scenario produced, plus the assertion verdicts."""
+    """What one scenario produced, plus the assertion verdicts.
+
+    ``difficulty`` is copied from the scenario so the reporter can aggregate
+    per tier without going back to the scenario files; it defaults to the
+    loader's default tier so a hand-built result still lands in a bucket.
+    """
 
     name: str
     passed: bool
@@ -41,6 +47,7 @@ class EvalRunResult:
     tool_sequence: list[str] = field(default_factory=list)
     turns: int = 0
     final_text: str = ""
+    difficulty: str = DEFAULT_DIFFICULTY
 
 
 class ScriptedLlmClient:
@@ -114,7 +121,7 @@ def run_eval_scenarios(scenarios: list[EvalScenario], *, cwd: str) -> list[EvalR
 
 async def run_scenario(scenario: EvalScenario, *, cwd: str) -> EvalRunResult:
     """Run one scenario against a real react Agent and evaluate its assertions."""
-    result = EvalRunResult(name=scenario.name, passed=False)
+    result = EvalRunResult(name=scenario.name, passed=False, difficulty=scenario.difficulty)
     tool_sequence: list[str] = []
     texts: list[str] = []
     failure_reasons: list[str] = []
@@ -213,7 +220,13 @@ def _final_assistant_text(messages: Any, *, fallback: list[str]) -> str:
 
 
 def _assertion_failures(scenario: EvalScenario, result: EvalRunResult) -> list[str]:
-    """Evaluate the four supported assertions; human-readable reasons on miss."""
+    """Evaluate the scenario's assertions; human-readable reasons on miss.
+
+    The three call-count assertions (``required_tools``, ``max_tool_calls``,
+    ``max_total_tool_calls``) read the same observed ``tool_sequence`` as the
+    sequence/forbidden checks: every ``tool_call`` event the agent emitted,
+    including calls the loop guard intercepted instead of executing.
+    """
     failures: list[str] = []
     assertions = scenario.assertions
     if (
@@ -232,6 +245,22 @@ def _assertion_failures(scenario: EvalScenario, result: EvalRunResult) -> list[s
         for forbidden in assertions.forbidden_tools:
             if forbidden in result.tool_sequence:
                 failures.append(f"forbidden tool was called: {forbidden}")
+    call_counts = Counter(result.tool_sequence)
+    if assertions.required_tools is not None:
+        for required in assertions.required_tools:
+            if call_counts[required] == 0:
+                failures.append(f"required tool was never called: {required}")
+    if assertions.max_tool_calls is not None:
+        for tool, limit in assertions.max_tool_calls.items():
+            actual = call_counts[tool]
+            if actual > limit:
+                failures.append(f"tool {tool} was called {actual} times, limit is {limit}")
+    if assertions.max_total_tool_calls is not None:
+        total = len(result.tool_sequence)
+        if total > assertions.max_total_tool_calls:
+            failures.append(
+                f"made {total} tool calls in total, limit is {assertions.max_total_tool_calls}"
+            )
     if assertions.max_turns is not None and result.turns > assertions.max_turns:
         failures.append(f"took {result.turns} turns, limit is {assertions.max_turns}")
     return failures

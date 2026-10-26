@@ -4,8 +4,8 @@ Covers:
 - scenario loading and strict schema validation (clear errors with the file
   path, unknown keys rejected, deny rules bound to defined tools);
 - the runner driving a real react Agent with a scripted LLM client and stub
-  tools, including the built-in happy-path, permission-denial and
-  multi-turn-convergence scenarios;
+  tools, including the built-in happy-path, permission-denial,
+  multi-turn-convergence and loop-guard-repeat scenarios;
 - all four assertions (expected_tool_sequence, final_contains,
   forbidden_tools, max_turns) failing with readable reasons;
 - the reporter's regression comparison matrix and report round-trip;
@@ -77,16 +77,17 @@ def _simple_scenario_data(**overrides) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_builtin_eval_dir_ships_three_scenarios():
+def test_builtin_eval_dir_ships_four_scenarios():
     eval_dir = builtin_eval_dir()
     assert eval_dir is not None
     scenarios = load_eval_scenarios(eval_dir)
     names = [scenario.name for scenario in scenarios]
-    assert len(names) == 3
+    assert len(names) == 4
     assert set(names) == {
         "read-task-details",
         "denied-privileged-call",
         "multi-turn-search-converge",
+        "repeat-call-loop-guard",
     }
 
 
@@ -180,7 +181,7 @@ def test_all_builtin_scenarios_pass_offline(tmp_path):
 
     results = run_eval_scenarios(scenarios, cwd=str(tmp_path))
 
-    assert [result.passed for result in results] == [True, True, True]
+    assert [result.passed for result in results] == [True, True, True, True]
     assert all(result.failure_reasons == [] for result in results)
 
 
@@ -341,6 +342,16 @@ def test_build_report_against_fabricated_previous_report():
         "failed": 2,
         "regressions": 1,
         "fixed": 1,
+        # The fabricated baseline carries no cost fields -> no cost buckets.
+        "cost_increased": 0,
+        "cost_decreased": 0,
+        "cost_unchanged": 0,
+        # Hand-built results carry the default tier -> everything lands in medium.
+        "difficulty": {
+            "short": {"total": 0, "passed": 0, "failed": 0, "regressions": 0},
+            "medium": {"total": 5, "passed": 3, "failed": 2, "regressions": 1},
+            "long": {"total": 0, "passed": 0, "failed": 0, "regressions": 0},
+        },
     }
 
 
@@ -390,7 +401,10 @@ def test_format_report_lines_failures_and_summary():
 
     assert lines[0].startswith("PASS\tgood\t[new]")
     assert lines[1].startswith("FAIL\tbad\t[new]\tmissing x")
-    assert lines[2] == "total=2 passed=1 failed=1 regressions=0 fixed=0"
+    assert lines[2] == (
+        "total=2 passed=1 failed=1 regressions=0 fixed=0 "
+        "cost_increased=0 cost_decreased=0 cost_unchanged=0"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -412,11 +426,11 @@ def test_eval_run_writes_report_and_exits_zero(tmp_path):
 
     assert result.exit_code == 0
     assert "PASS\tread-task-details" in result.output
-    assert "total=3 passed=3 failed=0" in result.output
+    assert "total=4 passed=4 failed=0" in result.output
     report_path = tmp_path / REPORT_RELATIVE
     assert report_path.is_file()
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["summary"]["total"] == 3
+    assert report["summary"]["total"] == 4
     assert all(entry["comparison"]["verdict"] == "new" for entry in report["scenarios"])
 
 

@@ -6,7 +6,8 @@ are diffed into pass→fail (regression) / fail→pass (fixed) verdicts.
 
 Public surface:
     :func:`load_eval_scenarios` / :func:`load_eval_scenario` / :func:`builtin_eval_dir`
-        Scenario loading and strict schema validation (:class:`EvalSchemaError`).
+        Scenario loading and strict schema validation (:class:`EvalSchemaError`);
+        the ``difficulty`` tier vocabulary is :data:`DIFFICULTY_LEVELS`.
     :func:`run_eval_scenarios` / :func:`run_scenario`
         Offline scripted execution (:class:`EvalRunResult`).
     :func:`load_previous_report` / :func:`build_report` / :func:`write_report`
@@ -14,6 +15,8 @@ Public surface:
 """
 
 from nexuscli.eval.loader import (
+    DEFAULT_DIFFICULTY,
+    DIFFICULTY_LEVELS,
     EvalAssertions,
     EvalScenario,
     EvalSchemaError,
@@ -36,6 +39,8 @@ from nexuscli.eval.reporter import (
 from nexuscli.eval.runner import EvalRunResult, run_eval_scenarios, run_scenario
 
 __all__ = [
+    "DEFAULT_DIFFICULTY",
+    "DIFFICULTY_LEVELS",
     "REPORT_RELATIVE",
     "EvalAssertions",
     "EvalRunResult",

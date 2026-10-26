@@ -18,13 +18,35 @@ agent::
       ],
       "permission_deny": ["deploy_app"],
       "hitl_mode": "auto",
+      "difficulty": "short",
       "assertions": {
         "expected_tool_sequence": ["list_tasks"],
         "final_contains": ["fix login"],
         "forbidden_tools": ["bash"],
-        "max_turns": 3
+        "max_turns": 3,
+        "required_tools": ["list_tasks"],
+        "max_tool_calls": {"list_tasks": 2},
+        "max_total_tool_calls": 4
       }
     }
+
+Trajectory assertions come in two flavours. ``expected_tool_sequence`` is the
+exact ordered call list (precise, but brittle against real regressions);
+``required_tools`` is the subset form — every listed tool must have been called
+at least once, in any order. ``max_tool_calls`` caps one tool's call count
+(pair it with the agent's loop guard: "the same call repeated three times must
+be intercepted") and ``max_total_tool_calls`` caps the run's total call count
+(the efficiency budget). Call counts include calls the loop guard intercepted:
+the agent still surfaces them as ``tool_call`` events, so they measure what the
+run attempted.
+
+``difficulty`` is the author's declared tier for the scenario — one of
+``short`` / ``medium`` / ``long`` (roughly: a one-or-two-step task, a
+multi-step task that has to converge, an extended trajectory). It never
+changes how a scenario runs or is judged; the reporter aggregates PASS/FAIL
+and regression counts per tier so a regression report can show *which* tier
+is degrading. The key is optional and defaults to ``medium``; when present it
+must be exactly one of the three tier names (case-sensitive, no ``null``).
 
 Validation is strict on purpose: unknown keys and wrong shapes raise
 :class:`EvalSchemaError` with the file path and a human-readable reason, so a
@@ -40,7 +62,20 @@ from typing import Any
 
 _DANGER_LEVELS = {"safe", "medium", "high"}
 _HITL_MODES = {"auto", "never", "always"}
-_ASSERTION_KEYS = {"expected_tool_sequence", "final_contains", "forbidden_tools", "max_turns"}
+# Public (the reporter aggregates per tier in this order). A tuple, not a set:
+# membership tests must not raise on an unhashable value such as ``["short"]``
+# — that is a schema error to report, not a TypeError to crash on.
+DIFFICULTY_LEVELS: tuple[str, ...] = ("short", "medium", "long")
+DEFAULT_DIFFICULTY = "medium"
+_ASSERTION_KEYS = {
+    "expected_tool_sequence",
+    "final_contains",
+    "forbidden_tools",
+    "max_turns",
+    "required_tools",
+    "max_tool_calls",
+    "max_total_tool_calls",
+}
 _TOOL_KEYS = {
     "name",
     "description",
@@ -80,17 +115,29 @@ class ScriptedTurn:
 
 @dataclass(slots=True)
 class EvalAssertions:
-    """The four supported per-scenario assertions (all optional)."""
+    """The seven supported per-scenario assertions (all optional).
+
+    ``required_tools`` is the unordered subset counterpart of
+    ``expected_tool_sequence``; ``max_tool_calls`` maps a tool name to its
+    call-count cap and ``max_total_tool_calls`` caps the run's total.
+    """
 
     expected_tool_sequence: list[str] | None = None
     final_contains: list[str] | None = None
     forbidden_tools: list[str] | None = None
     max_turns: int | None = None
+    required_tools: list[str] | None = None
+    max_tool_calls: dict[str, int] | None = None
+    max_total_tool_calls: int | None = None
 
 
 @dataclass(slots=True)
 class EvalScenario:
-    """A fully validated, ready-to-run eval scenario."""
+    """A fully validated, ready-to-run eval scenario.
+
+    ``difficulty`` is always one of :data:`DIFFICULTY_LEVELS` (the loader
+    fills in :data:`DEFAULT_DIFFICULTY` when the file omits the key).
+    """
 
     name: str
     prompt: str
@@ -100,6 +147,7 @@ class EvalScenario:
     assertions: EvalAssertions
     permission_deny: list[str]
     hitl_mode: str
+    difficulty: str
     source: str
 
 
@@ -177,6 +225,13 @@ def _scenario_from_mapping(data: dict[str, Any], *, source: str) -> EvalScenario
         raise EvalSchemaError(
             f"{source}: 'hitl_mode' must be one of {sorted(_HITL_MODES)}, got {hitl_mode!r}"
         )
+    # Absent -> default tier; present means it must be exactly one of the three
+    # names (``null``, ``""``, ``"Short"`` and non-strings are all rejected).
+    difficulty = data.get("difficulty", DEFAULT_DIFFICULTY)
+    if difficulty not in DIFFICULTY_LEVELS:
+        raise EvalSchemaError(
+            f"{source}: 'difficulty' must be one of {list(DIFFICULTY_LEVELS)}, got {difficulty!r}"
+        )
     tool_names = {tool.name for tool in tools}
     for rule in permission_deny:
         parsed_tool = str(rule).split("(", 1)[0].strip()
@@ -194,6 +249,7 @@ def _scenario_from_mapping(data: dict[str, Any], *, source: str) -> EvalScenario
         assertions=assertions,
         permission_deny=permission_deny,
         hitl_mode=hitl_mode,
+        difficulty=difficulty,
         source=source,
     )
 
@@ -308,12 +364,60 @@ def _parse_assertions(raw: Any, *, source: str) -> EvalAssertions:
     valid_turns = isinstance(max_turns, int) and not isinstance(max_turns, bool) and max_turns >= 1
     if max_turns is not None and not valid_turns:
         raise EvalSchemaError(f"{source}: assertions.max_turns must be a positive integer")
+    required = raw.get("required_tools")
+    if required is not None:
+        required = _parse_string_list(required, "'required_tools'", source=source)
+    max_tool_calls = raw.get("max_tool_calls")
+    if max_tool_calls is not None:
+        max_tool_calls = _parse_tool_call_caps(max_tool_calls, source=source)
+    max_total = raw.get("max_total_tool_calls")
+    if max_total is not None and not _is_positive_int(max_total):
+        raise EvalSchemaError(
+            f"{source}: assertions.max_total_tool_calls must be a positive integer, "
+            f"got {max_total!r}"
+        )
     return EvalAssertions(
         expected_tool_sequence=expected,
         final_contains=final_contains,
         forbidden_tools=forbidden,
         max_turns=max_turns,
+        required_tools=required,
+        max_tool_calls=max_tool_calls,
+        max_total_tool_calls=max_total,
     )
+
+
+def _parse_tool_call_caps(raw: Any, *, source: str) -> dict[str, int]:
+    """Validate ``max_tool_calls``: a non-empty ``{tool name: positive int}`` map.
+
+    An empty object asserts nothing, so it is rejected like any other typo. A
+    cap of ``0`` is rejected too: "never call this tool" is what
+    ``forbidden_tools`` is for.
+    """
+    if not isinstance(raw, dict) or not raw:
+        raise EvalSchemaError(
+            f"{source}: assertions.max_tool_calls must be a non-empty object mapping "
+            "tool names to positive integers"
+        )
+    caps: dict[str, int] = {}
+    for tool, limit in raw.items():
+        if not isinstance(tool, str) or not tool.strip():
+            raise EvalSchemaError(
+                f"{source}: assertions.max_tool_calls keys must be non-empty tool names, "
+                f"got {tool!r}"
+            )
+        if not _is_positive_int(limit):
+            raise EvalSchemaError(
+                f"{source}: assertions.max_tool_calls[{tool!r}] must be a positive integer, "
+                f"got {limit!r}"
+            )
+        caps[tool] = limit
+    return caps
+
+
+def _is_positive_int(value: Any) -> bool:
+    """True for an ``int >= 1`` that is not a ``bool`` (``true`` is not a count)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
 def _parse_string_list(raw: Any, label: str, *, source: str) -> list[str]:
