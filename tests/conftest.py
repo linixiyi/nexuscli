@@ -35,3 +35,21 @@ def _isolate_user_home(tmp_path_factory, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     return home
+
+
+@pytest.fixture(autouse=True)
+def _reset_otlp_wiring_state():
+    """Reset the OTLP one-shot wiring globals around every test.
+
+    `nexuscli.telemetry.otlp` keeps process-lifetime state (attempted/warned
+    flags plus the load_config-resolved telemetry face it consults before its
+    cwd fallback). Without this reset, one test calling `load_config` with an
+    `otlp.endpoint` would leak that endpoint into any later test that enables
+    telemetry spans — wiring a dead endpoint into an unrelated assertion.
+    The reset is a plain dataclass swap plus a global assignment; zero cost.
+    """
+    from nexuscli.telemetry.otlp import _reset_state_for_tests
+
+    _reset_state_for_tests()
+    yield
+    _reset_state_for_tests()

@@ -26,12 +26,19 @@ telemetry = [
   "opentelemetry-api>=1.20",
   "opentelemetry-sdk>=1.20",
 ]
+# 二级组: telemetry = 能产生 span, telemetry-otlp = 能把 span 导出(OTLP/HTTP,
+# Langfuse 等)。导出依赖不进 telemetry 组, 只配 endpoint 未装导出依赖时由
+# nexuscli.telemetry.otlp 翻译成带本组安装指引的类型化错误/一次性警告。
+telemetry-otlp = [
+  "opentelemetry-exporter-otlp-proto-http>=1.20",
+]
 dev = [
   "pytest>=8.2.0",
   "ruff>=0.5.0",
   "pypdf>=4",
   "opentelemetry-api>=1.20",
   "opentelemetry-sdk>=1.20",
+  "opentelemetry-exporter-otlp-proto-http>=1.20",
 ]
 
 [build-system]
