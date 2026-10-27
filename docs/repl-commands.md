@@ -48,6 +48,8 @@
 /skill on <name>
 /skill off <name>
 /skill reload
+/skill propose <name> [--report hermetic|real]
+/skill proposals <name>
 /mcp
 /task
 /task add [--mode react|plan|team] <task>

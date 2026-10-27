@@ -30,7 +30,7 @@
 | 子代理 | `task` 工具委派独立子代理（后台执行、完成播报、文件邮箱互通），内置 general-purpose / explore，支持自定义代理 | [docs/subagents.md](docs/subagents.md) |
 | 模型与上下文 | OpenAI-compatible 流式客户端（DeepSeek/GLM/Kimi/StepFun/Anthropic 原生），80% 预算自动压缩 + microcompact + provider 超限重试；BYOK 模型选择器与 API 拉取 | [docs/config.md](docs/config.md) |
 | 工具与扩展 | 文件/Shell/检索/联网/记忆内置工具（写文件自动 py_compile 诊断），MCP client+server，代码索引 BM25 检索 | [docs/tools.md](docs/tools.md) |
-| Skill 系统 | builtin/user/project 分层 + Agent Skills 规范目录扫描、Top-K 匹配懒加载、`save_skill` 经 HITL 沉淀 | [docs/skills.md](docs/skills.md) |
+| Skill 系统 | builtin/user/project 分层 + Agent Skills 规范目录扫描、Top-K 匹配懒加载、`save_skill` 经 HITL 沉淀；`/skill propose` 读最近 eval 报告生成改进提案、逐条人审后走既有快照/审计落地（报告是提案依据，不是落地效果验证器） | [docs/skills.md](docs/skills.md) |
 | 斜杠命令与插件 | 自定义斜杠命令（frontmatter/占位符/输出注入）与 `.nexuscli/plugins` 本地插件并入 | [docs/slash-commands.md](docs/slash-commands.md) |
 | 记忆与持久化 | 静态项目记忆 + SQLite 动态长期记忆（去重/TTL/多信号时态召回），会话 JSONL 自动持久化、`-c`/`--resume`/`/fork` 跨进程恢复 | [docs/sessions.md](docs/sessions.md) |
 | 快照 | 按需快照与恢复，Agent 可经 `vfs_ls` / `vfs_read` 挂载只读视图做改前对比 | [docs/sessions.md](docs/sessions.md#快照) |
@@ -210,7 +210,7 @@ Hooks 以 shell 命令挂在七个生命周期事件上，hook 进程 stdin 收 
 /task add|cancel|log         # 后台任务队列
 /workflow run <file>.json    # JSON 步骤图 DAG 派发
 /expert <topic>              # 内置三步专家流程
-/skill list|load|on|off      # Skill 管理
+/skill list|load|propose     # Skill 管理与 eval 驱动提案进化
 /snapshot / /restore         # 快照与恢复
 /turn-resume [id]            # 回合级恢复：列出候选或按 id 从检查点续跑
 /fork [title]                # 分叉当前会话
