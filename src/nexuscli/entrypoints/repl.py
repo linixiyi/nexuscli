@@ -424,6 +424,11 @@ async def _handle_slash(
             "Shift+Tab cycles permission mode · Ctrl+C aborts a turn · Ctrl+D exits.[/dim]"
         )
         console.print("\n".join(SLASH_COMMANDS))
+        console.print(
+            "[dim]/skill subcommands: list · show <name> · load <name> · on/off <name> · "
+            "reload · evolve <name> <rule...> · rollback <name> <version> · stats · "
+            "propose <name> [--report hermetic|real] · proposals <name>[/dim]"
+        )
         for name, custom in (custom_commands or {}).items():
             description = f" — {custom.description}" if custom.description else ""
             console.print(f"/{name}{description} [dim]({custom.source})[/dim]")
