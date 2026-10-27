@@ -73,6 +73,7 @@ uv run nexuscli -p "解释这个仓库"
 ```
 
 - `telemetry.enabled`（默认 `false`）：为 `llm.chat` 与 `tool.call` 两条路径产出 OpenTelemetry span（属性带会话 trace_id）。未开启、或可选依赖 `opentelemetry` 未安装（`uv sync --extra telemetry`）时全链路 no-op，行为与没有遥测代码时完全一致
+- `telemetry.otlp`（默认关闭）：把既有 span 经 OTLP/HTTP 导出到 Langfuse 等外部平台，需另装导出依赖（`uv sync --extra telemetry-otlp`）。三键：`endpoint`（端点完整 URL，**非空即开启**——空串是默认值，只配另外两键不开启任何行为；显式配置时 exporter 不会自动追加 `/v1/traces`，要写全，如 `https://cloud.langfuse.com/api/public/otel/v1/traces`）、`headers`（头名→值映射，随每个导出请求发送，Langfuse 鉴权即 `Authorization: Basic base64("公钥:私钥")`）、`timeout`（可选，单次导出请求超时秒数，缺省用 exporter 默认 10 秒）。仅在 `telemetry.enabled` 也为 `true` 时生效；导出是旁路——缺依赖、端点不可达或导出报错都只在进程内警告至多一次，CLI 功能与退出码零影响。Langfuse 端点示例与降级语义的完整口径见 [observability.md](observability.md)
 - `llm.debug_dump`（默认 `false`）：开启后每回合把 LLM 请求与响应以 JSONL 追加写入 `~/.nexuscli/debug/llm/<日期>.jsonl`，`Authorization` 等敏感请求头会脱敏为 `<redacted>`；消息正文与工具定义会原样落盘，只在可信机器上临时开启排查
 - `llm.vision`（默认不设置）：显式声明当前模型是否支持图片输入。不设置时按模型名特征猜测（名称含 vision/image/5v/vl）；自建网关经 `/model` 的「API 拉取」选择模型时会自动带入响应里声明的 `capabilities.vision`。名称不带特征但实际支持图片的模型，手动设 `"llm": { "vision": true }` 即可启用 `@image:` 流程
 

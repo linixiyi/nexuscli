@@ -41,7 +41,7 @@
 | 上下文压缩 | 80% 预算触发，先无损 microcompact 再有损摘要；provider 真实超限自动压缩重试一次 | [docs/memory-context.md](docs/memory-context.md) |
 | 会话增强 | `/fork` 分叉、`/goal` 长程目标、`/effort` 推理力度、`/history` 跨会话检索、usage 双口径 | [docs/repl-commands.md](docs/repl-commands.md) |
 | 评测回归 | 离线任务级 eval：脚本化假 LLM 驱动真实 Agent，七种断言（轨迹序列/子集/禁用工具/回合与调用数上限）对累计轨迹判定；支持多轮用户模拟（脚本化用户在 agent 产出后追问同一会话、轮数硬上限）与记忆召回评测（临时库 seed 记忆，目标条目进 recall 前 K、干扰条目不排前）；回归以 `regression` 形式暴露并按 short/medium/long 难度分档定位，turns/工具调用数成本上涨显式告警但不改判定，可当 CI 门禁；另有真模型轨道 `eval run --real`——真实 LLM 走正常配置链驱动只读 builtin 工具面（白名单外失败关闭拒绝并留审计），pass^k 稳定性、真实 token 成本（含 cache/reasoning 拆分）与 LLM-as-judge 评分写入独立的 last-real-report.json（夜跑口径，不做 CI 门禁） | [docs/eval.md](docs/eval.md) |
-| 可观测性 | trace_id 贯穿审计与 LLM 请求头、可选 OTel span、模型 IO 脱敏落盘、usage 落库 | [docs/observability.md](docs/observability.md) |
+| 可观测性 | trace_id 贯穿审计与 LLM 请求头、可选 OTel span（含 `telemetry.otlp` OTLP 导出，Langfuse 等外部 trace 视图）、模型 IO 脱敏落盘、usage 落库 | [docs/observability.md](docs/observability.md) |
 | 代码索引 | `/index` 建本地词法索引，`/search` 与 `search_code` 按纯 Python BM25 相关性排序 | [docs/tools.md](docs/tools.md#代码索引与检索) |
 | 图片输入 | `@image:` 引用本地/远程图片，自动压缩缩放，按模型能力自动降级 | [docs/tools.md](docs/tools.md#图片输入) |
 
@@ -161,7 +161,7 @@ provider-specific API Key 支持 `DEEPSEEK_API_KEY` / `ZAI_API_KEY` / `GLM_API_K
 }
 ```
 
-可选诊断配置 `telemetry.enabled` 与 `llm.debug_dump` 默认关闭；`llm.vision` 显式声明模型图片能力（缺省按模型名特征猜测）。
+可选诊断配置 `telemetry.enabled`（含可选 `telemetry.otlp` OTLP 导出，Langfuse 等外部 trace 视图）与 `llm.debug_dump` 默认关闭；`llm.vision` 显式声明模型图片能力（缺省按模型名特征猜测）。
 
 优先级链、Anthropic 原生边界、`!command` 语义（不经 shell 执行、失败降级为空 key）、`agent.max_turns` / `agent.loop_detection_threshold`、价格覆盖的完整口径见 [docs/config.md](docs/config.md)。
 
@@ -341,7 +341,7 @@ team_result = engine.team_complete("让多个 Agent 并行检查核心模块")
 | 自定义斜杠命令 | [docs/slash-commands.md](docs/slash-commands.md) | markdown 提示词、frontmatter 与占位符注入 |
 | 定时任务 | [docs/cron.md](docs/cron.md) | 离线任务注册表与外部调度器驱动方式 |
 | 评测回归 | [docs/eval.md](docs/eval.md) | 脚本化场景、断言体系与回归 diff 门禁 |
-| 可观测性 | [docs/observability.md](docs/observability.md) | trace_id、OTel 遥测、模型 IO 落盘与 usage 统计 |
+| 可观测性 | [docs/observability.md](docs/observability.md) | trace_id、OTel 遥测与 OTLP 导出、模型 IO 落盘与 usage 统计 |
 | 规范技能开发 | [docs/spec-skill.md](docs/spec-skill.md) | 规范驱动开发技能的核心概念与质量门禁 |
 | 测试矩阵 | [docs/testing-matrix.md](docs/testing-matrix.md) | 用户表面的测试状态：测过什么、没测过什么 |
 

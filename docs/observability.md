@@ -30,10 +30,40 @@
 | `llm.chat`（`llm/openai_compatible.py` 的 chat 流程） | `nexuscli.trace_id`、`nexuscli.llm.model`、`nexuscli.llm.provider` |
 | `tool.call`（`tools/executor.py` 的工具执行） | `nexuscli.trace_id`、`nexuscli.tool.name`、`nexuscli.tool.outcome`（`ok`/`error`，在 span 结束前写入） |
 
+### OTLP 导出（`telemetry.otlp`，Langfuse 等，可选依赖）
+
+默认关闭。开启后把上面两类**既有 span** 经 `BatchSpanProcessor` 批量后台导出到任意 OTLP/HTTP 端点（Langfuse、Jaeger 等），span 名与属性零改动——导出只是给既有 span 加一个消费者，不产生新 span（实现：`src/nexuscli/telemetry/otlp.py`，exporter 唯一 import 边界）：
+
+```json
+{
+  "telemetry": {
+    "enabled": true,
+    "otlp": {
+      "endpoint": "https://cloud.langfuse.com/api/public/otel/v1/traces",
+      "headers": { "Authorization": "Basic <base64(pk-lf-…:sk-lf-…)>" },
+      "timeout": 10
+    }
+  }
+}
+```
+
+- **三个键**：`endpoint`（OTLP/HTTP 端点完整 URL，空串即关闭——这是默认值，只配 `headers`/`timeout` 不开启任何行为）；`headers`（头名→值映射，随每个导出请求发送，Langfuse 的鉴权就是 `Authorization: Basic base64("公钥:私钥")`）；`timeout`（可选，单次导出请求超时，单位**秒**，缺省用 exporter 自带的 10 秒）。
+- **安装**：`uv sync --extra telemetry-otlp`。extras 分两档：`telemetry` = 能产生 span（`opentelemetry-api/sdk`），`telemetry-otlp` = 能导出 span（proto-http exporter，含前者依赖）——只装前者时配置了 endpoint 会得到带安装指引的降级警告。
+- **生效条件与接线时机**：`telemetry.enabled` 打开 **且** `endpoint` 非空 **且** exporter 已安装。首个真实 span 产生时一次性取用**本进程 `load_config` 已解析的 telemetry face**（即 CLI 实际生效的那份配置，`--cwd` 指向的项目根也按解析结果计；进程从未调用 `load_config` 的嵌入场景才回落「user config + 进程 cwd 项目配置」直读），并把导出器挂到**既有** TracerProvider：宿主自己先注册了全局 SDK provider 的优先复用，否则自建一个并安装为全局；之后变更配置不重新接线，重启生效。
+- **端点写法**：exporter 使用显式 `endpoint` 时**不会**自动追加 `/v1/traces`，URL 要写全。Langfuse 云端如上；自托管把 host 换成自己的实例（如 `http://localhost:3000/api/public/otel/v1/traces`）。本切片只做 OTLP/HTTP（proto-http，不引 gRPC），gRPC 端点不适用。
+
+**降级语义（导出是旁路）**：
+
+- **exporter 缺依赖**：生产路径把缺包翻译成带 `uv sync --extra telemetry-otlp` 指引的 `OtlpDependencyError`，并降级为**进程内至多一次**的 `warnings.warn`（`[nexuscli:telemetry]` 前缀）；装了 `telemetry` 组时 span 照常产生，CLI 功能与退出码零影响。
+- **端点不可达 / 导出报错**：每批导出失败至多一次警告（进程生命周期内，两类失败共享同一个警告预算），exporter 自带的重试与失败日志被压掉不刷屏；不可达端点的内建重试会拖长 flush/进程退出耗时（秒级），但不改变退出码。
+- **默认关闭零感知**：不装 exporter、不配 endpoint 时本节代码零 import、零后台线程、零开销，行为与没有这段代码的构建逐字节一致。
+
+**导出内容与信任边界**：导出载荷就是**既有 span 面**（`llm.chat`/`tool.call` 及其属性，含会话 `trace_id`、模型与工具名等元数据），没有额外面板或脱敏层——这些信息会离开你的机器，把 endpoint 指向哪个平台是你自己的信任决定（这是默认关闭的原因之一）。指标/日志信号、gRPC exporter、采样与重试策略定制均不在切片内。
+
 **支持边界（如实说明）**：
 
-- 内置实现**没有 OTLP exporter，未接真实 collector**，不做任何网络导出；生产路径直接使用 OTel 全局 `TracerProvider`（不注入时即默认 `NonRecordingSpan`，等于不导出）——这是可复用 OTel instrumentation 的标准姿态。需要导出时，可在自己拉起的进程里先注册全局 `TracerProvider`（如 OTLP exporter 指向你自己的 collector）。
-- 仓库内的验证口径是 **in-memory span exporter** 的单元测试（`tests/test_telemetry.py`：断言 span 名称、属性、SDK 缺失时 no-op、工厂接线产出 chat span），未做真实 collector 的端到端验证。
+- OTLP 导出是**可选项**（见上节），默认仍不做任何网络导出；生产路径直接使用 OTel 全局 `TracerProvider`（不注入也不配 `telemetry.otlp` 时即默认 `NonRecordingSpan`，等于不导出）——这是可复用 OTel instrumentation 的标准姿态。
+- 仓库内的验证口径：span 语义用 **in-memory span exporter** 单元测试断言（`tests/test_telemetry.py`：span 名称、属性、SDK 缺失时 no-op、工厂接线产出 chat span）；OTLP 导出/降级用**进程内假 OTLP HTTP 接收端**（`http.server` 环回线程）驱动真实 exporter 覆盖（`tests/test_telemetry_otlp.py`：导出载荷、缺依赖降级、不可达降级、默认关闭零开销）——环回自测，未对接真实 Langfuse 云端做端到端验证。
 - 未移植（对比 ZCode）：agent_turn/agent_step/compaction 多层 span 层级、跨进程 span 传播、采样策略、错误脱敏器。
 
 ## 模型 IO 调试落盘（`llm.debug_dump`）

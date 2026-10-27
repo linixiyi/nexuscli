@@ -215,6 +215,27 @@ class WorkflowConfig:
 
 
 @dataclass(slots=True)
+class TelemetryOtlpConfig:
+    """Optional OTLP/HTTP export face (``telemetry.otlp``).
+
+    Off by default: an empty ``endpoint`` means nothing is wired, nothing is
+    imported and behaviour is byte-for-byte identical to a build without the
+    exporter. When ``endpoint`` is set (and ``telemetry.enabled`` is on), the
+    existing spans are exported to that OTLP/HTTP endpoint (Langfuse, Jaeger,
+    ...) through a BatchSpanProcessor — see :mod:`nexuscli.telemetry.otlp`.
+
+    - ``headers``: header-name → value mapping for the export requests, which
+      is how Langfuse-style ``Authorization: Basic <token>`` auth is spelled.
+    - ``timeout``: per-export-request timeout in seconds (optional; the
+      exporter's own default applies when None).
+    """
+
+    endpoint: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    timeout: float | None = None
+
+
+@dataclass(slots=True)
 class TelemetryConfig:
     """OpenTelemetry spans for the llm.chat / tool.call paths.
 
@@ -222,9 +243,12 @@ class TelemetryConfig:
     behaviour is byte-for-byte identical to a build without the telemetry
     package. Spans themselves stay no-ops unless the optional
     ``opentelemetry`` SDK is installed (see :mod:`nexuscli.telemetry`).
+    ``otlp`` is the optional export endpoint on top; it only matters when
+    ``enabled`` is on and adds a second opt-in dependency group.
     """
 
     enabled: bool = False
+    otlp: TelemetryOtlpConfig = field(default_factory=TelemetryOtlpConfig)
 
 
 @dataclass(slots=True)
@@ -278,7 +302,68 @@ def load_config(
         # pi-compatible ``!command`` form: pull the key from the system
         # secret manager at load time instead of storing it in plaintext.
         config.llm.api_key = _resolve_api_key_command(config.llm.api_key)
+    set_resolved_telemetry_config(config.telemetry)
     return config
+
+
+# Last telemetry face resolved by load_config — the authoritative in-process
+# source for the lazy OTLP wiring (nexuscli.telemetry.otlp). Stashed by
+# reference (the same object the call sites read via config.telemetry.enabled,
+# runtime mutations included), so a project root resolved from ``--cwd`` can
+# never blend with a re-read from the process cwd. Cleared with None by tests
+# / embedders that manage the face themselves.
+_resolved_telemetry: TelemetryConfig | None = None
+
+
+def set_resolved_telemetry_config(telemetry: TelemetryConfig | None) -> None:
+    """Record (or clear, with None) the last load_config()-resolved face."""
+    global _resolved_telemetry
+    _resolved_telemetry = telemetry
+
+
+def get_resolved_telemetry_config() -> TelemetryConfig | None:
+    return _resolved_telemetry
+
+
+def load_telemetry_config(
+    project_root: str | Path | None = None,
+    overrides: dict[str, Any] | None = None,
+    env: dict[str, str | None] | None = None,
+) -> TelemetryConfig:
+    """Read ONLY the telemetry face, layering exactly like :func:`load_config`.
+
+    Side-effect-free sibling of ``load_config``, used as the cwd fallback by
+    the lazy OTLP wiring (``nexuscli.telemetry.otlp`` consults the face
+    :func:`load_config` resolved first — which carries the CLI's real project
+    root, ``--cwd`` included — and only falls back to this fresh read at
+    ``Path.cwd()`` for embedders that never call load_config): no api-key
+    secret-manager subprocess, no path expansion — the telemetry face needs
+    none of those. The layering below (user config → project config →
+    overrides → env) must stay in sync with :func:`load_config`; the
+    permission/hook list merges are skipped because they cannot affect
+    telemetry.
+    """
+    env_map = env if env is not None else os.environ
+    data = _config_to_dict(NexusCliConfig())
+
+    user_config = _read_json(_home() / ".nexuscli" / "config.json")
+    if user_config:
+        data = _deep_merge(data, user_config)
+
+    root = Path(project_root).resolve() if project_root else None
+    if root:
+        project_config = _read_json(root / ".nexuscli" / "config.json")
+        if project_config:
+            data = _deep_merge(data, project_config)
+        project_env = _read_env(root / ".env")
+        if project_env:
+            data = _apply_env(data, project_env)
+
+    if overrides:
+        data = _deep_merge(data, overrides)
+
+    data = _apply_env(data, env_map)
+    return _dict_to_config(data).telemetry
 
 
 def get_config_paths(project_root: str | Path | None = None) -> list[Path]:
@@ -541,7 +626,40 @@ def _dict_to_config(data: dict[str, Any]) -> NexusCliConfig:
         features=FeatureConfig(**_filter_known(data.get("features", {}), FeatureConfig)),
         agent=_dict_to_agent(data.get("agent")),
         workflow=_dict_to_workflow(data.get("workflow")),
-        telemetry=TelemetryConfig(**_filter_known(data.get("telemetry", {}), TelemetryConfig)),
+        telemetry=_dict_to_telemetry(data.get("telemetry")),
+    )
+
+
+def _dict_to_telemetry(raw: Any) -> TelemetryConfig:
+    fields = _filter_known(raw, TelemetryConfig)
+    otlp_raw = fields.pop("otlp", None)
+    return TelemetryConfig(**fields, otlp=_dict_to_telemetry_otlp(otlp_raw))
+
+
+def _dict_to_telemetry_otlp(raw: Any) -> TelemetryOtlpConfig:
+    """Parse the nested ``telemetry.otlp`` section with type-guarded coercion.
+
+    Bad value types fall back to the default instead of raising, so one bad
+    entry cannot prevent the CLI from starting (same stance as
+    :func:`_dict_to_workflow`). Unknown keys inside the section are dropped
+    by :func:`_filter_known`.
+    """
+    fields = _filter_known(raw, TelemetryOtlpConfig)
+    endpoint = fields.get("endpoint")
+    headers = fields.get("headers")
+    timeout = fields.get("timeout")
+    return TelemetryOtlpConfig(
+        endpoint=endpoint if isinstance(endpoint, str) else "",
+        headers=(
+            {str(key): str(value) for key, value in headers.items()}
+            if isinstance(headers, dict)
+            else {}
+        ),
+        timeout=(
+            float(timeout)
+            if isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
+            else None
+        ),
     )
 
 

@@ -9,14 +9,18 @@ fall back to the ``NOOP_TURN_WRITER`` no-op writer when telemetry is not
 ready (apps/zcode-cli/packages/telemetry/src/agent-trace-runtime.ts:154-191;
 read-only reference, not ported verbatim).
 
-Deliberately NOT ported from ZCode (minimum slice): the OTLP exporter and any
-network export (otlp-exporter.ts), the agent_turn/agent_step/compaction
+Deliberately NOT ported from ZCode (minimum slice): the agent_turn/agent_step/compaction
 multi-layer span hierarchy, causation links and cross-process span
-propagation, sampling strategies, and the error-sanitizer. Hosts that want
-exported spans can install their own global TracerProvider first: without an
-injection this module defers to ``opentelemetry.trace.get_tracer(...)``
-(default NonRecordingSpan), the standard etiquette for reusable OTel
-instrumentations.
+propagation, sampling strategies, and the error-sanitizer. The one piece the
+minimum slice originally left out — OTLP/HTTP network export — is now an
+opt-in: when ``telemetry.otlp.endpoint`` is configured, the first live span
+wires an ``OTLPSpanExporter`` + ``BatchSpanProcessor`` onto the existing
+provider (:mod:`nexuscli.telemetry.otlp`); every wiring or export failure
+degrades to at most one warning per process. Hosts that install their own
+global TracerProvider keep precedence — the exporter attaches to it instead
+of replacing it; without any provider this module defers to
+``opentelemetry.trace.get_tracer(...)`` (default NonRecordingSpan), the
+standard etiquette for reusable OTel instrumentations.
 
 Span contract: :meth:`SpanHandle.__exit__` ends the span, so
 :meth:`SpanHandle.record_outcome` must be called *inside* the ``with``
@@ -30,6 +34,7 @@ from __future__ import annotations
 from typing import Any
 
 from nexuscli import observability
+from nexuscli.telemetry.otlp import ensure_otlp_export, warn_once
 
 _TRACER_NAME = "nexuscli"
 _OUTCOME_ATTRIBUTE = "nexuscli.tool.outcome"
@@ -81,6 +86,19 @@ def _tracer() -> Any:
     return trace.get_tracer(_TRACER_NAME)
 
 
+def _ensure_otlp() -> None:
+    """One-shot OTLP wiring before the first live span (bypass discipline).
+
+    ``ensure_otlp_export`` already converts missing dependencies and wiring
+    failures into a single process-lifetime warning; this outer net exists so
+    even a bug in the wiring itself can never reach the span call sites.
+    """
+    try:
+        ensure_otlp_export()
+    except Exception as exc:  # export is a bypass — never fatal to the caller
+        warn_once(f"OTLP span export wiring failed unexpectedly ({exc!r}).")
+
+
 class SpanHandle:
     """Context manager around one span (or a no-op when telemetry is off).
 
@@ -115,9 +133,13 @@ def chat_span(enabled: bool, *, provider: str, model: str) -> SpanHandle:
     """Open an ``llm.chat`` span around one chat() request/response cycle.
 
     No-op unless ``enabled`` is True *and* the opentelemetry SDK is
-    installed. Attributes: ``nexuscli.trace_id`` (session trace id),
-    ``nexuscli.llm.model``, ``nexuscli.llm.provider``.
+    installed. The first ``enabled`` call also wires the optional OTLP
+    exporter once (``telemetry.otlp``; degradation = one warning, see
+    :mod:`nexuscli.telemetry.otlp`). Attributes: ``nexuscli.trace_id``
+    (session trace id), ``nexuscli.llm.model``, ``nexuscli.llm.provider``.
     """
+    if enabled:
+        _ensure_otlp()
     if not enabled or not _sdk_available():
         return SpanHandle()
     attributes = {
@@ -132,11 +154,15 @@ def tool_call_span(enabled: bool, *, tool_name: str) -> SpanHandle:
     """Open a ``tool.call`` span around one tool execution.
 
     No-op unless ``enabled`` is True *and* the opentelemetry SDK is
-    installed. Attributes: ``nexuscli.trace_id``, ``nexuscli.tool.name``;
-    record the result inside the ``with`` block via
+    installed. The first ``enabled`` call also wires the optional OTLP
+    exporter once (``telemetry.otlp``; degradation = one warning, see
+    :mod:`nexuscli.telemetry.otlp`). Attributes: ``nexuscli.trace_id``,
+    ``nexuscli.tool.name``; record the result inside the ``with`` block via
     ``handle.record_outcome("ok" | "error")`` (attribute
     ``nexuscli.tool.outcome``). Silent no-op on inactive handles.
     """
+    if enabled:
+        _ensure_otlp()
     if not enabled or not _sdk_available():
         return SpanHandle()
     attributes = {
