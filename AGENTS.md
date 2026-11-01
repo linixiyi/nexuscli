@@ -39,6 +39,14 @@
   `*.pem` 时等同外带凭证,必须并入审批链;只读 bash 直通不能替代路径守卫。
   ——来源:2026-10-18_fix-real-usage-gaps + 2026-10-18_fix-audit-residual 增量提议
 
+## 执行环境与冒烟
+
+- 工作流/子代理沙箱连不了本地端口与外网 TLS（2026-10-27_add-real-model-eval-track、
+  2026-10-27_add-skill-evolve-proposal 两次实证：本地网关真模型冒烟在沙箱内退 1、
+  沙箱内拉取 hatchling TLS 握手失败）。涉及真实 LLM、本地网关或外网的冒烟必须由
+  主会话执行；子代理冒烟失败先查沙箱网络，再归因环境配置——禁止把沙箱网络失败
+  写成「未配置 Key」。——来源:2026-10-27_add-real-model-eval-track 增量提议
+
 ## MCP
 
 - server 的 initialize 必须返回 `protocolVersion` / `capabilities` /
