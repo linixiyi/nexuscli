@@ -30,6 +30,7 @@ from nexuscli.skill.propose import (
     digest_has_signal,
     list_proposal_records,
     load_report,
+    run_post_landing_diff,
     save_proposal_record,
     summarize_report,
 )
@@ -555,7 +556,9 @@ def test_review_y_lands_rule_with_snapshot_and_audit(tmp_path, monkeypatch):
     original = skill_path.read_text(encoding="utf-8")
     _write_report(tmp_path, "last-report.json", _hermetic_report())
     monkeypatch.setattr(sys, "stdin", _FakeStdin(isatty=True))
-    asked = _stub_review(monkeypatch, ["y", "s"])
+    # y lands item 1, s skips the rest — and the post-landing real-eval offer
+    # (only made because something landed) gets the final "n": declined.
+    asked = _stub_review(monkeypatch, ["y", "s", "n"])
     console = _console()
 
     _skill_command("propose demo", console, str(tmp_path), _agent(FakeProposalLLM(_PROPOSAL_REPLY)))
@@ -565,8 +568,8 @@ def test_review_y_lands_rule_with_snapshot_and_audit(tmp_path, monkeypatch):
     # convention).
     assert "Reason: scenario todo_flow: expected tool write_file was never called" in text
     # One prompt per item: y for item 1 (lands), s for item 2 (skips it and
-    # would skip any rest).
-    assert len(asked) == 2
+    # would skip any rest), then the post-landing diff offer.
+    assert len(asked) == 3
     assert "y / n / s" in asked[0]
     # Landing went through SkillEvolutionStore: rule appended, pre-change
     # state frozen, one audit line.
@@ -590,6 +593,8 @@ def test_review_y_lands_rule_with_snapshot_and_audit(tmp_path, monkeypatch):
     assert record["applied_versions"] == [1]
     assert record["interactive"] is True
     assert "Applied 1/2" in text
+    # The post-landing offer was made (something landed) and declined.
+    assert record["post_landing"] == {"declined": True}
 
 
 def test_review_n_skips_everything_but_still_archives(tmp_path, monkeypatch):
@@ -773,3 +778,561 @@ def test_save_proposal_record_collision_suffix(tmp_path):
     assert json.loads(first.read_text(encoding="utf-8"))["skill"] == "demo"
     assert json.loads(second.read_text(encoding="utf-8"))["skill"] == "demo"
     assert len(list_proposal_records(root, "demo")) == 2
+
+
+# ---------------------------------------------------------------------------
+# run_post_landing_diff — the four-step backup → run → diff → restore
+# (all runner/LLM seams injected; no network, no real gateway)
+# ---------------------------------------------------------------------------
+
+
+def _scenario03_report(*, passed: bool, reasons: list[str] | None = None) -> dict[str, Any]:
+    """A single-scenario real-track report — the post-landing run's shape
+    (scenario 03, the skill-rule-follow validator). A failed run carries a
+    realistic judge-score reason unless the test names its own."""
+    if reasons is None:
+        reasons = (
+            []
+            if passed
+            else ["judge score 0.40 is below threshold 0.80: answer skipped the rubric"]
+        )
+    return {
+        "generated_at": "2026-11-02T12:00:00",
+        "track": "real",
+        "repeat": 1,
+        "scenarios": [
+            {
+                "name": "real-skill-rule-follow",
+                "source": "examples/evals/real/03_skill_rule_follow.json",
+                "pass_k": {
+                    "repeat": 1,
+                    "passed_runs": 1 if passed else 0,
+                    "failed_runs": 0 if passed else 1,
+                    "all_pass": passed,
+                },
+                "cost": {"runs": 1, "total_usage": {}, "avg_usage": {}, "total_cost": {}},
+                "runs": [
+                    {
+                        "index": 1,
+                        "status": "pass" if passed else "fail",
+                        "failure_reasons": list(reasons or []),
+                        "tool_sequence": ["load_skill"],
+                        "turns": 3,
+                        "usage": {},
+                        "cost": {},
+                        "judge": None,
+                    }
+                ],
+            }
+        ],
+        "summary": {
+            "total_runs": 1,
+            "passed": 1 if passed else 0,
+            "failed": 0 if passed else 1,
+            "scenarios_total": 1,
+            "scenarios_all_pass": 1 if passed else 0,
+            "all_pass_rate": 1.0 if passed else 0.0,
+            "total_usage": {},
+            "total_cost": {},
+        },
+    }
+
+
+def _nightly_before_report(*, scenario03_passed: bool) -> dict[str, Any]:
+    """A pre-landing nightly-shaped real report: judge_gate plus scenario 03
+    (the post-landing diff looks the same scenario up by name)."""
+    judge_gate = _real_report()["scenarios"][0]
+    scenario03 = _scenario03_report(passed=scenario03_passed)["scenarios"][0]
+    return {
+        "generated_at": "2026-11-02T09:00:00",
+        "track": "real",
+        "repeat": 1,
+        "scenarios": [judge_gate, scenario03],
+        "summary": {
+            "total_runs": 2,
+            "passed": 1 if scenario03_passed else 0,
+            "failed": 2 - (1 if scenario03_passed else 0),
+            "scenarios_total": 2,
+            "scenarios_all_pass": 1 if scenario03_passed else 0,
+            "all_pass_rate": 0.5 if scenario03_passed else 0.0,
+            "total_usage": {},
+            "total_cost": {},
+        },
+    }
+
+
+def test_post_landing_confirmed_runs_diff_and_restores_bytes(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = _write_report(
+        tmp_path, "last-real-report.json", _nightly_before_report(scenario03_passed=False)
+    )
+    original_bytes = report_path.read_bytes()
+    after = _scenario03_report(passed=True)
+    runner_calls: list[dict[str, Any]] = []
+    reasons: list[str] = []
+
+    def fake_runner() -> dict[str, Any]:
+        runner_calls.append({})
+        return after
+
+    def fake_confirm(reason: str) -> bool:
+        reasons.append(reason)
+        return True
+
+    record: dict[str, Any] = {"skill": "rule-demo", "applied_versions": [1]}
+    out = run_post_landing_diff(
+        record, tmp_path, runner=fake_runner, confirm=fake_confirm, interactive=True
+    )
+
+    assert len(runner_calls) == 1
+    post = out["post_landing"]
+    # Both diff sides: status / pass_k.all_pass / failure reasons / all_pass_rate.
+    assert post["scenario"] == "real-skill-rule-follow"
+    assert post["before"]["status"] == "fail"
+    assert post["before"]["all_pass"] is False
+    assert post["before"]["failure_reasons"] == [
+        "judge score 0.40 is below threshold 0.80: answer skipped the rubric"
+    ]
+    assert post["before"]["all_pass_rate"] == 0.0
+    assert post["after"]["status"] == "pass"
+    assert post["after"]["all_pass"] is True
+    assert post["after"]["failure_reasons"] == []
+    assert post["after"]["all_pass_rate"] == 1.0
+    # Each rate rides with its denominator: the before side is the full
+    # nightly aggregate, the after side the single-scenario run — the record
+    # must show they are not like-for-like.
+    assert post["before"]["scenarios_total"] == 2
+    assert post["after"]["scenarios_total"] == 1
+    assert post["report_restored"] is True
+    assert "warnings" not in post
+    # The nightly baseline file is back, byte for byte.
+    assert report_path.read_bytes() == original_bytes
+    # The confirm gate was asked with the real-call Reason line.
+    assert "real gateway call" in reasons[0]
+    assert "03_skill_rule_follow" in reasons[0]
+    assert "10k-20k tokens" in reasons[0]
+
+
+def test_post_landing_records_after_fail_side(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = _write_report(
+        tmp_path, "last-real-report.json", _nightly_before_report(scenario03_passed=True)
+    )
+    after = _scenario03_report(
+        passed=False, reasons=["judge score 0.30 is below threshold 0.80: rule not followed"]
+    )
+
+    out = run_post_landing_diff(
+        {"skill": "rule-demo"},
+        tmp_path,
+        runner=lambda: after,
+        confirm=lambda reason: True,
+        interactive=True,
+    )
+
+    post = out["post_landing"]
+    assert post["before"]["status"] == "pass"
+    assert post["before"]["all_pass_rate"] == 0.5
+    assert post["after"]["status"] == "fail"
+    assert post["after"]["all_pass"] is False
+    assert post["after"]["failure_reasons"] == [
+        "judge score 0.30 is below threshold 0.80: rule not followed"
+    ]
+    assert report_path.is_file()  # restored (byte check is the dedicated test's job)
+
+
+def test_post_landing_declined_records_and_never_runs(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = _write_report(tmp_path, "last-real-report.json", _real_report())
+    original_bytes = report_path.read_bytes()
+    reasons: list[str] = []
+
+    def forbidden_runner() -> dict[str, Any]:
+        raise AssertionError("runner must not run after a declined confirm")
+
+    def refusing_confirm(reason: str) -> bool:
+        reasons.append(reason)
+        return False
+
+    record: dict[str, Any] = {"skill": "rule-demo"}
+    out = run_post_landing_diff(
+        record, tmp_path, runner=forbidden_runner, confirm=refusing_confirm, interactive=True
+    )
+
+    # Declined path archives exactly the declined fact: no before/after, no
+    # report_restored (nothing was ever touched).
+    assert out["post_landing"] == {"declined": True}
+    assert "real gateway call" in reasons[0]
+    assert report_path.read_bytes() == original_bytes
+
+
+def test_post_landing_runner_offloads_inside_running_loop(tmp_path, monkeypatch):
+    """The REPL dispatches slash commands on the event loop thread
+    (``_handle_slash`` is async); a real runner's per-scenario
+    ``asyncio.run`` must be offloaded, not crash on the running loop."""
+    import asyncio
+
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = _write_report(
+        tmp_path, "last-real-report.json", _nightly_before_report(scenario03_passed=False)
+    )
+    original_bytes = report_path.read_bytes()
+    after = _scenario03_report(passed=True)
+
+    async def repl_like_dispatch() -> dict[str, Any]:
+        # A running loop is active here — exactly the REPL's situation.
+        return run_post_landing_diff(
+            {"skill": "rule-demo"},
+            tmp_path,
+            runner=lambda: after,
+            confirm=lambda reason: True,
+            interactive=True,
+        )
+
+    out = asyncio.run(repl_like_dispatch())
+
+    post = out["post_landing"]
+    assert post["after"]["status"] == "pass"
+    assert post["report_restored"] is True
+    assert report_path.read_bytes() == original_bytes
+
+
+def test_post_landing_non_interactive_skips(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = _write_report(tmp_path, "last-real-report.json", _real_report())
+    original_bytes = report_path.read_bytes()
+
+    def forbidden_runner() -> dict[str, Any]:
+        raise AssertionError("runner must not run without a human attached")
+
+    # Explicit flag from the caller.
+    out = run_post_landing_diff(
+        {"skill": "rule-demo"},
+        tmp_path,
+        runner=forbidden_runner,
+        confirm=lambda reason: True,
+        interactive=False,
+    )
+    assert out["post_landing"] == {"skipped_reason": "non-interactive"}
+
+    # Or the internal isatty fallback (skill.py's existing gate style).
+    monkeypatch.setattr(sys, "stdin", _FakeStdin(isatty=False))
+    out = run_post_landing_diff(
+        {"skill": "rule-demo"},
+        tmp_path,
+        runner=forbidden_runner,
+        confirm=lambda reason: True,
+    )
+    assert out["post_landing"] == {"skipped_reason": "non-interactive"}
+    assert report_path.read_bytes() == original_bytes
+
+
+def test_post_landing_default_runner_without_key_records_guidance(tmp_path, monkeypatch):
+    """runner=None with no credential: the real track's fail-loud contract
+    surfaces as a recorded error with install guidance, and the backup is
+    still restored (nothing was overwritten)."""
+    _isolate_home(tmp_path, monkeypatch)
+    _clear_llm_env(monkeypatch)
+    report_path = _write_report(tmp_path, "last-real-report.json", _real_report())
+    original_bytes = report_path.read_bytes()
+
+    out = run_post_landing_diff(
+        {"skill": "rule-demo"}, tmp_path, runner=None, confirm=lambda reason: True, interactive=True
+    )
+
+    post = out["post_landing"]
+    assert post["errors"], post
+    assert "NEXUSCLI_API_KEY" in post["errors"][0]
+    # No diff happened, so neither side is invented.
+    assert "before" not in post
+    assert "after" not in post
+    assert post["report_restored"] is True
+    assert report_path.read_bytes() == original_bytes
+
+
+def test_post_landing_runner_error_still_restores(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = _write_report(
+        tmp_path, "last-real-report.json", _nightly_before_report(scenario03_passed=False)
+    )
+    original_bytes = report_path.read_bytes()
+
+    def exploding_runner() -> dict[str, Any]:
+        raise RuntimeError("eval exploded")
+
+    out = run_post_landing_diff(
+        {"skill": "rule-demo"},
+        tmp_path,
+        runner=exploding_runner,
+        confirm=lambda reason: True,
+        interactive=True,
+    )
+
+    post = out["post_landing"]
+    assert post["errors"] == ["eval exploded"]
+    assert "after" not in post
+    # The restore runs even though the runner blew up.
+    assert post["report_restored"] is True
+    assert report_path.read_bytes() == original_bytes
+
+
+def test_post_landing_interrupted_run_marks_record_and_restores(tmp_path, monkeypatch):
+    """Ctrl+C mid real run: the KeyboardInterrupt propagates, but the record
+    already carries the interruption marker plus the restore state — a half
+    run must be visible in the archive, not silently missing."""
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = _write_report(
+        tmp_path, "last-real-report.json", _nightly_before_report(scenario03_passed=False)
+    )
+    original_bytes = report_path.read_bytes()
+
+    def interrupted_runner() -> dict[str, Any]:
+        raise KeyboardInterrupt
+
+    record: dict[str, Any] = {"skill": "rule-demo"}
+    with pytest.raises(KeyboardInterrupt):
+        run_post_landing_diff(
+            record,
+            tmp_path,
+            runner=interrupted_runner,
+            confirm=lambda reason: True,
+            interactive=True,
+        )
+
+    post = record["post_landing"]
+    assert "interrupted before completing" in post["errors"][0]
+    assert "KeyboardInterrupt" in post["errors"][0]
+    assert post["report_restored"] is True
+    assert report_path.read_bytes() == original_bytes
+
+
+def test_post_landing_restore_failure_warns_and_flags(tmp_path, monkeypatch):
+    """A restore that cannot write back must be alarmed once and archived as
+    report_restored=false — never a silent pollution of the nightly baseline."""
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = _write_report(
+        tmp_path, "last-real-report.json", _nightly_before_report(scenario03_passed=False)
+    )
+
+    def sabotaging_runner() -> dict[str, Any]:
+        # Mid-run, the report file becomes a directory: the restore's
+        # write_bytes now fails with IsADirectoryError.
+        report_path.unlink()
+        report_path.mkdir()
+        return _scenario03_report(passed=True)
+
+    out = run_post_landing_diff(
+        {"skill": "rule-demo"},
+        tmp_path,
+        runner=sabotaging_runner,
+        confirm=lambda reason: True,
+        interactive=True,
+    )
+
+    post = out["post_landing"]
+    # The diff itself still landed in the record.
+    assert post["after"]["status"] == "pass"
+    assert post["report_restored"] is False
+    assert post["warnings"]
+    assert "FAILED to restore" in post["warnings"][0]
+    assert "nightly" in post["warnings"][0]
+
+
+def test_post_landing_without_prior_report_restores_absence(tmp_path, monkeypatch):
+    """Missing last-real-report.json: before=None, the diff still runs, and
+    restoring means removing the diff run's report again — the file's absence
+    is the pre-run state."""
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = tmp_path / ".nexuscli" / "evals" / "last-real-report.json"
+
+    out = run_post_landing_diff(
+        {"skill": "rule-demo"},
+        tmp_path,
+        runner=lambda: _scenario03_report(passed=True),
+        confirm=lambda reason: True,
+        interactive=True,
+    )
+
+    post = out["post_landing"]
+    assert post["before"] is None
+    assert post["after"]["status"] == "pass"
+    assert post["report_restored"] is True
+    assert not report_path.exists()
+
+
+def test_post_landing_backup_restore_is_byte_identical(tmp_path, monkeypatch):
+    """The restore writes the backed-up bytes back exactly — unicode, stray
+    whitespace and all; no re-serialization may touch the baseline."""
+    _isolate_home(tmp_path, monkeypatch)
+    report_path = tmp_path / ".nexuscli" / "evals" / "last-real-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_bytes = (
+        '{"scenarios": [{"name": "real-skill-rule-follow", '
+        '"pass_k": {"all_pass": false}, '
+        '"runs": [{"status": "fail", "failure_reasons": ["判定分数 0.40 低于阈值 0.80"]}]}],'
+        ' "summary": {"all_pass_rate": 0.0}}  \n'
+    ).encode()
+    report_path.write_bytes(raw_bytes)
+
+    out = run_post_landing_diff(
+        {"skill": "rule-demo"},
+        tmp_path,
+        runner=lambda: _scenario03_report(passed=True),
+        confirm=lambda reason: True,
+        interactive=True,
+    )
+
+    assert out["post_landing"]["before"]["failure_reasons"] == ["判定分数 0.40 低于阈值 0.80"]
+    assert report_path.read_bytes() == raw_bytes
+
+
+# ---------------------------------------------------------------------------
+# /skill propose — post-landing wiring (second confirm gate; records rewrite)
+# ---------------------------------------------------------------------------
+
+
+def test_propose_wiring_post_landing_confirmed_end_to_end(tmp_path, monkeypatch):
+    """The full /skill propose chain: review lands an item, the post-landing
+    offer is made (Reason line), y runs the diff through the REAL four-step
+    function with only the scenario runner faked, and the SAME record file is
+    rewritten with the post_landing block."""
+    import nexuscli.eval.real as eval_real
+
+    home = _isolate_home(tmp_path, monkeypatch)
+    _write_user_skill(home, "demo")
+    _write_report(tmp_path, "last-report.json", _hermetic_report())
+    report_path = _write_report(
+        tmp_path, "last-real-report.json", _nightly_before_report(scenario03_passed=False)
+    )
+    original_bytes = report_path.read_bytes()
+    monkeypatch.setattr(sys, "stdin", _FakeStdin(isatty=True))
+    # y lands item 1, n skips item 2, y confirms the post-landing diff.
+    _stub_review(monkeypatch, ["y", "n", "y"])
+
+    def fake_run_real_scenarios(scenarios, *, root, repeat=1, llm_client_factory=None, judge=None):
+        assert len(scenarios) == 1  # --file semantics: scenario 03 only
+        return [
+            eval_real.RealEvalResult(
+                name="real-skill-rule-follow", passed=True, source=str(scenarios[0].source)
+            )
+        ]
+
+    monkeypatch.setattr(eval_real, "run_real_scenarios", fake_run_real_scenarios)
+    console = _console()
+
+    _skill_command("propose demo", console, str(tmp_path), _agent(FakeProposalLLM(_PROPOSAL_REPLY)))
+
+    text = _flat_text(console)
+    assert "Reason: real gateway call" in text
+    assert "03_skill_rule_follow" in text
+    assert "10k-20k tokens" in text
+    assert "Post-landing diff" in text
+    # The rates on screen carry their denominators (nightly aggregate vs
+    # single-scenario run) so the arrow cannot read as like-for-like.
+    assert "all_pass_rate 0.0 (2 scenarios) → 1.0 (1 scenario)" in text
+    records = _proposal_records(home, "demo")
+    assert len(records) == 1  # rewritten in place, not forked into a second file
+    post = records[0][1]["post_landing"]
+    assert post["scenario"] == "real-skill-rule-follow"
+    assert post["before"]["status"] == "fail"
+    assert post["after"]["status"] == "pass"
+    assert post["after"]["all_pass_rate"] == 1.0
+    assert post["report_restored"] is True
+    # The nightly baseline survived the whole REPL-side flow byte for byte.
+    assert report_path.read_bytes() == original_bytes
+
+
+def test_propose_wiring_post_landing_rewrite_survives_interrupt(tmp_path, monkeypatch):
+    """Ctrl+C after confirmation: the interrupt propagates out of the command,
+    but the record file on disk still gained the post_landing block — the
+    rewrite is a finally, so an unwinding run cannot leave the archive stale."""
+    import nexuscli.entrypoints.commands.skill as skill_module
+
+    home = _isolate_home(tmp_path, monkeypatch)
+    _write_user_skill(home, "demo")
+    _write_report(tmp_path, "last-report.json", _hermetic_report())
+    monkeypatch.setattr(sys, "stdin", _FakeStdin(isatty=True))
+    # y lands item 1, n skips item 2; the (stubbed) post-landing run then dies.
+    _stub_review(monkeypatch, ["y", "n"])
+
+    def interrupted_diff(record, cwd, **_kwargs):
+        record["post_landing"] = {
+            "errors": ["post-landing diff interrupted before completing (KeyboardInterrupt)"],
+            "report_restored": True,
+        }
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(skill_module, "run_post_landing_diff", interrupted_diff)
+    console = _console()
+
+    with pytest.raises(KeyboardInterrupt):
+        _skill_command(
+            "propose demo", console, str(tmp_path), _agent(FakeProposalLLM(_PROPOSAL_REPLY))
+        )
+
+    record = _proposal_records(home, "demo")[0][1]
+    assert record["post_landing"]["report_restored"] is True
+    assert "interrupted before completing" in record["post_landing"]["errors"][0]
+
+
+def test_propose_wiring_post_landing_declined_records_without_run(tmp_path, monkeypatch):
+    home = _isolate_home(tmp_path, monkeypatch)
+    _clear_llm_env(monkeypatch)
+    _write_user_skill(home, "demo")
+    _write_report(tmp_path, "last-report.json", _hermetic_report())
+    monkeypatch.setattr(sys, "stdin", _FakeStdin(isatty=True))
+    # y lands item 1, n skips item 2, n declines the post-landing diff.
+    _stub_review(monkeypatch, ["y", "n", "n"])
+    console = _console()
+
+    _skill_command("propose demo", console, str(tmp_path), _agent(FakeProposalLLM(_PROPOSAL_REPLY)))
+
+    text = _flat_text(console)
+    assert "Post-landing real-eval diff declined" in text
+    # Nothing ever reached the gateway: no credential error anywhere.
+    assert "NEXUSCLI_API_KEY" not in text
+    records = _proposal_records(home, "demo")
+    assert len(records) == 1
+    assert records[0][1]["post_landing"] == {"declined": True}
+
+
+def test_propose_wiring_post_landing_without_key_records_guidance(tmp_path, monkeypatch):
+    """Confirmed with no key: the recorded error (with install guidance) is
+    printed, the landing itself is untouched, and the report is restored."""
+    home = _isolate_home(tmp_path, monkeypatch)
+    _clear_llm_env(monkeypatch)
+    _write_user_skill(home, "demo")
+    _write_report(tmp_path, "last-report.json", _hermetic_report())
+    report_path = _write_report(tmp_path, "last-real-report.json", _real_report())
+    original_bytes = report_path.read_bytes()
+    monkeypatch.setattr(sys, "stdin", _FakeStdin(isatty=True))
+    _stub_review(monkeypatch, ["y", "n", "y"])
+    console = _console()
+
+    _skill_command("propose demo", console, str(tmp_path), _agent(FakeProposalLLM(_PROPOSAL_REPLY)))
+
+    text = _flat_text(console)
+    assert "post-landing diff failed" in text
+    assert "NEXUSCLI_API_KEY" in text
+    records = _proposal_records(home, "demo")
+    post = records[0][1]["post_landing"]
+    assert "NEXUSCLI_API_KEY" in post["errors"][0]
+    assert post["report_restored"] is True
+    assert report_path.read_bytes() == original_bytes
+
+
+def test_propose_wiring_post_landing_not_offered_without_applied(tmp_path, monkeypatch):
+    home = _isolate_home(tmp_path, monkeypatch)
+    _write_user_skill(home, "demo")
+    _write_report(tmp_path, "last-report.json", _hermetic_report())
+    monkeypatch.setattr(sys, "stdin", _FakeStdin(isatty=True))
+    asked = _stub_review(monkeypatch, ["n", "n"])
+    console = _console()
+
+    _skill_command("propose demo", console, str(tmp_path), _agent(FakeProposalLLM(_PROPOSAL_REPLY)))
+
+    # Nothing landed → no post-landing offer, no post_landing field at all.
+    assert len(asked) == 2
+    assert "real gateway call" not in _flat_text(console)
+    record = _proposal_records(home, "demo")[0][1]
+    assert "post_landing" not in record

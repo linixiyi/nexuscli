@@ -4,6 +4,7 @@ load, evolve, stats, rollback, propose, proposals)."""
 from __future__ import annotations
 
 import contextlib
+import json
 import sys
 from datetime import UTC, datetime
 from typing import Any
@@ -23,6 +24,7 @@ from nexuscli.skill.propose import (
     digest_has_signal,
     list_proposal_records,
     load_report,
+    run_post_landing_diff,
     save_proposal_record,
     summarize_report,
 )
@@ -356,10 +358,94 @@ def _skill_propose(rest: str, console: Console, cwd: str, agent: Agent) -> None:
             f'\n[green]Applied {applied}/{len(decisions)} rule(s) to "{name}" '
             f"({versions}); record: {record_path}[/green]"
         )
+        # The closed loop's second half: with something actually landed, offer
+        # one real-eval run (scenario 03) whose before/after diff goes into
+        # the record. The offer itself is the confirm gate — run_post_landing_diff
+        # only calls the real runner after this callback says yes; n/s (any
+        # non-yes) records declined and never touches the gateway.
+        try:
+            record = run_post_landing_diff(
+                record,
+                cwd,
+                confirm=lambda reason: _ask_post_landing(console, reason),
+                interactive=interactive,
+            )
+        finally:
+            # Rewrite the SAME record file (a fresh save would fork the
+            # history) so the archived proposal carries the post_landing
+            # block — even when the run unwinds (Ctrl+C mid real run): the
+            # function attaches its interruption marker + restore state
+            # before re-raising, and the archive must not silently miss it.
+            record_path.write_text(
+                json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+        _print_post_landing(console, record.get("post_landing") or {})
     else:
         console.print(
             f"\n[yellow]No rules applied ({len(decisions)} skipped); record: {record_path}[/yellow]"
         )
+
+
+def _ask_post_landing(console: Console, reason: str) -> bool:
+    """The post-landing diff's second human gate: this confirm produces a real
+    gateway call the user pays for. The Reason line names the gate, the real
+    call and its token estimate (approval-prompt convention); Ctrl+C/Ctrl+D
+    (EOF) decline — fail-closed, the same convention as the review prompt's
+    EOF deny. Only an explicit yes runs; n/s (any other answer) declines."""
+    console.print("[bold]Run the real-eval post-landing diff now?[/bold]")
+    console.print(f"[dim]Reason: {reason}[/dim]")
+    try:
+        answer = Prompt.ask("Real-eval diff? (y / n)", default="n")
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer.strip().lower() in {"y", "yes"}
+
+
+def _rate_label(side: dict[str, Any] | None) -> str:
+    """all_pass_rate WITH its denominator: the before side is the pre-landing
+    report's aggregate (often the full nightly scenario set), the after side
+    the single-scenario post-landing run — the same arrow must not read as a
+    like-for-like rise or fall."""
+    if not isinstance(side, dict):
+        return "no-baseline"
+    rate = side.get("all_pass_rate")
+    if rate is None:
+        return "n/a"
+    total = side.get("scenarios_total")
+    if total is None:
+        return str(rate)
+    noun = "scenario" if total == 1 else "scenarios"
+    return f"{rate} ({total} {noun})"
+
+
+def _print_post_landing(console: Console, post: dict[str, Any]) -> None:
+    """One outcome line per post_landing path; the record carries the
+    details. The restore-failure warning is the one-time alarm the spec
+    requires — it must be visible, not just archived."""
+    if post.get("declined"):
+        console.print("[yellow]Post-landing real-eval diff declined (recorded).[/yellow]")
+        return
+    if post.get("skipped_reason"):
+        console.print(
+            f"[yellow]Post-landing real-eval diff skipped ({post['skipped_reason']}).[/yellow]"
+        )
+        return
+    for error in post.get("errors") or []:
+        console.print(f"[red]post-landing diff failed: {error}[/red]")
+    for warning in post.get("warnings") or []:
+        console.print(f"[red]{warning}[/red]")
+    after = post.get("after")
+    if not isinstance(after, dict):
+        return
+    before = post.get("before") if isinstance(post.get("before"), dict) else None
+    before_status = str(before.get("status")) if before else "no-baseline"
+    console.print(
+        f"[bold]Post-landing diff ({post.get('scenario')}):[/bold] "
+        f"status {before_status} → {after.get('status')}, "
+        f"all_pass_rate {_rate_label(before)} → {_rate_label(after)}"
+    )
+    for reason in after.get("failure_reasons") or []:
+        console.print(f"[yellow]  after-failure: {reason}[/yellow]")
 
 
 def _skill_proposals(rest: str, console: Console) -> None:

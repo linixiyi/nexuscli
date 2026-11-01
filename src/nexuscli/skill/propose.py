@@ -21,6 +21,11 @@ Honest boundaries (spec 2026-10-27_add-skill-evolve-proposal §2.1):
 - The LLM client is injectable via the constructor parameter; ``None`` builds
   one through the normal config chain, and a missing key fails loudly
   (:class:`ProposeCredentialsError`), never silently.
+- :func:`run_post_landing_diff` is the closed loop's second half: after the
+  human review lands items, it can rerun the real-track skill-rule-follow
+  scenario and diff it against the pre-landing report — only behind a second
+  explicit human confirmation, with the real report byte-backed-up before and
+  restored after (a failed restore is alarmed, never silent).
 """
 
 from __future__ import annotations
@@ -28,7 +33,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Coroutine
+import sys
+from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -41,8 +47,12 @@ from nexuscli.skill.registry import _validate_skill_slug
 from nexuscli.types import Message
 
 # Track -> report file relative to the project root. Kept in step with
-# eval/reporter.py REPORT_RELATIVE and eval/real.py REAL_REPORT_RELATIVE
-# (read-only consumption: this module never writes either file).
+# eval/reporter.py REPORT_RELATIVE and eval/real.py REAL_REPORT_RELATIVE.
+# Report consumption here (load_report/summarize_report) is read-only — but
+# NOT the whole module: the post-landing diff's restore step rewrites the
+# real report (backed-up bytes back, or unlink when no file existed) and its
+# default runner goes through the real track's own write_real_report. The
+# hermetic last-report.json is still never written by this module.
 TRACK_REPORTS: dict[str, Path] = {
     "hermetic": Path(".nexuscli") / "evals" / "last-report.json",
     "real": Path(".nexuscli") / "evals" / "last-real-report.json",
@@ -383,3 +393,258 @@ def _run_async(coroutine: Coroutine[Any, Any, Any]) -> Any:
         return asyncio.run(coroutine)
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coroutine).result()
+
+
+# ---------------------------------------------------------------------------
+# Post-landing real-eval diff (the closed loop's second half)
+# ---------------------------------------------------------------------------
+
+# The scenario the post-landing diff runs: 03 is the skill-rule-follow
+# validator (landed 2026-11-02_add-skill-layered-loading) — the real-track
+# scenario whose outcome a skill landing can actually move. Loaded with --file
+# semantics (one scenario file), never the full set: the full diff belongs to
+# the nightly track, and a single run keeps the token cost bounded (spec
+# 2026-11-02_add-propose-post-landing-diff §2.4).
+_POST_LANDING_SCENARIO_FILE = "03_skill_rule_follow.json"
+
+# The Reason line handed to the confirm callback before anything real happens
+# — the approval-prompt convention: a stacked question must say which gate is
+# asking, that it costs real gateway tokens, and roughly how many.
+POST_LANDING_CONFIRM_REASON = (
+    "real gateway call: rerun real-eval scenario 03_skill_rule_follow "
+    "(~10k-20k tokens) against the just-landed skill, then restore the "
+    "previous last-real-report.json"
+)
+
+
+def _run_blocking(fn: Callable[..., Any], *args: Any) -> Any:
+    """Run a sync callable that internally calls ``asyncio.run`` (the real
+    track runs one event loop per scenario) from sync code — including from
+    inside the REPL's running prompt loop (``_handle_slash`` is async), where
+    a direct ``asyncio.run`` would raise. Same contract as :func:`_run_async`
+    for coroutine runners."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return fn(*args)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(fn, *args).result()
+
+
+def _default_post_landing_runner(cwd: str | Path, llm_client_factory: Any | None) -> dict[str, Any]:
+    """The real runner behind ``runner=None``: scenario 03 with --file
+    semantics, the full ``eval run --real`` chain.
+
+    Load the one scenario file, run it through
+    :func:`nexuscli.eval.real.run_real_scenarios`, build and WRITE the real
+    report (that write is what the backup/restore around the runner
+    protects), and return the report for the diff. The eval imports stay
+    inside this function: they pull the agent/tool graph in, and none of it
+    is needed until a real run is actually confirmed. A missing key raises
+    :class:`nexuscli.eval.real.RealTrackError` with install guidance before
+    any scenario starts (real.py fails loudly, never silently).
+    """
+    from nexuscli.eval.loader import builtin_real_eval_dir, load_real_eval_scenarios
+    from nexuscli.eval.real import build_real_report, run_real_scenarios, write_real_report
+
+    base = builtin_real_eval_dir()
+    if base is None:
+        raise FileNotFoundError(
+            "post-landing diff: real-track scenario set (examples/evals/real) "
+            f"not found; cannot run {_POST_LANDING_SCENARIO_FILE}"
+        )
+    scenario_path = base / _POST_LANDING_SCENARIO_FILE
+    if not scenario_path.is_file():
+        raise FileNotFoundError(f"post-landing diff: scenario file not found: {scenario_path}")
+    root = str(Path(cwd).resolve())
+    scenarios = load_real_eval_scenarios(scenario_path)
+    results = run_real_scenarios(scenarios, root=root, llm_client_factory=llm_client_factory)
+    report = build_real_report(results, repeat=1)
+    write_real_report(root, report)
+    return report
+
+
+def _parse_report_bytes(raw: bytes | None) -> dict[str, Any] | None:
+    """Best-effort parse of the backed-up report for the before side.
+
+    An unreadable pre-landing report means ``before=None``, never a crash —
+    the *bytes* are what the restore promises, not the parse.
+    """
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _real_scenario_side(
+    report: dict[str, Any] | None, *, name: str | None = None
+) -> dict[str, Any] | None:
+    """One scenario's compared face from a real-track report.
+
+    ``name=None`` takes the first scenario entry (the post-landing run is a
+    single-scenario --file run by construction); with ``name`` set it looks
+    that scenario up — the before side of the same scenario in the
+    pre-landing report. ``None`` means nothing comparable (no report, or the
+    scenario is not in it); the record then shows ``before: null`` instead of
+    inventing a side. ``status`` is ``pass`` exactly when
+    ``pass_k.all_pass``: a real-track scenario only counts as passed when ALL
+    its repeats passed (``build_real_report``'s contract), and
+    ``failure_reasons`` folds every non-pass run's reasons in run order.
+    ``all_pass_rate`` rides with its denominator ``scenarios_total``: the
+    before side is usually the full nightly aggregate, the after side a
+    single-scenario run — the two rates must never read as like-for-like.
+    """
+    if not isinstance(report, dict):
+        return None
+    entries = [entry for entry in report.get("scenarios") or [] if isinstance(entry, dict)]
+    if name is None:
+        entry = entries[0] if entries else None
+    else:
+        entry = next((e for e in entries if str(e.get("name") or "") == name), None)
+    if entry is None:
+        return None
+    pass_k = entry.get("pass_k") if isinstance(entry.get("pass_k"), dict) else {}
+    all_pass = bool(pass_k.get("all_pass"))
+    reasons: list[str] = []
+    for run in entry.get("runs") or []:
+        if not isinstance(run, dict) or run.get("status") == "pass":
+            continue
+        reasons.extend(
+            str(reason) for reason in run.get("failure_reasons") or [] if str(reason).strip()
+        )
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    return {
+        "scenario": str(entry.get("name") or "?"),
+        "status": "pass" if all_pass else "fail",
+        "all_pass": all_pass,
+        "failure_reasons": reasons,
+        "all_pass_rate": summary.get("all_pass_rate"),
+        "scenarios_total": summary.get("scenarios_total"),
+    }
+
+
+def _restore_real_report(path: Path, before_bytes: bytes | None) -> tuple[bool, list[str]]:
+    """Restore the pre-run state of the real report file.
+
+    With a backup: the exact bytes go back (``write_bytes`` — no re-encoding,
+    no re-serialization). Without one (no report existed before the run): the
+    diff run's report is removed again — restoring the file's *absence* is
+    the same promise as restoring its bytes; either way the next nightly run
+    must find the file exactly as it was, never the single-scenario diff
+    report. Failure is loud: ``(False, [warning])`` — the caller archives
+    ``report_restored=false`` and alarms once, it never silently pollutes the
+    nightly baseline.
+    """
+    try:
+        if before_bytes is None:
+            if path.exists():
+                path.unlink()
+        else:
+            path.write_bytes(before_bytes)
+        return True, []
+    except OSError as exc:
+        return False, [
+            f"post-landing diff: FAILED to restore {path} ({exc}); the nightly "
+            "real-track baseline may be polluted — restore it manually before "
+            "the next nightly run"
+        ]
+
+
+def run_post_landing_diff(
+    record: dict[str, Any],
+    cwd: str | Path,
+    runner: Callable[[], dict[str, Any]] | None = None,
+    confirm: Callable[[str], bool] | None = None,
+    llm_client_factory: Any | None = None,
+    *,
+    interactive: bool | None = None,
+) -> dict[str, Any]:
+    """Backup → run → diff → restore, writing ``record['post_landing']``.
+
+    Four steps, each with its own failure path (fields are included per path,
+    never filled with placeholders):
+
+    ① Back the real report up in memory (missing file → ``before=None``; an
+    unreadable file aborts before anything is touched — no backup, no run).
+    ② Call ``runner`` — ``None`` builds the real one: rerun scenario
+    03_skill_rule_follow through the normal real-track chain. ③ Diff the
+    pre-landing report against the new one for the same scenario (status /
+    ``pass_k.all_pass`` / failure reasons / summary ``all_pass_rate``) into
+    ``before`` / ``after``. ④ Restore the backed-up bytes (or the file's
+    absence); a failed restore archives ``report_restored=false`` plus a
+    one-time ``warnings`` entry.
+
+    Degradations: not interactive (caller flag, else ``sys.stdin.isatty()``
+    — skill.py's existing gate style) → ``skipped_reason=non-interactive``;
+    the confirm callback refusing (or absent — the ``-p`` no-callback
+    convention) → ``declined``; a runner failure → ``errors`` with the
+    message (the real track's credential errors carry install guidance) and
+    the restore still runs.
+
+    ``llm_client_factory`` only reaches the real runner (the real track's own
+    test seam); tests otherwise inject ``runner`` directly. Returns the
+    record, so callers can archive it.
+    """
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+    if not interactive:
+        record["post_landing"] = {"skipped_reason": "non-interactive"}
+        return record
+    if confirm is None or not confirm(POST_LANDING_CONFIRM_REASON):
+        record["post_landing"] = {"declined": True}
+        return record
+
+    report_path = Path(cwd) / TRACK_REPORTS["real"]
+    before_bytes: bytes | None = None
+    if report_path.is_file():
+        try:
+            before_bytes = report_path.read_bytes()
+        except OSError as exc:
+            # No backup, no run: a real run would overwrite the baseline with
+            # a single-scenario report and leave no way back.
+            record["post_landing"] = {
+                "errors": [f"post-landing diff aborted: cannot back up {report_path}: {exc}"]
+            }
+            return record
+
+    before_report = _parse_report_bytes(before_bytes)
+    post: dict[str, Any] = {}
+    try:
+        try:
+            if runner is None:
+                report = _run_blocking(_default_post_landing_runner, cwd, llm_client_factory)
+            else:
+                report = _run_blocking(runner)
+        except Exception as exc:  # noqa: BLE001 - every failure mode lands in the record
+            post["errors"] = [str(exc)]
+            report = None
+        if report is not None:
+            after_side = _real_scenario_side(report)
+            if after_side is None:
+                post["errors"] = ["post-landing diff: report carries no scenario entries"]
+            else:
+                post["scenario"] = after_side["scenario"]
+                post["before"] = _real_scenario_side(before_report, name=after_side["scenario"])
+                post["after"] = after_side
+    except BaseException as exc:
+        # KeyboardInterrupt (Ctrl+C mid real run) and friends unwind through
+        # here: mark the interruption so the archived record shows a half-run
+        # diff instead of a silently missing block, then let it propagate.
+        post.setdefault("errors", []).append(
+            f"post-landing diff interrupted before completing ({type(exc).__name__})"
+        )
+        raise
+    finally:
+        # The restore runs on every path that got past the backup — a runner
+        # exception included, and even a KeyboardInterrupt unwinding through
+        # here: the nightly baseline must never keep the diff run's
+        # single-scenario report.
+        restored, warnings = _restore_real_report(report_path, before_bytes)
+        post["report_restored"] = restored
+        if warnings:
+            post["warnings"] = warnings
+        record["post_landing"] = post
+    return record
