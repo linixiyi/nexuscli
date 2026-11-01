@@ -13,7 +13,7 @@ from rich.prompt import Prompt
 
 from nexuscli.agent import Agent
 from nexuscli.entrypoints.commands.goal import _push_turn_context
-from nexuscli.skill import SkillRegistry, SkillStateStore
+from nexuscli.skill import Skill, SkillRegistry, SkillStateStore
 from nexuscli.skill.evolve import SkillEvolutionStore
 from nexuscli.skill.propose import (
     ProposalGenerator,
@@ -98,9 +98,32 @@ def _skill_command(arg: str, console: Console, cwd: str, agent: Agent) -> None:
         return
     lines = [
         f"{item.name}\t{item.source}\t{'on' if item.enabled else 'off'}\t{item.description}"
+        f"\t{_skill_layers(item)}"
         for item in rows
     ]
     console.print("\n".join(lines) or "(no skills)")
+
+
+def _skill_layers(skill: Skill) -> str:
+    """Layer column for /skill list: L0 abstract presence, L1 overview state
+    (``+`` declared / ``gen`` generated from the body / ``-`` absent), the
+    frontmatter lint rule codes recorded at parse time, and — for skills
+    whose requirements (bins/env) are unmet — the unavailable mark with the
+    missing items. Appended as a new trailing column so the first four
+    columns stay stable for existing consumers."""
+    if skill.overview_generated:
+        l1 = "L1:gen"
+    elif skill.overview:
+        l1 = "L1:+"
+    else:
+        l1 = "L1:-"
+    layers = f"{'L0:+' if skill.abstract else 'L0:-'} {l1}"
+    if skill.validation_issues:
+        codes = ",".join(issue.split(":", 1)[0] for issue in skill.validation_issues)
+        layers += f" warn:{codes}"
+    if skill.unavailable:
+        layers += f" unavailable (missing: {' '.join(skill.missing_requirements)})"
+    return layers
 
 
 def _skill_evolve(rest: str, console: Console) -> None:

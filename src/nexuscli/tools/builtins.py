@@ -359,7 +359,17 @@ def get_builtin_tools() -> list[Tool]:
             name="load_skill",
             description="Load a named NexusCLI skill manual from user/project skill directories.",
             parameters=object_schema(
-                {"name": {"type": "string", "description": "Skill name"}},
+                {
+                    "name": {"type": "string", "description": "Skill name"},
+                    "level": {
+                        "type": "string",
+                        "enum": ["full", "overview"],
+                        "description": (
+                            "Layer to load: full (default, complete skill body) or "
+                            "overview (L1 one-screen condensation; cheaper first read)"
+                        ),
+                    },
+                },
                 ["name"],
             ),
             required_keys=["name"],
@@ -969,12 +979,34 @@ search_memory = _search_memory
 async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     if not context.config.features.skill:
         return ToolResult("Skills are disabled.", is_error=True)
+    # Layered loading (spec 2026-11-02_add-skill-layered-loading): level
+    # defaults to "full", which reproduces the pre-layer behavior byte for
+    # byte — same content, same truncation, same return strings. Only the
+    # overview level carries the layer markers, so old callers and old
+    # skills are untouched.
+    level = str(payload.get("level") or "full").strip().lower()
+    if level not in {"full", "overview"}:
+        return ToolResult(
+            f'load_skill level must be "full" or "overview", got "{level}".',
+            is_error=True,
+        )
     skill = SkillRegistry(context.cwd).load(str(payload["name"]))
     if not skill:
         return ToolResult(f'Skill "{payload["name"]}" not found or disabled.', is_error=True)
-    content = skill.body or skill.content
-    if len(content) > 5_000:
-        content = content[:5_000] + "\n... [truncated; use /skill show for the full skill]"
+    if level == "overview":
+        # L1: the explicit-or-generated overview; degrade to the body when a
+        # skill has neither (frontmatter-only file). The generated marker is
+        # part of the content so the model knows the condensation is
+        # derived, not author-written.
+        content = skill.overview
+        if skill.overview_generated and content:
+            content += "\n[overview; generated from the skill body]"
+        if not content.strip():
+            content = skill.body or skill.content
+    else:
+        content = skill.body or skill.content
+        if len(content) > 5_000:
+            content = content[:5_000] + "\n... [truncated; use /skill show for the full skill]"
     if skill.allowed_tools:
         # Agent Skills spec field: surface the tool restriction to the model
         # (advisory here — the executor does not hard-enforce it).
@@ -990,10 +1022,17 @@ async def _load_skill(payload: dict[str, Any], context: ToolContext) -> ToolResu
         # Accounting must never block a load.
         with contextlib.suppress(OSError):
             SkillStateStore().record_use(skill.name)
+        if level == "overview":
+            return ToolResult(
+                f'Loaded skill "{skill.name}" overview (L1) for the next model turn.',
+                display_summary=f"Loaded skill {skill.name} (overview)",
+            )
         return ToolResult(
             f'Loaded skill "{skill.name}" instructions for the next model turn.',
             display_summary=f"Loaded skill {skill.name}",
         )
+    if level == "overview":
+        return ToolResult(content, display_summary=f"Loaded skill {skill.name} (overview)")
     return ToolResult(content, display_summary=f"Loaded skill {skill.name}")
 
 

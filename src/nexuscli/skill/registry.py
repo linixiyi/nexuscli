@@ -1,9 +1,24 @@
+# SPDX-License-Identifier: AGPL-3.0
+#
+# Ported from OpenViking (https://github.com/volcengine/OpenViking) @ commit
+# 9a57854 — two semantic ports into this otherwise native module:
+# - openviking/core/skill_loader.py (validate_skill_format): the frontmatter
+#   validation rules and message style, re-expressed in _validate_frontmatter
+#   against this module's line-based string parser (no code copied, no yaml
+#   dependency); loading stays tolerant — issues are recorded, never fatal.
+# - openviking/bot/vikingbot/agent/skills.py (_check_requirements, :182-191):
+#   the requirements availability semantics (bins -> PATH lookup, env ->
+#   environment lookup), rewritten in _missing_requirements (no code copied;
+#   native frontmatter flow map instead of upstream's metadata JSON).
+# Local changes: both ports keep upstream's facts/messages but are this
+# repo's own implementation; per-field provenance notes live at each helper.
 from __future__ import annotations
 
 import contextlib
 import json
 import os
 import re
+import shutil
 import unicodedata
 from collections import OrderedDict
 from collections.abc import Iterable
@@ -29,10 +44,40 @@ class Skill:
     # without them behaves exactly like a native one.
     allowed_tools: list[str] = field(default_factory=list)
     disable_model_invocation: bool = False
+    # L0/L1/L2 layered loading (spec 2026-11-02_add-skill-layered-loading):
+    # ``abstract`` is the optional L0 one-liner shown in the candidate line in
+    # place of the description; ``overview`` is the optional L1 condensation
+    # returned by load_skill(level="overview"). Both default to "absent" and
+    # every consumer falls back to the pre-layer behavior (candidate line uses
+    # the description, load_skill level=full), so a SKILL.md without the new
+    # fields behaves exactly as before. ``overview_generated`` marks an
+    # overview that was auto-generated from the body rather than declared.
+    abstract: str = ""
+    overview: str = ""
+    overview_generated: bool = False
+    # Frontmatter lint issues recorded while parsing (rule codes and message
+    # style adapted from OpenViking's skill_loader validation; see
+    # _validate_frontmatter). Recording only — loading stays tolerant, a
+    # skill with issues still loads exactly as it did before this field.
+    validation_issues: list[str] = field(default_factory=list)
+    # Optional availability requirements (spec 2026-11-02 §2.4, semantics
+    # adapted from OpenViking vikingbot skills.py _check_requirements): a
+    # declared bin must resolve on PATH, a declared env var must be set.
+    # Skills with unmet requirements stay listed (/skill list marks them
+    # unavailable with the missing items) but are excluded from the
+    # automatic Top-K candidates; explicit loads still work.
+    requirements_bins: list[str] = field(default_factory=list)
+    requirements_env: list[str] = field(default_factory=list)
+    missing_requirements: list[str] = field(default_factory=list)
 
     @property
     def body(self) -> str:
         return _strip_frontmatter(self.content).strip()
+
+    @property
+    def unavailable(self) -> bool:
+        """True when a declared requirement (bin/env) is not met."""
+        return bool(self.missing_requirements)
 
 
 class SkillMatcher:
@@ -261,8 +306,13 @@ class SkillRegistry:
     def match(self, query: str, *, top_k: int = 5) -> list[Skill]:
         # disable-model-invocation skills are still loadable via load_skill /
         # /skill — they are just excluded from the automatic candidate list.
+        # Same for skills with unmet requirements: they stay listed and
+        # explicitly loadable, but a skill whose bin/env is missing must not
+        # be offered to the model as a candidate (spec §2.4).
         candidates = [
-            skill for skill in self.enabled_skills() if not skill.disable_model_invocation
+            skill
+            for skill in self.enabled_skills()
+            if not skill.disable_model_invocation and not skill.unavailable
         ]
         return SkillMatcher(candidates).match(query, top_k=top_k)
 
@@ -405,6 +455,24 @@ class SkillRegistry:
             or metadata.get("disable_model_invocation")
             or ""
         )
+        # L0: the optional candidate-line abstract. Absent stays "" and every
+        # consumer falls back to the description (candidate line) — the
+        # backward-compat contract of the layered-loading spec.
+        abstract = (metadata.get("abstract") or "").strip()
+        # L1: an explicit frontmatter overview wins; otherwise one is
+        # generated from the body's opening paragraph and marked as generated.
+        declared_overview = (metadata.get("overview") or "").strip()
+        body_text = _strip_frontmatter(content).strip()
+        if declared_overview:
+            overview, overview_generated = declared_overview, False
+        else:
+            overview = _generate_overview(body_text)
+            overview_generated = bool(overview)
+        requirements_bins, requirements_env = _parse_requirements(
+            metadata.get("requirements") or ""
+        )
+        missing_requirements = _missing_requirements(requirements_bins, requirements_env)
+        issues = _validate_frontmatter(metadata, dir_name=path.parent.name, body=body_text)
         return Skill(
             name=name,
             description=description,
@@ -416,6 +484,13 @@ class SkillRegistry:
             enabled=name not in disabled,
             allowed_tools=allowed_tools,
             disable_model_invocation=disable_model_invocation,
+            abstract=abstract,
+            overview=overview,
+            overview_generated=overview_generated,
+            validation_issues=issues,
+            requirements_bins=requirements_bins,
+            requirements_env=requirements_env,
+            missing_requirements=missing_requirements,
         )
 
 
@@ -476,6 +551,155 @@ def _parse_allowed_tools(raw: str) -> list[str]:
 
 def _parse_bool_flag(raw: str) -> bool:
     return raw.strip().lower() in {"true", "1", "yes"}
+
+
+# ---------------------------------------------------------------------------
+# L1 auto-generation + frontmatter validation (layered loading, spec
+# 2026-11-02_add-skill-layered-loading). The validation rules (required keys,
+# name format/length/directory match, description length, body size, unknown
+# keys tolerated) are adapted from OpenViking core/skill_loader.py
+# (validate_skill_format, upstream commit 9a57854, AGPL-3.0) — rules and
+# message style only, re-expressed against this module's line-based string
+# parser instead of the upstream yaml-typed one, so no yaml dependency is
+# introduced and loading stays tolerant (issues are recorded, never fatal).
+# ---------------------------------------------------------------------------
+
+_OVERVIEW_MAX_CHARS = 500
+_OVERVIEW_SECTION_SPLIT = re.compile(r"^##\s", re.MULTILINE)
+_SKILL_NAME_MAX_LENGTH = 64
+_SKILL_DESCRIPTION_MAX_LENGTH = 1024
+_SKILL_BODY_MAX_LINES = 500
+# Upstream's name charset rule; deliberately wider than the strict lowercase
+# slug used by create()/update() because ecosystem skill packs (the Agent
+# Skills standard directories) legitimately carry capitalized names.
+_SKILL_NAME_CHARS = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _generate_overview(body: str) -> str:
+    """Auto-generate an L1 overview from a skill body.
+
+    Source: the body's first paragraph — within the opening block before the
+    first ``##`` section heading when one exists — collapsed to one line and
+    capped at ``_OVERVIEW_MAX_CHARS``. A leading ``#`` title line is skipped
+    (it names the skill, it does not describe it); a body that opens directly
+    with a ``##`` heading falls back to the first paragraph under that
+    heading. Returns "" when the body yields no prose.
+    """
+    text = body.strip()
+    if not text:
+        return ""
+    parts = _OVERVIEW_SECTION_SPLIT.split(text, maxsplit=1)
+    head = re.sub(r"^#[^\n]*\n+", "", parts[0])
+    tail = parts[1] if len(parts) > 1 else ""
+    paragraph = _first_paragraph(head)
+    if not paragraph and tail:
+        tail = re.sub(r"^[^\n]*\n+", "", tail)  # drop the section heading line
+        paragraph = _first_paragraph(tail)
+    if len(paragraph) > _OVERVIEW_MAX_CHARS:
+        paragraph = paragraph[: _OVERVIEW_MAX_CHARS - 3].rstrip() + "..."
+    return paragraph
+
+
+def _first_paragraph(text: str) -> str:
+    """The first non-empty block of ``text``, blank-line separated, as one line."""
+    for block in re.split(r"\n\s*\n", text.strip()):
+        collapsed = " ".join(block.split())
+        if collapsed:
+            return collapsed
+    return ""
+
+
+def _validate_frontmatter(metadata: dict[str, str], *, dir_name: str, body: str) -> list[str]:
+    """Record frontmatter lint issues as ``"rule: message"`` strings.
+
+    Rules adapted from OpenViking's ``validate_skill_format``: required keys
+    (name, description), name format (charset, 64-char cap, directory match),
+    description 1024-char cap, and a 500-line body warning. Unknown
+    frontmatter keys are tolerated with no issue — upstream's policy too, and
+    the reason this module can parse hand-written ecosystem skills unchanged.
+    Unlike upstream (which fails the load on required-key errors) this module
+    keeps its historical tolerant fallbacks (name from the directory name,
+    empty description) and only records the issues.
+    """
+    issues: list[str] = []
+    name = (metadata.get("name") or "").strip()
+    description = metadata.get("description") or ""
+    if not name:
+        issues.append("name_required: name is required")
+    if not description.strip():
+        issues.append("description_required: description is required")
+    if name:
+        if len(name) > _SKILL_NAME_MAX_LENGTH:
+            issues.append("name_max_length: name must not exceed 64 characters")
+        if not _SKILL_NAME_CHARS.fullmatch(name):
+            issues.append(
+                "name_allowed_characters: name may only contain letters, numbers, "
+                "underscores, and hyphens"
+            )
+        if dir_name and name != dir_name:
+            issues.append(
+                f"name_matches_directory: name '{name}' does not match directory name '{dir_name}'"
+            )
+    if description.strip() and len(description) > _SKILL_DESCRIPTION_MAX_LENGTH:
+        issues.append("description_max_length: description must not exceed 1024 characters")
+    if len(body.splitlines()) > _SKILL_BODY_MAX_LINES:
+        issues.append("body_max_lines: SKILL.md body exceeds 500 lines")
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# requirements availability filter (spec 2026-11-02 §2.4). Semantics adapted
+# from OpenViking bot/vikingbot/agent/skills.py _check_requirements (lines
+# 182-191 at upstream commit 9a57854; the file carries no SPDX header but is
+# AGPL-3.0 licensed): a required bin must resolve on PATH, a required env var
+# must be set. Rewritten for this module's line-based string parser — no code
+# copied — so only the semantics are ported. Upstream keys its requirements
+# under a vikingbot metadata JSON; here the field is a native frontmatter
+# flow-style map: ``requirements: {bins: [git, rg], env: [GITHUB_TOKEN]}``.
+# ---------------------------------------------------------------------------
+
+
+def _parse_requirements(raw: str) -> tuple[list[str], list[str]]:
+    """Parse the optional ``requirements: {bins: [...], env: [...]}`` map.
+
+    Flow-style single line only (the line-based frontmatter parser's shape);
+    the two list values reuse the tags list parsing (comma separated, quotes
+    stripped). Unknown sub-keys are tolerated and ignored, matching the
+    module's tolerant-unknowns policy.
+    """
+    text = raw.strip()
+    if not text:
+        return [], []
+    if "{" in text and "}" in text:
+        text = text[text.index("{") + 1 : text.rindex("}")]
+
+    def _values(key: str) -> list[str]:
+        # The lookbehind (not a word boundary: ``\b`` also matches after a
+        # hyphen) keeps unknown sub-keys like ``missing-env``/``my-bins``
+        # from being read as ``env``/``bins``.
+        match = re.search(rf"(?<![\w-]){key}\s*:\s*\[([^\]]*)\]", text)
+        if not match:
+            return []
+        return _parse_tags(match.group(1))
+
+    return _values("bins"), _values("env")
+
+
+def _missing_requirements(bins: list[str], env: list[str]) -> list[str]:
+    """The unmet requirements as human-readable ``"bin: x"``/``"env: X"`` items.
+
+    A bin is met when it resolves on PATH (``shutil.which``), an env var when
+    it is set (non-empty lookup, same as upstream). Item format is stable
+    contract for the /skill list unavailable marking.
+    """
+    missing: list[str] = []
+    for bin_name in bins:
+        if not shutil.which(bin_name):
+            missing.append(f"bin: {bin_name}")
+    for env_name in env:
+        if not os.environ.get(env_name):
+            missing.append(f"env: {env_name}")
+    return missing
 
 
 _SKILL_SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")

@@ -756,11 +756,17 @@ def _prepend_skill_candidates(user_message: str, cwd: str, config: NexusCliConfi
         "Call load_skill(name) before proceeding when a candidate applies.",
     ]
     for skill in candidates:
-        description = " ".join(skill.description.split())
-        if len(description) > 300:
-            description = description[:297] + "..."
+        # L0 abstract replaces the description in the candidate line when the
+        # author wrote one (layered-loading spec §2.4: the abstract IS the
+        # stronger candidate-phase one-liner; showing both wastes tokens).
+        # Matching (SkillMatcher._score) still reads the original description
+        # field, so Top-K ranking is unchanged; an absent abstract falls back
+        # to the description exactly as before.
+        summary = " ".join((skill.abstract or skill.description).split())
+        if len(summary) > 300:
+            summary = summary[:297] + "..."
         tags = f" [tags: {', '.join(skill.tags)}]" if skill.tags else ""
-        lines.append(f"- {skill.name}: {description}{tags}")
+        lines.append(f"- {skill.name}: {summary}{tags}")
     candidate_text = "\n".join(lines)
     return f"{candidate_text}\n\n---\nUser request:\n{user_message}"
 

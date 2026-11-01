@@ -15,7 +15,32 @@ frontmatter 在 `name` / `description` / `tags` / `version` 之外还接受两�
 - `allowed-tools`：逗号分隔字符串（规范写法，如 `Bash(git:*), Read`）或内联列表。`load_skill` 把 Skill 正文注入上下文时会附一行「该技能激活期间允许的工具」提示；**如实边界：这是提示性约束，执行器不做硬限制**，真正的工具白名单仍由代理 frontmatter 的 `tools` 控制。
 - `disable-model-invocation`：`true` / `1` / `yes` 时该 Skill 退出自动 Top-K 匹配候选（模型不会被提示去加载它），但 `/skill load` 命令与显式 `load_skill` 调用照常可用——挡的是自动候选，不是加载通道。
 
-每次用户输入先用 name、description、tags 做中英文词法/字符 n-gram Top-K 匹配，再把候选交给模型决定是否调用 `load_skill`。Skill 正文只在真正加载后进入当前 ReAct 的下一模型轮；每个并发子 Agent 都有独立 Skill 缓冲区，不会串线。
+## L0/L1/L2 分层加载
+
+Skill 上下文分三层（内容抽象层级思路来自 OpenViking，L0 → L1 → L2 逐层加深）：
+
+- **L0 abstract**：frontmatter 可选 `abstract:` 一行，给候选阶段的「更强一句话」。候选行有 abstract 时用它替换 description（二者并存浪费 token），没写则回落 description；Top-K 匹配始终用 description 打分，abstract 不参与匹配，所以加 abstract 不会改变排名。
+- **L1 overview**：frontmatter 可选 `overview:`（`|` 块的多行会折叠成一行）。缺省自动生成：取正文首段（首个 `##` 小节之前的第一段，跳过开头 H1 标题），折叠一行、500 字符截断；自动生成的概览会标注 generated——`load_skill` 的 overview 返回正文带 `[overview; generated from the skill body]`，`/skill list` 层列显示 `L1:gen`（显式声明为 `L1:+`，无正文可生成时 `L1:-`）。
+- **L2 全文**：`load_skill` 的默认行为（`level: full`），与历史行为逐字节一致，含 5000 字符截断。
+
+frontmatter 字段参考（均为可选，缺省行为与历史版本一致）：
+
+| 字段 | 写法 | 作用 |
+|---|---|---|
+| `abstract` | 单行字符串 | L0 候选行文本；缺省回落 description |
+| `overview` | 单行或 `\|` 块 | L1 概览；缺省从正文首段生成并标 generated |
+| `requirements` | flow map：`{bins: [git, rg], env: [GITHUB_TOKEN]}` | 可用性过滤：bins 逐个查 PATH（`shutil.which`），env 逐个查环境变量（非空即满足）；语义改写自 OpenViking vikingbot `skills.py` 的 `_check_requirements`，未整搬代码 |
+| `allowed-tools` / `disable-model-invocation` | 见上节 | Agent Skills 规范字段 |
+
+`requirements` 不满足的 Skill：**不进自动候选**（不向模型提示一个跑不起来的技能），`/skill list` 层列标 `unavailable (missing: bin: git env: GITHUB_TOKEN)` 列出缺失项；显式 `load_skill` 与 `/skill load` 仍可用——过滤是候选阶段的决定，不是加载门。内置 `web-access` Skill 的 frontmatter 是 abstract/overview 的示范写法。
+
+frontmatter 解析同时记录 lint 告警（规则改写自 OpenViking `core/skill_loader.py` 的校验规则）：name/description 必填、name 字符集与 64 字上限、与目录名一致、description 1024 字上限、正文 500 行告警；未知键容忍不报。告警不改加载行为，只在 `/skill list` 层列以 `warn:<规则码>` 显示。
+
+每次用户输入先用 name、description、tags 做中英文词法/字符 n-gram Top-K 匹配，再把候选交给模型决定是否调用 `load_skill`。`load_skill` 支持可选 `level` 参数：`full`（默认，全文）或 `overview`（先读一屏 L1 概览省 token，需要细节再 full）；返回文本与 display_summary 带层信息。Skill 正文只在真正加载后进入当前 ReAct 的下一模型轮；每个并发子 Agent 都有独立 Skill 缓冲区，不会串线。
+
+## real 轨的 skill 可达性
+
+真模型轨道（`nexuscli eval run --real`）的只读白名单（`eval/real.py` 的 `REAL_TRACK_TOOLS`）包含 `load_skill`：候选注入 → `load_skill` → 全文的链路在真实轨道完整可达。此前它被按「用户态写」排除（用量计数器写 `~/.nexuscli/usage.json`），分层加载 spec 把这归为误伤：内容面按名字在固定 skill 根解析、只读、无路径参数不可遍历，残余的计数器写属记账性质——没有任何行为决策读它，轨道不变量相应收窄为「零工作区写 + 这一处已声明的用户目录计数器写」。行为场景 `examples/evals/real/03_skill_rule_follow.json` 用仓库根 `.agents/skills/rule-demo/` 演示链路：prompt 点名 skill → 模型调用 `load_skill` → 遵循其回复格式规则（`final_contains` 断言 `SKILL-RULE-OK` 标记）；场景 PASS/FAIL 是 nightly 行为信号，链路可达性由 hermetic 单测保证。
 
 当一次成功流程具备稳定输入、明确步骤和可复用边界时，模型可以调用 `save_skill` 提议写入 project 或 user 层。该工具默认拒绝覆盖已有 Skill，并强制人工确认。
 

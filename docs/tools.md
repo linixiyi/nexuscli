@@ -8,6 +8,10 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具（速�
 
 `read_file` 对 `.pdf` 后缀走 pypdf 整篇文本提取（不做分页范围），再套用与文本文件相同的行窗口。pypdf 是可选依赖，缺失时返回带安装指引的错误：`uv sync --extra pdf`（或 `pip install "nexuscli[pdf]"`）。
 
+## load_skill 的分层加载
+
+`load_skill` 把项目/用户层 SKILL.md 读进模型上下文，支持可选 `level` 参数：`full`（默认）注入整个 Skill 正文（超 5000 字符截断，历史行为逐字节不变）；`overview` 只注入 L1 概览——frontmatter `overview:` 显式声明优先，缺省从正文首段自动生成并标注 generated——适合先粗读一屏再决定是否全文加载。`level` 取其他值直接报错，不静默回落。返回文本与 display_summary 带层信息（L0 abstract、L1 是否 generated），`/skill list` 的层列同口径显示，还包括 frontmatter 校验告警码（`warn:<规则码>`）与 `requirements` 可用性标注（bins 查 PATH、env 查环境变量，未满足不进自动候选、列表标 `unavailable (missing: ...)`，显式加载仍可用）。字段写法与层语义的完整口径见 [skills.md](skills.md)。`load_skill` 在真模型轨道的只读白名单内，候选 → 加载链路可达；写侧 `save_skill` 照旧强制 HITL。
+
 ## grep 的 rg 加速与语义差异
 
 `grep` 对目录搜索先探测 PATH 上的 rg：命中则由 rg 子进程加速并映射回同一 `路径:行号: 内容` 格式，rg 缺失或失败时回退纯 Python 扫描。已知语义差异：rg 会跳过二进制文件，纯 Python 路径以 `errors="ignore"` 读取一切，文本文件结果一致。
