@@ -65,20 +65,34 @@ REAL_REPORT_RELATIVE = Path(".nexuscli") / "evals" / "last-real-report.json"
 
 # The curated read-only builtin subset the real track allows to EXECUTE.
 # Curated by name, not derived from Tool.is_read_only: the flag is the repo's
-# own classification and it is too loose for unattended runs. Known traps:
+# own classification and it is too loose for unattended runs. Track
+# invariant, stated honestly after the 2026-11-02 layered-loading change:
+# an unattended real run performs ZERO writes into the workspace, plus ONE
+# accepted user-dir write — load_skill's usage counter (see below). That is
+# a narrowing of the original "unattended runs never write" promise, made
+# deliberately and reviewed, not silently. Known traps:
 # - ``todo_write`` carries the default ``is_read_only=True`` while writing
-#   ``.nexuscli/todo.json``;
+#   ``.nexuscli/todo.json`` (workspace write);
 # - ``search_memory`` is flagged read-only, but its ``MemoryManager.recall``
 #   runs with the default ``mark_access=True`` — every call UPDATEs
 #   ``access_count`` on the user's real memory DB and runs
-#   ``_purge_expired`` (a DELETE of expired rows) — user-state writes;
-# - ``load_skill`` is flagged read-only, but with the Agent's always-truthy
-#   ``skill_context_buffer`` it calls ``SkillStateStore().record_use``,
-#   writing usage counters to ``~/.nexuscli/skills/usage.json``.
-# All three stay OUT of this allowlist and are deny-ruled (fail-closed +
-# audited, see _load_real_config) so the track's "unattended runs never
-# write" promise is literal. web_search/web_fetch are network reads;
-# search_code/task_output/todo_read only read.
+#   ``_purge_expired`` (a DELETE of expired rows). That is BEHAVIOR-STATE:
+#   the writes change what the memory system recalls, so they stay excluded.
+# Both stay OUT of this allowlist and are deny-ruled (fail-closed + audited,
+# see _load_real_config).
+#
+# ``load_skill`` was excluded until 2026-11-02 on the same "user-state
+# write" reasoning, and is deliberately back IN with a different
+# classification: its writes are ACCOUNTING-ONLY — the injection seam calls
+# ``SkillStateStore().record_use`` which atomically rewrites the usage
+# counters at ``~/.nexuscli/usage.json`` (sibling of skills.json). Nothing
+# reads them to change behavior (matching, candidates, recall are all
+# untouched), and its content surface is read-only by construction: the
+# registry resolves a skill NAME against the fixed skill roots only (no
+# path parameter, no traversal; every returned text is a SKILL.md from
+# those roots). It is IN so the real track's candidate -> load_skill ->
+# full-text chain is reachable (spec 2026-11-02_add-skill-layered-loading
+# §2.2); re-excluding it would re-break that chain.
 REAL_TRACK_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
@@ -94,6 +108,7 @@ REAL_TRACK_TOOLS: frozenset[str] = frozenset(
         "search_code",
         "task_output",
         "todo_read",
+        "load_skill",
     }
 )
 

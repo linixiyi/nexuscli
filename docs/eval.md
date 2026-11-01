@@ -438,15 +438,20 @@ Unattended runs must never write. Three stacked layers enforce it:
   ask/allow, so even a user config that allows `write_file` cannot punch
   through. The subset is curated **by name**, not derived from the tools'
   `is_read_only` flag: that flag is too loose for unattended runs, because
-  three flagged-read-only builtins actually mutate user state —
-  `todo_write` writes `.nexuscli/todo.json` (the default read-only flag),
-  `search_memory`'s recall runs with the default `mark_access=True` (an
-  `access_count` UPDATE plus a DELETE of expired rows on the user's real
-  memory DB per call), and `load_skill` records usage counters to
-  `~/.nexuscli/skills/usage.json` whenever the agent's skill buffer is
-  active (which it always is). All three stay outside the allowlist and are
-  denied+audited like any other write, so "unattended runs never write" is
-  literal — the audit log remains the track's only documented write.
+  two flagged-read-only builtins actually mutate user state in ways that
+  change behavior — `todo_write` writes `.nexuscli/todo.json` (the default
+  read-only flag), and `search_memory`'s recall runs with the default
+  `mark_access=True` (an `access_count` UPDATE plus a DELETE of expired
+  rows on the user's real memory DB per call). Both stay outside the
+  allowlist and are denied+audited like any other write.
+  `load_skill` was excluded under the same reasoning until the 2026-11-02
+  layered-loading change re-classified it: its content surface is read-only
+  by construction (name-keyed lookup confined to the skill roots), and its
+  only write is accounting — usage counters at `~/.nexuscli/usage.json`
+  that nothing reads to change behavior. It is IN the allowlist, and the
+  track's write invariant is stated accordingly: zero workspace writes plus
+  this one declared user-dir counter write; the audit log remains the
+  track's only documented write.
 - **Fail-closed approval, same as `-p` without `--yes`.** There is no
   approval callback, so anything that still reaches the approval gate
   (`requires_approval` tools, `ask` rules) is denied. `hitl_mode` is pinned

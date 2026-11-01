@@ -257,20 +257,33 @@ def test_real_loader_validates_judge_shape(tmp_path, judge, fragment):
     assert str(path) in str(excinfo.value)
 
 
-def test_builtin_real_dir_ships_two_runnable_scenarios():
+def test_builtin_real_dir_ships_runnable_scenarios():
     real_dir = builtin_real_eval_dir()
     assert real_dir is not None, "repository ships examples/evals/real"
     scenarios = load_real_eval_scenarios(real_dir)
     names = [scenario.name for scenario in scenarios]
-    assert len(names) == 2
-    assert names == ["real-readonly-converge", "real-repo-question-answer"]
-    # One plain smoke scenario and one judge-scored repository Q&A scenario,
-    # both loadable with the strict real-track schema.
+    assert len(names) == 3
+    assert names == [
+        "real-readonly-converge",
+        "real-repo-question-answer",
+        "real-skill-rule-follow",
+    ]
+    # One plain smoke scenario, one judge-scored repository Q&A scenario and
+    # one skill-rule-follow scenario (load_skill + final marker), all
+    # loadable with the strict real-track schema.
     assert all(scenario.judge is None or scenario.judge.threshold for scenario in scenarios)
     judge_scenarios = [scenario for scenario in scenarios if scenario.judge is not None]
     assert len(judge_scenarios) == 1
     assert judge_scenarios[0].judge.rubric
     assert 0 < judge_scenarios[0].judge.threshold <= 1
+    # The skill scenario drives the layered-loading chain: it requires the
+    # load_skill call and asserts the skill's observable reply marker.
+    skill_scenarios = [
+        scenario for scenario in scenarios if scenario.name == "real-skill-rule-follow"
+    ]
+    assert len(skill_scenarios) == 1
+    assert skill_scenarios[0].assertions.required_tools == ["load_skill"]
+    assert skill_scenarios[0].assertions.final_contains == ["SKILL-RULE-OK"]
 
 
 # ---------------------------------------------------------------------------
@@ -290,27 +303,39 @@ def test_real_config_pins_audit_and_computes_deny_rules_for_everything_outside_s
     assert not (REAL_TRACK_TOOLS & deny), "read-only tools stay executable"
 
 
-def test_real_allowlist_excludes_user_state_recording_tools(tmp_path):
-    """Review finding: two flagged-read-only builtins are not zero-write.
+def test_real_allowlist_excludes_search_memory_user_state_writes(tmp_path):
+    """Review finding: ``search_memory`` is flagged read-only but not zero-write.
 
-    ``search_memory`` calls ``MemoryManager.recall`` with the default
-    ``mark_access=True`` — every call UPDATEs ``access_count`` on the user's
-    real memory DB and runs ``_purge_expired`` (a DELETE of expired rows)
-    (memory/manager.py). ``load_skill`` records usage counters to
-    ``~/.nexuscli/skills/usage.json`` behind the agent's always-truthy skill
-    buffer (tools/builtins.py -> skill/registry.py record_use). Both stay
-    out of the allowlist (deny-ruled + audited like any other write), so the
-    track's "unattended runs never write" promise is literal; re-adding them
-    requires removing their user-state writes first.
+    It calls ``MemoryManager.recall`` with the default ``mark_access=True`` —
+    every call UPDATEs ``access_count`` on the user's real memory DB and runs
+    ``_purge_expired`` (a DELETE of expired rows) (memory/manager.py). It
+    stays out of the allowlist (deny-ruled + audited like any other write);
+    re-adding it requires removing its user-state writes first.
     """
     assert "search_memory" not in REAL_TRACK_TOOLS
-    assert "load_skill" not in REAL_TRACK_TOOLS
-    # And the computed deny rules cover them (enforced end-to-end by the
-    # config test above; asserted here by name so a future re-addition is a
+    # The computed deny rules cover it (enforced end-to-end by the config
+    # test above; asserted here by name so a future re-addition is a
     # conscious, reviewed decision).
     config = _load_real_config(str(tmp_path))
     assert "search_memory" in config.permissions.deny
-    assert "load_skill" in config.permissions.deny
+
+
+def test_real_allowlist_includes_load_skill_for_layered_loading(tmp_path):
+    """load_skill re-entered the allowlist with the layered-loading spec.
+
+    It was previously excluded for the same user-state-write reasoning
+    (usage counters land in ``~/.nexuscli/usage.json``, sibling of
+    skills.json); spec 2026-11-02_add-skill-layered-loading re-classified
+    that as a false positive: the content surface is read-only by
+    construction — the registry resolves a skill NAME against the fixed
+    skill roots (no path parameter, no traversal) — and the remaining
+    ``record_use`` counter write is accounting-only (nothing reads it to
+    change behavior). The real track must reach the candidate ->
+    load_skill -> full-text chain.
+    """
+    assert "load_skill" in REAL_TRACK_TOOLS
+    config = _load_real_config(str(tmp_path))
+    assert "load_skill" not in config.permissions.deny, "whitelisted tools stay executable"
 
 
 def test_real_config_deny_wins_over_user_allow_rules(user_home, tmp_path):
@@ -353,6 +378,160 @@ def _run(scenario_path, *, root, repeat=1, turns, per_turn_usage=None, judge=Non
         judge=judge,
     )
     return results, clients
+
+
+def _write_rule_demo_skill(root: Path) -> Path:
+    """The rule-demo fixture skill in the project-standard skill root.
+
+    Mirrors the committed repo-root fixture ``.agents/skills/rule-demo/SKILL.md``
+    that ``examples/evals/real/03_skill_rule_follow.json`` targets: the
+    registry scans ``<root>/.agents/skills`` (skill/registry.py,
+    project_agents_skill_root), so ``load_skill("rule-demo")`` resolves it.
+    """
+    skill_dir = root / ".agents" / "skills" / "rule-demo"
+    skill_dir.mkdir(parents=True)
+    path = skill_dir / "SKILL.md"
+    path.write_text(
+        "---\n"
+        "name: rule-demo\n"
+        "description: Real-track eval demo skill that carries a reply-format rule.\n"
+        'version: "1.0.0"\n'
+        "---\n"
+        "# Rule Demo\n"
+        "\n"
+        "Rule to follow once this skill is loaded: your FINAL reply must be exactly\n"
+        "one single line, and that line must contain the marker SKILL-RULE-OK.\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _skill_rule_scenario_data() -> dict:
+    """The scenario body of examples/evals/real/03_skill_rule_follow.json."""
+    return {
+        "name": "real-skill-rule-follow",
+        "prompt": (
+            "This workspace provides a project skill named rule-demo. Call the "
+            'load_skill tool with name "rule-demo", read the rule the skill '
+            "carries, and follow that reply-format rule exactly in your final reply."
+        ),
+        "assertions": {
+            "max_turns": 4,
+            "required_tools": ["load_skill"],
+            "final_contains": ["SKILL-RULE-OK"],
+        },
+    }
+
+
+def test_real_track_load_skill_reachable_and_rule_followed(tmp_path):
+    """The real-track skill chain end to end (hermetic fake LLM).
+
+    Candidate injection names the fixture skill, the load_skill call EXECUTES
+    (no deny rule since the layered-loading spec), the real handler's drained
+    SKILL.md body reaches the model on the followup call, and the
+    reply-format rule from the skill shows up in the judged final text.
+    """
+    _write_rule_demo_skill(tmp_path)
+    scenario = _write_real_scenario(tmp_path, _skill_rule_scenario_data())
+
+    results, clients = _run(
+        scenario,
+        root=tmp_path,
+        turns=[
+            _tool_turn("load_skill", {"name": "rule-demo"}),
+            _text_turn("SKILL-RULE-OK rule read and followed"),
+        ],
+    )
+
+    result = results[0]
+    assert result.passed, result.failure_reasons
+    assert result.tool_sequence == ["load_skill"]
+    # Candidate injection listed the fixture skill before the first LLM call.
+    first_user = str(clients[0].seen_messages[0][-1].content)
+    assert "Relevant skill candidates" in first_user
+    assert "- rule-demo:" in first_user
+    # The real handler ran: the return message and the drained SKILL.md body
+    # (appended to the load_skill tool result) both reached the model.
+    followup_contents = [
+        str(getattr(message, "content", "")) for message in clients[0].seen_messages[1]
+    ]
+    assert any('Loaded skill "rule-demo" instructions' in content for content in followup_contents)
+    assert any(
+        "## Loaded Skill: rule-demo" in content and "SKILL-RULE-OK" in content
+        for content in followup_contents
+    )
+    # final_contains + required_tools both evaluated on the follow-through.
+    assert "SKILL-RULE-OK" in result.final_text
+
+
+def test_real_track_skill_rule_violation_fails_final_contains(tmp_path):
+    """The scenario's assertions judge rule compliance, not just reachability.
+
+    A model that loads the skill but ignores its reply-format rule fails the
+    run through the deterministic final_contains assertion (the marker is
+    the observable; PASS/FAIL on a real model is the nightly behavior
+    signal).
+    """
+    _write_rule_demo_skill(tmp_path)
+    scenario = _write_real_scenario(tmp_path, _skill_rule_scenario_data())
+
+    results, _ = _run(
+        scenario,
+        root=tmp_path,
+        turns=[
+            _tool_turn("load_skill", {"name": "rule-demo"}),
+            _text_turn("I read the skill, thanks."),
+        ],
+    )
+
+    result = results[0]
+    assert not result.passed
+    assert any(
+        "final text does not contain: 'SKILL-RULE-OK'" in reason
+        for reason in result.failure_reasons
+    )
+    # load_skill itself was called (chain reachable); only the rule broke.
+    assert "load_skill" in result.tool_sequence
+
+
+def test_real_track_skill_reads_confined_to_skill_roots(tmp_path):
+    """load_skill is executable on the real track, and reads stay confined.
+
+    There is no path parameter: the registry resolves a NAME against the
+    fixed skill roots only, so a traversal-looking name just misses (the
+    skill-roots equivalent of PathGuard's workspace confinement — PathGuard
+    itself guards the file tools, tools/file_ops.py:48, not this tool). The
+    call must EXECUTE (not be deny-ruled) and must never surface content
+    from outside the skill roots.
+    """
+    (tmp_path / "secret.txt").write_text("TOP-SECRET-CONTENT", encoding="utf-8")
+    scenario = _write_real_scenario(
+        tmp_path,
+        _minimal_real_data(prompt="Load anything useful.", assertions={"max_turns": 4}),
+    )
+
+    results, clients = _run(
+        scenario,
+        root=tmp_path,
+        turns=[
+            _tool_turn("load_skill", {"name": "../secret.txt"}),
+            _text_turn("nothing loadable"),
+        ],
+    )
+
+    result = results[0]
+    assert result.tool_sequence == ["load_skill"]
+    followup_contents = [
+        str(getattr(message, "content", "")) for message in clients[0].seen_messages[1]
+    ]
+    # Executed through the real gate chain (no permission-rule denial), and
+    # the name-keyed lookup simply missed.
+    assert not any("denied by permission rule" in content for content in followup_contents)
+    assert any(
+        'Skill "../secret.txt" not found or disabled.' in content for content in followup_contents
+    )
+    # Nothing from outside the skill roots ever reached the model.
+    assert not any("TOP-SECRET-CONTENT" in content for content in followup_contents)
 
 
 def test_real_track_executes_a_real_readonly_builtin_tool(tmp_path):
