@@ -69,8 +69,19 @@ frontmatter 解析同时记录 lint 告警（规则改写自 OpenViking `core/sk
 
 落地门本身按 `sys.stdin.isatty()` 判定交互性，是失败关闭的：没有 TTY 可以作答时，提案照常生成并落档，但不会落地任何规则，全部条目记为 `pending`，并提示回 REPL 里审阅——没有人点头，Skill 就不变。需要如实说明的是，今天并不存在「无 TTY 跑 `/skill propose`」的生产路径：`-p` 单次模式只展开自定义斜杠命令，未匹配的 `/name` 会原样作为普通 prompt 发给模型（`entrypoints/cli.py` 的 `_expand_custom_prompt`），管道 stdin 在 REPL 入口就被拒绝（`entrypoints/repl.py`）。这个门是纵深防御，也是测试注入假答案、验证失败关闭语义的位置。
 
-每次 propose 都会写一条记录到 `~/.nexuscli/skill_history/<name>/proposals/<ts>.json`：报告摘要（落地前的快照，供人工对照）、提案全文、每条的人审结论与落地版本号。
+每次 propose 都会写一条记录到 `~/.nexuscli/skill_history/<name>/proposals/<ts>.json`：报告摘要（落地前的快照，供人工对照）、提案全文、每条的人审结论与落地版本号。有落地条目且跑过落地后对比时，同一文件会被原地重写（不会另存新记录），带上 `post_landing` 字段。
+
+### 落地后 real-eval 对比（闭环后半环）
+
+真的有条目落地后，REPL 会再问一次「Run the real-eval post-landing diff now?」——这是第二次人工确认：Reason 行写明这是一次真实网关调用，重跑真模型轨道场景 03（`03_skill_rule_follow`，skill 规则遵循验证器；`--file` 语义只跑这一个，不跑全量），预估 1-2 万 token。只有敲 `y` 才执行；`n`（默认值，任何非 `y` 答案同）或 Ctrl+C/Ctrl+D 都记 declined，不产生任何网关调用。确认后的调用在 `propose.py` 的 `run_post_landing_diff` 里固定四步：
+
+1. **备份**：把 `.nexuscli/evals/last-real-report.json` 原样读入内存；文件不存在则 before 侧为空，读不出来则直接放弃（没有备份就不跑，绝不裸跑）。
+2. **跑**：经 `eval/real.py` 的 `run_real_scenarios` 重跑场景 03 并覆写报告——与 `eval run --real` 同一条链，无 Key 在跑任何场景之前就报错并附 `NEXUSCLI_API_KEY` 等配置指引。
+3. **对比**：落地前报告 vs 新报告中同一场景的 status / `pass_k.all_pass` / 失败原因，外加两份报告 summary 的 `all_pass_rate`，写进提案记录 `post_landing` 的 before/after。
+4. **还原**：把备份逐字节写回；原本没有报告的，则把这次跑出的报告删掉、恢复「文件不存在」的原状。
+
+还原是硬保证：nightly 轨道读的就是这个文件，绝不留下单场景报告。还原失败会显式告警并在 `post_landing` 落 `report_restored=false`，需要手工恢复后再跑 nightly——绝不静默污染基线。退化路径同样落档：拒绝（declined）、非交互（`skipped_reason=non-interactive`）、无 Key 或场景文件缺失（errors 带指引）、场景执行异常（errors 落档且仍执行还原）。
 
 ### 如实边界
 
-**eval 报告是提案依据，不是落地效果验证器。** hermetic eval 运行时关闭 skill 注入（`eval/runner.py` 置 `features.skill = False` 以保证确定性），所以「改了 Skill → hermetic 分数变化」这条因果链不存在；真模型轨道是否开 skill 注入亦不在此依赖内。提案记录只保存落地前的报告摘要供人工对照；「落地后自动再跑 eval 并 diff 验证」明确挂账，本轮不做。也不要指望无监督批量改写：人审是硬门，每条落地都要过一次 y/n/s。
+**eval 报告是提案依据，不是落地效果验证器。** hermetic eval 运行时关闭 skill 注入（`eval/runner.py` 置 `features.skill = False` 以保证确定性），所以「改了 Skill → hermetic 分数变化」这条因果链不存在；真模型轨道是否开 skill 注入亦不在此依赖内。提案记录保存落地前的报告摘要供人工对照；真模型轨道的落地效果对比由上面的可选 post_landing diff 提供——但**单次对比是档案信号，不是门禁**：模型遵循率有波动，一次 before/after 不构成统计结论，diff 结果只进提案记录供人阅读，不回写报告、不做回归判定、不触发任何后续动作，「落地→评测→再提案」的无人值守循环仍然不做。也不要指望无监督批量改写：人审是硬门，每条落地都要过一次 y/n/s，效果对比也要再过一次 y/n。

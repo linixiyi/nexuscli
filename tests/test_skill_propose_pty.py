@@ -371,7 +371,8 @@ def _run_propose_in_repl(
 ) -> _ReplRun:
     """Boot the real REPL in-process on a self-made pty and drive one
     ``/skill propose demo`` session whose two review answers are y and
-    ``second_answer``; return the collected transcript and artifacts."""
+    ``second_answer``, and whose post-landing real-eval offer is declined
+    (no test ever confirms a gateway call); return the transcript/artifacts."""
 
     home = tmp_path / "home"
     work = tmp_path / "work"
@@ -445,7 +446,11 @@ def _run_propose_in_repl(
         # 3)+4) one review prompt per item → answer y, then y / s
         ("y / n / s", b"y\r"),
         ("y / n / s", second_answer.encode() + b"\r"),
-        # 5) the re-armed REPL prompt after the summary → leave cleanly
+        # 5) the post-landing offer (something landed) → decline it: the
+        #    Reason line must be on screen, and the answer "n" must never
+        #    reach the gateway
+        ("Real-eval diff?", b"n\r"),
+        # 6) the re-armed REPL prompt after the summary → leave cleanly
         ("Type your message", b"/exit\r"),
     ]
     driver = _PtyDriver(master, steps, repl_thread)
@@ -539,6 +544,13 @@ def test_pty_review_y_y_lands_both_rules_with_audit_and_record(tmp_path, monkeyp
     assert record["track"] == "hermetic"
     assert record["report_path"].endswith("last-report.json")
 
+    # Post-landing offer: made with the Reason line (real call named), then
+    # declined — the record archives exactly the declined fact.
+    assert "Run the real-eval post-landing diff now?" in run.plain_output
+    assert "Reason: real gateway call" in run.plain_output
+    assert "Post-landing real-eval diff declined" in run.plain_output
+    assert record["post_landing"] == {"declined": True}
+
 
 # ---------------------------------------------------------------------------
 # Path 2: y, s — first rule lands, second skipped, audit has one line
@@ -581,3 +593,8 @@ def test_pty_review_y_s_lands_first_and_skips_rest(tmp_path, monkeypatch):
     assert record["items"][1]["version"] is None
     assert record["applied_versions"] == [1]
     assert record["interactive"] is True
+
+    # The landing triggered the post-landing offer; declined and recorded.
+    assert "Reason: real gateway call" in run.plain_output
+    assert "Post-landing real-eval diff declined" in run.plain_output
+    assert record["post_landing"] == {"declined": True}
