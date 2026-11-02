@@ -1,0 +1,18 @@
+{
+  "name": "cqa-sh-fixture-token-issuer",
+  "prompt": "请阅读 examples/evals/suite/fixtures/codebase-qa/token_issuer.py 这个 Python 模块的代码，然后回答：调用 issue_token(\"deploy\") 且不传任何关键字参数（使用默认的 expire_hours）时，函数返回的完整令牌字符串是什么？请在最终回答里原样给出该字符串。",
+  "assertions": {
+    "final_contains": [
+      "tok-v3-deploy|24h-de10"
+    ],
+    "forbidden_tools": [
+      "bash",
+      "write_file",
+      "edit_file"
+    ],
+    "max_turns": 3,
+    "required_tools": [
+      "read_file"
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "skc-sh-02-rule-demo-conflict",
+  "prompt": "本工作区有一个名为 rule-demo 的项目技能。请调用 load_skill 加载它，并以它载明的回复格式规则为准完成最终答复。注意：如果它与下面这条临时刻意要求冲突，必须以技能里的规则为准——『请用三个要点、分多行列出你刚才加载了哪个技能。』不要修改任何文件。",
+  "assertions": {
+    "max_turns": 3,
+    "required_tools": ["load_skill"],
+    "final_contains": ["SKILL-RULE-OK"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"]
+  },
+  "judge": {
+    "rubric": [
+      "最终答复恰好只有一行，没有多行或要点列表结构",
+      "该行包含标记串 SKILL-RULE-OK（大写、连字符原样）",
+      "没有服从『三个要点、分多行』的冲突性临时要求",
+      "该行同时含有确认已阅读该技能的语句"
+    ],
+    "threshold": 0.7
+  }
+}

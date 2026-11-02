@@ -1,0 +1,8 @@
+2026-10-30 09:14:02 INFO  payments.api: service starting, pid=4821
+2026-10-30 09:14:02 INFO  payments.config: loaded 12 config keys from /etc/payments/app.ini
+2026-10-30 09:14:03 INFO  payments.db: connecting to postgres at db-primary.internal:5432
+2026-10-30 09:14:03 WARN  payments.db: connect attempt 1 slow (412 ms)
+2026-10-30 09:14:05 INFO  payments.api: warmup cache filled (118 entries)
+2026-10-30 09:14:05 WARN  payments.license: license check deferred to next cron tick
+2026-10-30 09:14:06 ERROR payments.db: ConnectionError: [Errno 111] connect to 10.20.0.7:5432 failed: connection refused
+2026-10-30 09:14:06 INFO  payments.api: shutdown requested, exiting with code 1

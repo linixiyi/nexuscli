@@ -1,0 +1,10 @@
+2026-10-30 12:31:58.104 INFO  checkout: order o-88231 received, requesting quote from pricing-service
+2026-10-30 12:31:58.110 INFO  pricing.client: POST /v1/quote attempt 1/3 timeout=800ms
+2026-10-30 12:31:58.915 WARN  pricing.client: attempt 1/3 failed: ReadTimeout after 800 ms
+2026-10-30 12:31:58.920 INFO  pricing.client: POST /v1/quote attempt 2/3 timeout=800ms
+2026-10-30 12:31:59.730 WARN  pricing.client: attempt 2/3 failed: ReadTimeout after 800 ms
+2026-10-30 12:31:59.735 INFO  pricing.client: POST /v1/quote attempt 3/3 timeout=800ms
+2026-10-30 12:31:59.760 WARN  pricing.client: attempt 3/3 rejected: HTTP 429 from gateway, body=RATE_LIMITED
+2026-10-30 12:31:59.761 ERROR pricing.client: retry budget exhausted, raising UpstreamThrottled
+2026-10-30 12:31:59.762 ERROR checkout: quote unavailable for o-88231, entering DEGRADED mode
+2026-10-30 12:31:59.763 INFO  checkout: serving o-88231 with flat fallback price, flag=pricing_fallback_v2

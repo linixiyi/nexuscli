@@ -1,0 +1,20 @@
+{
+  "name": "cqa-md-real-readonly-whitelist",
+  "prompt": "本仓库的 real 评测轨道（nexuscli eval run --real）在无人值守运行时只放行一部分内置工具。请阅读 src/nexuscli/eval/real.py，回答三个问题：这份可执行白名单包含哪些工具？它在代码里是如何定义、按什么方式挑选的？白名单之外的内置工具在运行时会被怎样处理？",
+  "assertions": {
+    "forbidden_tools": [
+      "bash",
+      "write_file",
+      "edit_file"
+    ],
+    "max_turns": 5
+  },
+  "judge": {
+    "rubric": [
+      "列出了白名单中至少 8 个工具名，其中必须包含 read_file、grep、load_skill（白名单共 14 项：read_file、list_dir、glob、glob_files、grep、grep_code、directory_tree、get_file_info、web_search、web_fetch、search_code、task_output、todo_read、load_skill，全部列出更佳）",
+      "指出白名单是源码里按工具名精选的常量集合 REAL_TRACK_TOOLS，而不是由 Tool.is_read_only 标志自动推导——源码注释明确说明该标志是仓库自己的分类、过于宽松，不适合无人值守运行",
+      "指出白名单之外的内置工具会被加上 permissions.deny 拒绝规则：deny 优先于 ask/allow（用户配置里的 allow 也无法穿透），拒绝决定走真实门链并进入审计日志"
+    ],
+    "threshold": 0.7
+  }
+}

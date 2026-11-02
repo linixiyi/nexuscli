@@ -1,0 +1,4 @@
+2026-10-30 12:30:00.000 INFO  gateway: rate limiter window opened, quota=120 req/min per client
+2026-10-30 12:31:57.880 WARN  gateway: client checkout-svc quota 118/120 consumed in current window
+2026-10-30 12:31:59.755 WARN  gateway: client checkout-svc quota 120/120 exhausted, rejecting POST /v1/quote with 429
+2026-10-30 12:31:59.757 INFO  gateway: retry storm detected: 41 rejection responses served in last 60 s

@@ -1,0 +1,17 @@
+[web 快照模拟] 发布页快照（release-snapshot）
+
+Aurora Billing Service — Release Notes
+
+Version: v3.14.1
+Released: 2026-09-30
+Channel: stable
+
+Highlights:
+- Billing engine now settles invoices in parallel; batch close time drops 40%.
+- New refund audit trail with per-step actor attribution.
+- 12 fixes; 2 security patches (CVE-2026-3391, CVE-2026-3402).
+
+Upgrade notes: schema migration 0087 runs on first start; expect about
+3 minutes of downtime per shard.
+
+（本文件是某次抓取保存的静态快照，仅反映抓取时刻的内容。）

@@ -1,0 +1,7 @@
+2026-10-30 16:05:10 INFO  deploy.orders: pushing build 20261030.3 to orders@prod-eu-1
+2026-10-30 16:05:11 INFO  deploy.config: effective [orders] request_timeout=30s upstream_read_timeout=3000ms
+2026-10-30 16:05:12 INFO  deploy.config: effective [retry] attempts=2
+2026-10-30 16:05:30 WARN  health.check: GET /healthz attempt 1 timed out after 30 s
+2026-10-30 16:05:47 ERROR upstream.client: read aborted after 3000 ms of inactivity (upstream read window exhausted)
+2026-10-30 16:05:47 ERROR upstream.client: giving up, retry budget (attempts=2) spent on 14 requests
+2026-10-30 16:05:48 INFO  deploy.orders: rollback triggered: 3 consecutive health-check failures

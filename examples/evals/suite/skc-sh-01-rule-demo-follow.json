@@ -1,0 +1,10 @@
+{
+  "name": "skc-sh-01-rule-demo-follow",
+  "prompt": "本工作区有一个名为 rule-demo 的项目技能。请调用 load_skill 加载它，并严格遵循它载明的回复格式规则给出最终答复。除该技能要求的格式内容外，不要附加任何其他文字。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 3,
+    "required_tools": ["load_skill"],
+    "final_contains": ["SKILL-RULE-OK"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"]
+  }
+}

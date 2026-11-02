@@ -1,0 +1,19 @@
+{
+  "name": "cqa-sh-pyproject-name-license",
+  "prompt": "请阅读仓库根目录的 pyproject.toml，回答两个问题：这个包的项目名称是什么？它在项目元数据段里声明的许可证（license）是什么？请在最终回答里同时给出这两项。",
+  "assertions": {
+    "final_contains": [
+      "nexuscli",
+      "AGPL-3.0-only"
+    ],
+    "forbidden_tools": [
+      "bash",
+      "write_file",
+      "edit_file"
+    ],
+    "max_turns": 3,
+    "required_tools": [
+      "read_file"
+    ]
+  }
+}

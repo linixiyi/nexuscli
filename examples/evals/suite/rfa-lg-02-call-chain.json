@@ -1,0 +1,15 @@
+{
+  "name": "rfa-lg-02-call-chain",
+  "prompt": "这是一次无人值守的只读评测。目录 examples/evals/suite/fixtures/repo-facts/minilog 是一个迷你 Python 包。请通读其中全部 .py 文件，找出包内最深的一条本地函数调用链：只统计包内定义的函数之间的调用，从最上层的入口函数开始逐层向下，直到最底层的被调函数。按调用顺序列出这条链上的全部函数名，并用中文逐个说明链上每个函数的职责。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 8,
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "final_contains": [
+      "render_table",
+      "count_levels",
+      "parse_entry",
+      "parse_header",
+      "split_lines"
+    ]
+  }
+}

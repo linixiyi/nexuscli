@@ -1,0 +1,19 @@
+{
+  "name": "dgn-lg-pricing-degrade",
+  "prompt": "这是一次无人值守的只读诊断评测。checkout 服务在 2026-10-30 12:31 处理订单 o-88231 时进入降级。请分别用 read_file 读取 examples/evals/suite/fixtures/diagnosis/trace-checkout.log 与 examples/evals/suite/fixtures/diagnosis/pricing-gateway.log，还原完整因果链：从报价调用超时开始，到重试、网关配额、被上游拒绝、进入降级模式、直到兜底价格生效为止，按发生顺序分步说明。因果链的每一环都必须原样引用一条日志中的关键短语作为证据（可来自任一文件），不要改写这些短语。不要修改任何文件。",
+  "assertions": {
+    "required_tools": ["read_file"],
+    "final_contains": ["attempt 3/3", "RATE_LIMITED", "120/120", "DEGRADED", "pricing_fallback_v2"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 8
+  },
+  "judge": {
+    "rubric": [
+      "第一环正确：报价调用的前两次尝试（attempt 1/3、2/3）均在 800 毫秒处读超时，说明上游 pricing-service 变慢。",
+      "第二环正确：第三次尝试被网关以 429 限流拒绝，且网关日志显示该客户端配额 120/120 耗尽——重试流量自己打满了配额；随后重试预算耗尽。",
+      "第三环正确：checkout 因拿不到报价而进入 DEGRADED 降级模式。",
+      "第四环正确：降级后用固定兜底价继续服务该订单，对应开关 pricing_fallback_v2。"
+    ],
+    "threshold": 0.7
+  }
+}

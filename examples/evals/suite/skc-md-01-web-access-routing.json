@@ -1,0 +1,19 @@
+{
+  "name": "skc-md-01-web-access-routing",
+  "prompt": "本工作区提供内置技能 web-access。请先调用 load_skill 加载它，然后读取以下两个文件——它们是两次网页抓取的模拟结果：\n1. examples/evals/suite/fixtures/skill-compliance/fetch-result-alpha.txt（页面 A）\n2. examples/evals/suite/fixtures/skill-compliance/fetch-result-beta.txt（页面 B）\n请完全按照该技能的规定逐页判断：每一页各适合用技能中规定的哪一种工具继续处理、判断依据是技能里的哪条规则；对不满足直接采用条件的页面，说明技能规定的后续做法与禁止事项。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 5,
+    "required_tools": ["load_skill", "read_file"],
+    "final_contains": ["web_fetch", "Chrome DevTools MCP"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"]
+  },
+  "judge": {
+    "rubric": [
+      "页面 A 被判定为无需登录的公开静态页，对应技能规定的静态页抓取工具 web_fetch",
+      "页面 B 被判定为空渲染且依赖登录态与 JS 渲染，按技能要求切换到 Chrome DevTools MCP",
+      "明确指出对页面 B 禁止凭空猜测或编造内容",
+      "每个判断都给出了技能原文中的对应规则作为依据"
+    ],
+    "threshold": 0.7
+  }
+}

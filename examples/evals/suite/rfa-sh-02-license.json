@@ -1,0 +1,9 @@
+{
+  "name": "rfa-sh-02-license",
+  "prompt": "这是一次无人值守的只读评测。请用只读工具分别查看工作区根目录 pyproject.toml 的 license 字段与 README.md 末尾的 License 小节，回答两处声明的许可证标识各是什么、两处是否一致，并在回答中写出该许可证标识的原文。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 3,
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "final_contains": ["AGPL-3.0-only"]
+  }
+}

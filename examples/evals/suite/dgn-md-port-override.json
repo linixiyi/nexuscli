@@ -1,0 +1,10 @@
+{
+  "name": "dgn-md-port-override",
+  "prompt": "这是一次无人值守的只读诊断评测。edge 服务发布时健康探测全部失败、发布中止。现象记录在 examples/evals/suite/fixtures/diagnosis/deploy-edge.log，对应配置文件是 examples/evals/suite/fixtures/diagnosis/edge-service.ini。请分别用 read_file 读取这两个文件，交叉比对后回答：1) 两个语义相同（都表示监听端口）、却各自被不同环节使用的配置键名（原样写出）；2) 说明实际监听地址与探测目标地址分别由哪个键决定、探测为何被拒绝。不要修改任何文件。",
+  "assertions": {
+    "required_tools": ["read_file"],
+    "final_contains": ["listen_port", "bind_port"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 5
+  }
+}

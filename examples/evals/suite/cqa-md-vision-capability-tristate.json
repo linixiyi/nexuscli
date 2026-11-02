@@ -1,0 +1,20 @@
+{
+  "name": "cqa-md-vision-capability-tristate",
+  "prompt": "本项目如何判断当前模型能不能接收图片输入（视觉能力）？请阅读 src/nexuscli/llm/model_profiles.py 里 ModelProfile 的 vision 字段定义，并追踪它在 src/nexuscli/llm/factory.py 与 src/nexuscli/llm/openai_compatible.py 里如何被消费，解释这个字段的取值含义、取值来源与回落逻辑，并说明为什么不能只按模型名字来判断视觉能力。",
+  "assertions": {
+    "forbidden_tools": [
+      "bash",
+      "write_file",
+      "edit_file"
+    ],
+    "max_turns": 5
+  },
+  "judge": {
+    "rubric": [
+      "指出视觉能力字段是三态 bool | None（ModelProfile.vision / 配置 llm.vision / 客户端的 vision_capable 同构）：True/False 是显式判定，None 表示未声明，而不是「不支持」",
+      "指出取值来源：网关 listing 的 capabilities.vision（/model 选中模型时回填），或用户在 llm.vision 上的显式覆盖",
+      "指出回落逻辑：字段为 None 时才按模型名的启发式判断（名字含 vision/image/5v/vl 等标记，glm/zhipu 供应商再看 5v）；字段非 None 时直接生效、优先于名字判断——即按能力字段判定而非模型名，避免名字门槛误判"
+    ],
+    "threshold": 0.7
+  }
+}

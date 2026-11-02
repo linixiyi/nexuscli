@@ -1,0 +1,10 @@
+{
+  "name": "dgn-sh-db-refused",
+  "prompt": "这是一次无人值守的只读诊断评测。payments 服务启动后立即退出。请用 read_file 读取 examples/evals/suite/fixtures/diagnosis/app-payments.log，找出直接导致服务退出的那一行报错（忽略无关的警告噪音），并在最终回复中：1) 原样引用该行的异常类名；2) 原样引用该行中出现的目标地址（host:port）。不要修改任何文件。",
+  "assertions": {
+    "required_tools": ["read_file"],
+    "final_contains": ["ConnectionError", "10.20.0.7:5432"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 3
+  }
+}

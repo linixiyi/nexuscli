@@ -1,0 +1,9 @@
+{
+  "name": "rfa-sh-01-project-name",
+  "prompt": "这是一次无人值守的只读评测。请用只读工具查看工作区根目录的 pyproject.toml，回答 [project] 段的 name 字段取值是什么，并在回答中写出该取值的原文。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 3,
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "final_contains": ["nexuscli"]
+  }
+}

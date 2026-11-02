@@ -1,0 +1,16 @@
+{
+  "name": "skc-lg-01-incident-dispatch",
+  "prompt": "运维值班规程位于 examples/evals/suite/fixtures/skill-compliance/ops-runbook.md。同目录的 incident-log.md 中恰好有一条状态为未关闭的告警。请严格按该规程的全部步骤处理这条告警，最终答复只输出规程要求的规范报告，不要附加任何解释或额外内容。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 8,
+    "required_tools": ["read_file"],
+    "final_contains": [
+      "INC-2041",
+      "SEVERITY: SEV-1",
+      "ACTION: page-oncall-immediately",
+      "ESCALATED: yes",
+      "Chen Yu"
+    ],
+    "forbidden_tools": ["bash", "write_file", "edit_file"]
+  }
+}

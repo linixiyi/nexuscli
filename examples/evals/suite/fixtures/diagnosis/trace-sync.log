@@ -1,0 +1,14 @@
+2026-10-30 03:00:00.012 INFO  inventory.sync: nightly stock sync starting, upstream=warehouse-api
+2026-10-30 03:00:00.100 WARN  inventory.sync: warehouse-api answered 503 (maintenance window), starting retry loop
+2026-10-30 03:00:00.101 INFO  inventory.sync: retry 1/5 scheduled after 0 ms
+2026-10-30 03:00:00.150 WARN  inventory.sync: retry 1/5 failed: HTTP 503
+2026-10-30 03:00:00.151 INFO  inventory.sync: retry 2/5 scheduled after 0 ms
+2026-10-30 03:00:00.210 WARN  inventory.sync: retry 2/5 failed: HTTP 503
+2026-10-30 03:00:00.211 INFO  inventory.sync: retry 3/5 scheduled after 0 ms
+2026-10-30 03:00:00.270 WARN  inventory.sync: retry 3/5 failed: HTTP 503
+2026-10-30 03:00:00.271 INFO  inventory.sync: retry 4/5 scheduled after 0 ms
+2026-10-30 03:00:00.330 ERROR inventory.sync: retry 4/5 rejected: HTTP 429 RATE_LIMITED (client hammering, throttle engaged)
+2026-10-30 03:00:00.331 INFO  inventory.sync: retry 5/5 scheduled after 0 ms
+2026-10-30 03:00:00.390 ERROR inventory.sync: retry 5/5 rejected: HTTP 429 RATE_LIMITED
+2026-10-30 03:00:00.391 ERROR inventory.sync: sync aborted, 5120 items pending in queue (max_pending=200 exceeded)
+2026-10-30 03:00:00.392 WARN  inventory.sync: falling back to stale local stock, staleness=26h

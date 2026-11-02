@@ -1,0 +1,10 @@
+{
+  "name": "ext-sh-metrics-maxchurn-revenue",
+  "prompt": "这是一次无人值守的只读评测。请读取仓库根目录下的 examples/evals/suite/fixtures/extraction/metrics.csv，找出 churned_users 一列中数值最大的那一行，然后在最终回复中给出该行的 month 值、region 值和 revenue_usd 值。三个值都必须与文件中的原始写法完全一致（不要改写、不要增删千位分隔符）。不要修改任何文件。",
+  "assertions": {
+    "final_contains": ["2026-03", "north", "12,208"],
+    "required_tools": ["read_file"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 3
+  }
+}
