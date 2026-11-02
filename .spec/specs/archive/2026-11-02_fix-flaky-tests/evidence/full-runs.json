@@ -1,0 +1,50 @@
+[
+  {
+    "run": 1,
+    "log": "run-1.log",
+    "exit": 0,
+    "start_epoch": 1793626285.5,
+    "end_epoch": 1793626701.879,
+    "wall_seconds": 416.38,
+    "start_local": "2026-11-02 21:31:25",
+    "end_local": "2026-11-02 21:38:21",
+    "summary": "1614 passed, 2 skipped in 415.85s (0:06:55)",
+    "command": "uv run --extra dev python -m pytest"
+  },
+  {
+    "run": 2,
+    "log": "run-2.log",
+    "exit": 0,
+    "start_epoch": 1793626705.569,
+    "end_epoch": 1793627121.708,
+    "wall_seconds": 416.14,
+    "start_local": "2026-11-02 21:38:25",
+    "end_local": "2026-11-02 21:45:21",
+    "summary": "1614 passed, 2 skipped in 415.72s (0:06:55)",
+    "command": "uv run --extra dev python -m pytest"
+  },
+  {
+    "run": 3,
+    "log": "run-3.log",
+    "exit": 0,
+    "start_epoch": 1793627127.767,
+    "end_epoch": 1793627543.679,
+    "wall_seconds": 415.91,
+    "start_local": "2026-11-02 21:45:27",
+    "end_local": "2026-11-02 21:52:23",
+    "summary": "1614 passed, 2 skipped in 415.54s (0:06:55)",
+    "command": "uv run --extra dev python -m pytest"
+  },
+  {
+    "run": 4,
+    "log": "run-4.log",
+    "exit": 0,
+    "start_epoch": 1793627546.338,
+    "end_epoch": 1793627962.153,
+    "wall_seconds": 415.82,
+    "start_local": "2026-11-02 21:52:26",
+    "end_local": "2026-11-02 21:59:22",
+    "summary": "1614 passed, 2 skipped in 415.46s (0:06:55)",
+    "command": "uv run --extra dev python -m pytest"
+  }
+]

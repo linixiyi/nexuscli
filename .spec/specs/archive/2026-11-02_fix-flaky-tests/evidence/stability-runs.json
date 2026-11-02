@@ -1,0 +1,31 @@
+{
+  "runs": [
+    {
+      "exit": 0,
+      "summary": "1614 passed, 2 skipped in 415.14s (0:06:55)",
+      "log": "stability-run-1.log",
+      "wall_seconds": 415.46,
+      "start_local": "2026-11-02 22:02:41",
+      "end_local": "2026-11-02 22:09:36",
+      "command": "uv run --extra dev python -m pytest"
+    },
+    {
+      "exit": 0,
+      "summary": "1614 passed, 2 skipped in 415.01s (0:06:55)",
+      "log": "stability-run-2.log",
+      "wall_seconds": 415.36,
+      "start_local": "2026-11-02 22:09:39",
+      "end_local": "2026-11-02 22:16:34",
+      "command": "uv run --extra dev python -m pytest"
+    },
+    {
+      "exit": 0,
+      "summary": "1614 passed, 2 skipped in 414.52s (0:06:54)",
+      "log": "stability-run-3.log",
+      "wall_seconds": 414.86,
+      "start_local": "2026-11-02 22:16:38",
+      "end_local": "2026-11-02 22:23:33",
+      "command": "uv run --extra dev python -m pytest"
+    }
+  ]
+}
