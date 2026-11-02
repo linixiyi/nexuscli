@@ -1,0 +1,10 @@
+{
+  "name": "ext-md-notes-owner-deadline",
+  "prompt": "这是一次无人值守的只读评测。请读取仓库根目录下的 examples/evals/suite/fixtures/extraction/meeting-notes.md，在行动项清单中找到标题为「供应商合同续签条款复核」的行动项。行动项表中的负责人列使用两字母别名，请先对照纪要开头的「与会者与别名对照」表把别名还原为全名。在最终回复中给出：该行动项负责人的全名，以及该行动项的截止日期（YYYY-MM-DD 格式）。不要修改任何文件。",
+  "assertions": {
+    "final_contains": ["周蕾", "2026-11-13"],
+    "required_tools": ["read_file"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 5
+  }
+}

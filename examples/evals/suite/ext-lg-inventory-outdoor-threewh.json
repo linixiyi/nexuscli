@@ -1,0 +1,18 @@
+{
+  "name": "ext-lg-inventory-outdoor-threewh",
+  "prompt": "这是一次无人值守的只读评测。examples/evals/suite/fixtures/extraction/inventory.json 记录了华东三方仓网络 2026-10-31 的库存快照，qty 为在库件数（单位：件）。请统计 code 为 SHA-01、HZN-02、SUZ-03 的三个仓库中 category 为 outdoor 的全部 SKU 的 qty 合计，注意不要把 TZW-04 计入。在最终回复中：1) 分别给出三个仓库各自的 outdoor 小计；2) 写出三个小计相加的算式；3) 给出总件数，总数必须写成千位分隔符形式（每三位用逗号分组，例如 1,234）。不要修改任何文件。",
+  "assertions": {
+    "final_contains": ["5,424"],
+    "required_tools": ["read_file"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 8
+  },
+  "judge": {
+    "rubric": [
+      "统计范围正确：只计 SHA-01、HZN-02、SUZ-03 三个仓库的 outdoor 品类，没有把 TZW-04 或其他品类的数量计入",
+      "三个分仓小计与文件中的逐 SKU 明细一致，且按仓库分别列出",
+      "加法算式与给出的总数自洽，最终总数等于 5424"
+    ],
+    "threshold": 0.7
+  }
+}

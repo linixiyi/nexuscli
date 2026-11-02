@@ -1,0 +1,9 @@
+{
+  "name": "rfa-md-02-function-census",
+  "prompt": "这是一次无人值守的只读评测。目录 examples/evals/suite/fixtures/repo-facts/minilog 是一个待清点的迷你 Python 包。请分别查看其中的 reader.py 与 parser.py 两个文件，逐个列出两个文件各自定义的全部顶层函数名（def 关键字后面的名字），并用一句中文说明这两个文件合计定义了几个顶层函数。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 5,
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "final_contains": ["read_log_file", "split_lines", "parse_header", "parse_entry"]
+  }
+}

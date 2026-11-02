@@ -1,0 +1,7 @@
+2026-10-30 11:40:00 INFO  scheduler.main: booting scheduler v2.4.1
+2026-10-30 11:40:00 INFO  scheduler.main: loaded 8 jobs from jobs.d/
+2026-10-30 11:40:00 WARN  scheduler.config: no explicit pidfile configured
+2026-10-30 11:40:01 INFO  scheduler.metrics: metrics endpoint binding 0.0.0.0:9109
+2026-10-30 11:40:01 ERROR scheduler.metrics: OSError: [Errno 98] bind 0.0.0.0:9109 failed: address already in use
+2026-10-30 11:40:01 INFO  scheduler.main: previous instance pid=2179 still running (started 2026-10-30 10:02:33)
+2026-10-30 11:40:01 INFO  scheduler.main: giving up after 1 bind attempt

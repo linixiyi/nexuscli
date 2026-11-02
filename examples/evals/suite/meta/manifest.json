@@ -1,0 +1,880 @@
+{
+  "language": "zh",
+  "categories": [
+    "codebase-qa",
+    "repo-facts",
+    "diagnosis",
+    "skill-compliance",
+    "extraction"
+  ],
+  "scenarios": [
+    {
+      "id": "cqa-sh-pyproject-name-license",
+      "category": "codebase-qa",
+      "difficulty": "short",
+      "summary": "读仓库根 pyproject.toml，回答项目名称与元数据段声明的许可证。",
+      "source_rationale": "仓库稳定事实：pyproject.toml 的 name 与 license 字段是本仓库亲读核实的稳定锚点，覆盖代码库问答对项目元数据的定位能力。",
+      "anchor_type": "repo-stable",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 3,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "nexuscli",
+          "AGPL-3.0-only"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 11822,
+        "turns": 2
+      }
+    },
+    {
+      "id": "cqa-sh-fixture-token-issuer",
+      "category": "codebase-qa",
+      "difficulty": "short",
+      "summary": "读自建 token_issuer.py 模块，推演 issue_token(\"deploy\") 使用默认 expire_hours 时返回的完整令牌字符串。",
+      "source_rationale": "自建 fixture 覆盖静态代码推演能力：默认参数展开与字符串拼接求值，锚点经 python3 实跑 issue_token('deploy') 推导确认。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 3,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "tok-v3-deploy|24h-de10"
+        ]
+      },
+      "calibration": {
+        "status": "fail",
+        "tokens": 17707,
+        "turns": 3
+      },
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+    },
+    {
+      "id": "cqa-md-real-readonly-whitelist",
+      "category": "codebase-qa",
+      "difficulty": "medium",
+      "summary": "读 src/nexuscli/eval/real.py，回答 real 轨无人值守工具白名单的内容、挑选方式与白名单外工具的处理。",
+      "source_rationale": "仓库稳定事实：REAL_TRACK_TOOLS 白名单及 deny 优先处理是 src/nexuscli/eval/real.py:96-113/:409-411 的实读结论，开放式三问以 judge rubric 评分。",
+      "anchor_type": "judge",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 5,
+        "required_tools": [],
+        "judge_threshold": 0.7
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 27211,
+        "turns": 3
+      }
+    },
+    {
+      "id": "cqa-md-vision-capability-tristate",
+      "category": "codebase-qa",
+      "difficulty": "medium",
+      "summary": "追踪 ModelProfile.vision 字段的取值含义（bool|None 三态）、来源（capabilities.vision）与回落逻辑，解释为何不能按模型名判断视觉能力。",
+      "source_rationale": "仓库稳定事实：视觉能力三态开关是 model_profiles.py:25-27、config.py:34-37、openai_compatible.py:215-232 的实读结论，以 judge rubric 评三态语义与回落逻辑。",
+      "anchor_type": "judge",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 5,
+        "required_tools": [],
+        "judge_threshold": 0.7
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 91880,
+        "turns": 5
+      }
+    },
+    {
+      "id": "cqa-lg-memory-recall-signal-chain",
+      "category": "codebase-qa",
+      "difficulty": "long",
+      "summary": "追踪 search_memory 工具从 builtins 处理器到记忆信号模块的完整调用链，说明默认装载的信号类与最终得分的组成部分。",
+      "source_rationale": "仓库稳定事实：_search_memory→MemoryManager.recall→content_scores 链路与信号配置是 tools/builtins.py:931-966、memory/manager.py:216-292/:773-808、memory/signals.py:39-73 的实读结论，以 judge rubric 评链路追踪。",
+      "anchor_type": "judge",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 8,
+        "required_tools": [],
+        "judge_threshold": 0.6
+      },
+      "calibration": {
+        "status": "fail",
+        "tokens": 271740,
+        "turns": 13
+      },
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+    },
+    {
+      "id": "cqa-lg-load-skill-layered-chain",
+      "category": "codebase-qa",
+      "difficulty": "long",
+      "summary": "追踪 load_skill 的实现链路：full/overview 语义、内容注入途径、用量记录落点与 L0/L1/L2 三层划分。",
+      "source_rationale": "仓库稳定事实：_load_skill→SkillRegistry.load→skill_context_buffer/SkillStateStore 链路与 L0/L1/L2 分层是 tools/builtins.py:979-1036、skill/registry.py:47-57/:165-215/:458-475 的实读结论，以 judge rubric 评四点链路还原。",
+      "anchor_type": "judge",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 8,
+        "required_tools": [],
+        "judge_threshold": 0.6
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 171840,
+        "turns": 8
+      }
+    },
+    {
+      "id": "rfa-sh-01-project-name",
+      "category": "repo-facts",
+      "difficulty": "short",
+      "summary": "只读查看 pyproject.toml，回答 [project] 段 name 字段的原文取值。",
+      "source_rationale": "仓库稳定事实：pyproject.toml:2 的 name=nexuscli 经亲读核实，覆盖最小只读事实问答。",
+      "anchor_type": "repo-stable",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 3,
+        "required_tools": [],
+        "final_contains": [
+          "nexuscli"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 12028,
+        "turns": 2
+      }
+    },
+    {
+      "id": "rfa-sh-02-license",
+      "category": "repo-facts",
+      "difficulty": "short",
+      "summary": "只读查看 pyproject.toml license 字段与 README License 小节，回答两处许可证标识并核对一致。",
+      "source_rationale": "仓库稳定事实：AGPL-3.0-only 在 pyproject.toml:7 与 README.md License 小节双处声明，经亲读核实。",
+      "anchor_type": "repo-stable",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 3,
+        "required_tools": [],
+        "final_contains": [
+          "AGPL-3.0-only"
+        ]
+      },
+      "calibration": {
+        "status": "fail",
+        "tokens": 33550,
+        "turns": 5
+      },
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+    },
+    {
+      "id": "rfa-md-01-todo-census",
+      "category": "repo-facts",
+      "difficulty": "medium",
+      "summary": "清点自建 minilog 包全部 .py 文件中的 TODO 注释：总数与逐文件分布。",
+      "source_rationale": "自建 fixture 覆盖跨文件清点统计能力：minilog 包内容冻结，TODO 计数 5 条经 grep -c 实测。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 5,
+        "required_tools": [],
+        "final_contains": [
+          "5 TODO comments"
+        ]
+      },
+      "calibration": {
+        "status": "fail",
+        "tokens": 24360,
+        "turns": 4
+      },
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+    },
+    {
+      "id": "rfa-md-02-function-census",
+      "category": "repo-facts",
+      "difficulty": "medium",
+      "summary": "列出自建 minilog 包 reader.py 与 parser.py 各自定义的全部顶层函数名并合计数目。",
+      "source_rationale": "自建 fixture 覆盖函数定义清点能力：reader/parser 各 2 个顶层 def 经 grep \"^def \" 实测。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 5,
+        "required_tools": [],
+        "final_contains": [
+          "read_log_file",
+          "split_lines",
+          "parse_header",
+          "parse_entry"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 11763,
+        "turns": 2
+      }
+    },
+    {
+      "id": "rfa-lg-01-import-graph",
+      "category": "repo-facts",
+      "difficulty": "long",
+      "summary": "梳理自建 minilog 包内模块间导入关系：逐模块列出导入来源与被导入名字，总结依赖链顺序。",
+      "source_rationale": "自建 fixture 覆盖导入关系梳理能力：7 个被导入名字覆盖 minilog __init__/parser/stats/format 的全部相对导入。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 8,
+        "required_tools": [],
+        "final_contains": [
+          "read_log_file",
+          "split_lines",
+          "parse_header",
+          "parse_entry",
+          "count_levels",
+          "top_messages",
+          "render_table"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 19639,
+        "turns": 3
+      }
+    },
+    {
+      "id": "rfa-lg-02-call-chain",
+      "category": "repo-facts",
+      "difficulty": "long",
+      "summary": "找出自建 minilog 包内最深的一条本地函数调用链，按序列出链上函数并逐个说明职责。",
+      "source_rationale": "自建 fixture 覆盖调用链分析能力：唯一最深链 render_table→count_levels→parse_entry→parse_header→split_lines 经 AST+运行时实证。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 8,
+        "required_tools": [],
+        "final_contains": [
+          "render_table",
+          "count_levels",
+          "parse_entry",
+          "parse_header",
+          "split_lines"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 26490,
+        "turns": 4
+      }
+    },
+    {
+      "id": "dgn-sh-db-refused",
+      "category": "diagnosis",
+      "difficulty": "short",
+      "summary": "读 app-payments.log，从警告噪音中定位导致服务退出的数据库拒连报错行，引用异常类名与目标地址。",
+      "source_rationale": "自建 fixture 覆盖单文件日志根因定位能力：app-payments.log 为冻结的单一报错+噪音行构造。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 3,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "ConnectionError",
+          "10.20.0.7:5432"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 11911,
+        "turns": 2
+      }
+    },
+    {
+      "id": "dgn-sh-port-conflict",
+      "category": "diagnosis",
+      "difficulty": "short",
+      "summary": "读 app-scheduler.log，判断启动失败原因：引用系统级错误短语、绑定地址并结合旧实例线索给出根因。",
+      "source_rationale": "自建 fixture 覆盖端口占用+旧实例线索的单文件诊断能力：app-scheduler.log 为冻结构造。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 3,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "address already in use",
+          "0.0.0.0:9109"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 11802,
+        "turns": 2
+      }
+    },
+    {
+      "id": "dgn-md-timeout-units",
+      "category": "diagnosis",
+      "difficulty": "medium",
+      "summary": "交叉比对 orders-service.ini 与 deploy-orders.log，找出因单位语义不一致而冲突的两个配置键，并解释回滚因果。",
+      "source_rationale": "自建 fixture 覆盖双文件交叉比对单位语义冲突的诊断能力：SECONDS 注释与毫秒生效的矛盾为冻结构造。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 5,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "request_timeout",
+          "upstream_read_timeout"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 13772,
+        "turns": 2
+      }
+    },
+    {
+      "id": "dgn-md-port-override",
+      "category": "diagnosis",
+      "difficulty": "medium",
+      "summary": "交叉比对 edge-service.ini 与 deploy-edge.log，找出语义相同的两个端口配置键，说明实际监听与探测目标分别由哪个键决定。",
+      "source_rationale": "自建 fixture 覆盖配置键覆盖导致探测失败的交叉诊断能力：listen_port 被 bind_port 覆盖为冻结构造。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 5,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "listen_port",
+          "bind_port"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 14027,
+        "turns": 2
+      }
+    },
+    {
+      "id": "dgn-lg-pricing-degrade",
+      "category": "diagnosis",
+      "difficulty": "long",
+      "summary": "跨 trace-checkout.log 与 pricing-gateway.log 还原 checkout 降级完整因果链，每环引用日志关键短语作证。",
+      "source_rationale": "自建 fixture 覆盖跨文件长因果链还原能力：超时→重试→配额耗尽→降级→兜底价为冻结构造，judge 按因果链步骤给分。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 8,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "attempt 3/3",
+          "RATE_LIMITED",
+          "120/120",
+          "DEGRADED",
+          "pricing_fallback_v2"
+        ],
+        "judge_threshold": 0.7
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 20828,
+        "turns": 2
+      }
+    },
+    {
+      "id": "dgn-lg-retry-storm",
+      "category": "diagnosis",
+      "difficulty": "long",
+      "summary": "跨 trace-sync.log 与 retry-policy.ini 还原重试风暴→限流→积压超限→陈旧回落的因果链，并指出放大故障的两个参数名。",
+      "source_rationale": "自建 fixture 覆盖零间隔重试风暴与队列积压的因果链还原能力：trace-sync.log+retry-policy.ini 为冻结构造，judge 按因果链步骤给分。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 8,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "attempts",
+          "backoff_ms",
+          "429 RATE_LIMITED",
+          "max_pending",
+          "staleness=26h"
+        ],
+        "judge_threshold": 0.7
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 17068,
+        "turns": 2
+      }
+    },
+    {
+      "id": "skc-sh-01-rule-demo-follow",
+      "category": "skill-compliance",
+      "difficulty": "short",
+      "summary": "load_skill 加载 rule-demo 技能并严格按其格式规则作答，输出单行格式标记。",
+      "source_rationale": "仓库稳定事实：锚点 SKILL-RULE-OK 来自仓库既有技能 .agents/skills/rule-demo/SKILL.md:15 的标记串，覆盖技能加载与格式遵从。",
+      "anchor_type": "repo-stable",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 3,
+        "required_tools": [
+          "load_skill"
+        ],
+        "final_contains": [
+          "SKILL-RULE-OK"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 10936,
+        "turns": 2
+      }
+    },
+    {
+      "id": "skc-sh-02-rule-demo-conflict",
+      "category": "skill-compliance",
+      "difficulty": "short",
+      "summary": "加载 rule-demo 技能后面对与之冲突的临时刻意要求（三个要点多行），以技能规则为准输出单行答复。",
+      "source_rationale": "仓库稳定事实：锚点 SKILL-RULE-OK 来自仓库既有技能 rule-demo，覆盖技能与冲突指令的优先级合规，judge 兜底格式细节。",
+      "anchor_type": "repo-stable",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 3,
+        "required_tools": [
+          "load_skill"
+        ],
+        "final_contains": [
+          "SKILL-RULE-OK"
+        ],
+        "judge_threshold": 0.7
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 13408,
+        "turns": 2
+      }
+    },
+    {
+      "id": "skc-md-01-web-access-routing",
+      "category": "skill-compliance",
+      "difficulty": "medium",
+      "summary": "加载 web-access 技能后按其规定逐页判断两个模拟抓取结果各适合哪种工具继续处理，并说明判断依据与禁止事项。",
+      "source_rationale": "仓库稳定事实：锚点 web_fetch 与 Chrome DevTools MCP 是仓库既有技能 web-access SKILL.md:18-19 的原文工具名，覆盖技能指导下的抓取路由判断，judge 评规则引用。",
+      "anchor_type": "repo-stable",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 5,
+        "required_tools": [
+          "load_skill",
+          "read_file"
+        ],
+        "final_contains": [
+          "web_fetch",
+          "Chrome DevTools MCP"
+        ],
+        "judge_threshold": 0.7
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 21181,
+        "turns": 3
+      }
+    },
+    {
+      "id": "skc-md-02-web-access-recency",
+      "category": "skill-compliance",
+      "difficulty": "medium",
+      "summary": "加载 web-access 技能后定位并读取发布页快照 fixture，按其时效敏感规定报告版本号与发布日期并保持来源可见。",
+      "source_rationale": "自建 fixture 覆盖时效敏感问答能力：release-snapshot.txt 提供冻结快照，覆盖技能「来源与日期可见」规则的遵从，judge 评时效边界。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 5,
+        "required_tools": [
+          "load_skill",
+          "read_file"
+        ],
+        "final_contains": [
+          "v3.14.1",
+          "2026-09-30"
+        ],
+        "judge_threshold": 0.6
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 20648,
+        "turns": 3
+      }
+    },
+    {
+      "id": "skc-lg-01-incident-dispatch",
+      "category": "skill-compliance",
+      "difficulty": "long",
+      "summary": "严格按 ops-runbook 规程全部步骤处理 incident-log 中唯一未关闭告警，只输出规程要求的规范派单报告。",
+      "source_rationale": "自建 fixture 覆盖按规程多跳派单能力：runbook→calendar→incident-log→roster 四文件为冻结构造，锚点为精确格式串与派生值（7.2%≥5%⇒SEV-1、21:40⇒16:00-24:00 班次）。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 8,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "INC-2041",
+          "SEVERITY: SEV-1",
+          "ACTION: page-oncall-immediately",
+          "ESCALATED: yes",
+          "Chen Yu"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 35034,
+        "turns": 5
+      }
+    },
+    {
+      "id": "skc-lg-02-freeze-abort",
+      "category": "skill-compliance",
+      "difficulty": "long",
+      "summary": "按 ops-runbook 规程处理 2026-11-02 21:05 checkout-api 告警：处于生效变更冻结期，合规输出 ABORT 中止报告而非处置报告。",
+      "source_rationale": "自建 fixture 覆盖冻结期合规中止判断能力：runbook→calendar 跨文件为冻结构造，锚点 FRZ-118 等格式串出自 fixture，judge 兜底不得给出处置动作。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 8,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "STATUS: ABORT",
+          "REASON: change-freeze",
+          "FRZ-118"
+        ],
+        "judge_threshold": 0.7
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 26987,
+        "turns": 3
+      }
+    },
+    {
+      "id": "ext-sh-metrics-maxchurn-revenue",
+      "category": "extraction",
+      "difficulty": "short",
+      "summary": "读 metrics.csv 找出 churned_users 最大的行，原样给出该行 month、region、revenue_usd 三个值。",
+      "source_rationale": "自建 fixture 覆盖表格取数与原文保真抽取能力：metrics.csv 7 行以千位分隔符风格冻结存储。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 3,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "2026-03",
+          "north",
+          "12,208"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 10901,
+        "turns": 2
+      }
+    },
+    {
+      "id": "ext-sh-metrics-cell-newusers",
+      "category": "extraction",
+      "difficulty": "short",
+      "summary": "读 metrics.csv 定位 month=2026-02 且 region=south 的行，原样给出 new_users 值（保留千位分隔符）。",
+      "source_rationale": "自建 fixture 覆盖单格定位与千位分隔符原文保真能力：metrics.csv 冻结存储。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 3,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "1,122"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 11017,
+        "turns": 2
+      }
+    },
+    {
+      "id": "ext-md-notes-owner-deadline",
+      "category": "extraction",
+      "difficulty": "medium",
+      "summary": "在 meeting-notes.md 行动项清单中按标题定位行动项，经别名对照表还原负责人全名并给出截止日期。",
+      "source_rationale": "自建 fixture 覆盖别名表→行动项的跨区解析能力：meeting-notes.md 564 行冻结存储，别名表与行动表被 500 行分页上限物理分开。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 5,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "周蕾",
+          "2026-11-13"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 38558,
+        "turns": 3
+      }
+    },
+    {
+      "id": "ext-md-notes-owner-items",
+      "category": "extraction",
+      "difficulty": "medium",
+      "summary": "经别名对照表把别名 CM 还原为全名，聚齐该负责人名下全部行动项的编号与截止日期。",
+      "source_rationale": "自建 fixture 覆盖别名→多行动项聚合抽取能力：meeting-notes.md 冻结存储，四个锚点日期各恰好出现 1 次。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": false,
+        "max_turns": 5,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "陈默",
+          "2026-11-07",
+          "2026-11-21",
+          "2026-11-30"
+        ]
+      },
+      "calibration": {
+        "status": "pass",
+        "tokens": 38659,
+        "turns": 3
+      }
+    },
+    {
+      "id": "ext-lg-inventory-outdoor-threewh",
+      "category": "extraction",
+      "difficulty": "long",
+      "summary": "在 inventory.json 中统计指定三仓 outdoor 品类 qty 合计（排除 TZW-04），给出分仓小计、算式与千位分隔符总数。",
+      "source_rationale": "自建 fixture 覆盖跨仓品类汇总计算能力：inventory.json 1098 行冻结存储，总数 5,424 须计算得出（不存在于原文），judge 评算式自洽。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 8,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "5,424"
+        ],
+        "judge_threshold": 0.7
+      },
+      "calibration": {
+        "status": "fail",
+        "tokens": 50772,
+        "turns": 4
+      },
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+    },
+    {
+      "id": "ext-lg-inventory-kitchen-available",
+      "category": "extraction",
+      "difficulty": "long",
+      "summary": "在 inventory.json 中统计全部四仓 kitchen 品类可用件数（qty−reserved 逐 SKU 相减后汇总），给出小计、算式与总数。",
+      "source_rationale": "自建 fixture 覆盖逐 SKU 计算汇总能力：inventory.json 冻结存储，总数 7,504 须计算得出（不存在于原文），judge 评算法正确性与铺货缺失处理。",
+      "anchor_type": "fixture",
+      "assertions": {
+        "forbidden": [
+          "bash",
+          "write_file",
+          "edit_file"
+        ],
+        "has_judge": true,
+        "max_turns": 8,
+        "required_tools": [
+          "read_file"
+        ],
+        "final_contains": [
+          "7,504"
+        ],
+        "judge_threshold": 0.7
+      },
+      "calibration": {
+        "status": "fail",
+        "tokens": 73643,
+        "turns": 5
+      },
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+    }
+  ]
+}

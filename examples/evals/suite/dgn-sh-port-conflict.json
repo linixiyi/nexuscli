@@ -1,0 +1,10 @@
+{
+  "name": "dgn-sh-port-conflict",
+  "prompt": "这是一次无人值守的只读诊断评测。scheduler 本次启动失败。请用 read_file 读取 examples/evals/suite/fixtures/diagnosis/app-scheduler.log，判断失败原因，并在最终回复中：1) 原样引用报错行里的系统级错误短语；2) 原样引用绑定失败的地址；3) 结合日志中关于旧实例的线索，用一句话说明根本原因。不要修改任何文件。",
+  "assertions": {
+    "required_tools": ["read_file"],
+    "final_contains": ["address already in use", "0.0.0.0:9109"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 3
+  }
+}

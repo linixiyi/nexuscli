@@ -1,0 +1,19 @@
+[web 快照模拟] 抓取结果（页面 A）
+URL: https://docs.example.com/guides/getting-started
+HTTP 200 · Content-Type: text/html · 服务端完整渲染 · 无需登录
+
+# Getting Started
+
+Welcome to the Aurora documentation. This guide page is fully rendered on
+the server: every section below is present in the returned HTML.
+
+## Installation
+Install the CLI with your package manager, then run `aurora init`.
+
+## Configuration
+All settings live in aurora.config.yaml; see the configuration reference
+for every supported key.
+
+## FAQ
+Q: Is this page behind a login?
+A: No. It is a public documentation page; no session or cookie is required.

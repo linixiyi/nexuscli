@@ -1,0 +1,18 @@
+{
+  "name": "ext-lg-inventory-kitchen-available",
+  "prompt": "这是一次无人值守的只读评测。examples/evals/suite/fixtures/extraction/inventory.json 记录了华东三方仓网络 2026-10-31 的库存快照，qty 为在库件数，reserved 为已锁定件数（单位：件）。请统计全部四个仓库中 category 为 kitchen 的全部 SKU 的可用件数合计，可用件数 = qty − reserved（逐 SKU 相减后汇总，不要用 qty 或 reserved 单独求和）。在最终回复中：1) 分别给出四个仓库各自的可用小计；2) 写出四个小计相加的算式；3) 给出可用件数总数，总数必须写成千位分隔符形式（每三位用逗号分组，例如 1,234）。不要修改任何文件。",
+  "assertions": {
+    "final_contains": ["7,504"],
+    "required_tools": ["read_file"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 8
+  },
+  "judge": {
+    "rubric": [
+      "对每个 kitchen 品类的 SKU 使用 qty 减去 reserved 计算可用件数，而不是把 qty 或 reserved 单独求和",
+      "覆盖全部四个仓库；某些仓库未铺货的 kitchen SKU（文件中没有对应条目）不计入，也不虚加",
+      "四个分仓小计正确且加法算式与给出的总数自洽，最终总数等于 7504"
+    ],
+    "threshold": 0.7
+  }
+}

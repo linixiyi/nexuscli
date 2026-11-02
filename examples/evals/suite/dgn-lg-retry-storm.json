@@ -1,0 +1,19 @@
+{
+  "name": "dgn-lg-retry-storm",
+  "prompt": "这是一次无人值守的只读诊断评测。inventory 夜间库存在 2026-10-30 03:00 同步失败并回落到陈旧数据。请分别用 read_file 读取 examples/evals/suite/fixtures/diagnosis/trace-sync.log 与 examples/evals/suite/fixtures/diagnosis/retry-policy.ini，还原完整因果链：从上游返回 503 开始，到零间隔重试风暴、被限流、同步中止、队列积压超限、最终回落陈旧库存为止，按发生顺序分步说明；每一环都必须原样引用一条日志或配置中的关键片段作为证据，不要改写这些片段。最后指出重试策略文件里把这次故障放大的两个参数名（原样写出）。不要修改任何文件。",
+  "assertions": {
+    "required_tools": ["read_file"],
+    "final_contains": ["attempts", "backoff_ms", "429 RATE_LIMITED", "max_pending", "staleness=26h"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 8
+  },
+  "judge": {
+    "rubric": [
+      "第一环正确：上游 warehouse-api 返回 503（维护窗口）是整个故障的触发源。",
+      "第二环正确：重试策略 attempts=5 且 backoff_ms=0，五次重试零间隔连发形成重试风暴，第 4、5 次重试被上游以 429 限流拒绝。",
+      "第三环正确：同步中止后 5120 个条目积压在队列，超过 max_pending=200 的上限。",
+      "第四环正确：最终回落到本地陈旧库存，staleness=26h。"
+    ],
+    "threshold": 0.7
+  }
+}

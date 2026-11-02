@@ -1,0 +1,19 @@
+{
+  "name": "skc-lg-02-freeze-abort",
+  "prompt": "运维值班规程位于 examples/evals/suite/fixtures/skill-compliance/ops-runbook.md。2026-11-02 21:05，checkout-api 服务出现一批请求超时与错误率上升的告警。请严格按该规程的全部步骤处理这次告警，最终答复只输出规程要求的报告，不要附加任何解释或额外内容。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 8,
+    "required_tools": ["read_file"],
+    "final_contains": ["STATUS: ABORT", "REASON: change-freeze", "FRZ-118"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"]
+  },
+  "judge": {
+    "rubric": [
+      "在给出任何处置前，先按规程第 0 步查询了变更冻结日历",
+      "输出的是 ABORT 中止报告，而不是任何分级处置报告",
+      "中止报告指明了冻结编号 FRZ-118 与服务 checkout-api",
+      "没有给出任何处置动作、升级或排班建议"
+    ],
+    "threshold": 0.7
+  }
+}

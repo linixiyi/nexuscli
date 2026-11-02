@@ -1,0 +1,9 @@
+{
+  "name": "rfa-md-01-todo-census",
+  "prompt": "这是一次无人值守的只读评测。目录 examples/evals/suite/fixtures/repo-facts/minilog 是一个待清点的迷你 Python 包。请统计其中全部 .py 文件里的 TODO 注释：总数是多少条？分布在哪些文件、每个文件各几条？请在回答末尾用英文报告总数，格式为把占位符替换成实际数字：「N TODO comments」。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 5,
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "final_contains": ["5 TODO comments"]
+  }
+}

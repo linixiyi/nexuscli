@@ -1,0 +1,21 @@
+{
+  "name": "cqa-lg-load-skill-layered-chain",
+  "prompt": "请追踪 load_skill 工具在本仓库的实现链路：模型发起一次 load_skill 调用后，请求在哪些模块里流转（工具处理器 → 技能注册表的加载与分层内容准备 → 注入与用量记录）？请阅读 src/nexuscli/tools/builtins.py 与 src/nexuscli/skill/registry.py，说明 level 参数 \"full\" 与 \"overview\" 各返回什么内容、装载好的技能内容经由什么途径进入下一轮模型上下文、使用计数是在哪一步写到哪个文件，以及 L0/L1/L2 三层分别对应什么信息。只读代码作答，不要修改任何文件。",
+  "assertions": {
+    "forbidden_tools": [
+      "bash",
+      "write_file",
+      "edit_file"
+    ],
+    "max_turns": 8
+  },
+  "judge": {
+    "rubric": [
+      "链路点名正确：tools/builtins.py 的 _load_skill 处理器调用 skill/registry.py 的 SkillRegistry.load（内含 frontmatter 解析与校验），两个文件与关键入口都要点到",
+      "full 与 overview 语义正确：overview（L1）返回摘要——显式 frontmatter overview 优先，否则由正文自动生成且带「generated from the skill body」生成标记；full 返回正文（skill.body/content），超过 5000 字符会截断并提示用 /skill show 看全文",
+      "指出注入与记账路径：内容通过 skill_context_buffer.push 进入下一轮模型上下文（而不是直接作为工具结果返回给模型）；在同一注入点调用 SkillStateStore().record_use，把 used 计数与 last_used 写到 ~/.nexuscli/usage.json（skills.json 的同级文件），记账失败被抑制、不阻塞加载",
+      "指出三层划分：L0 是候选行用的可选一句话 abstract，L1 是 overview 摘要（level=\"overview\" 返回的那层），L2 是完整正文（level=\"full\"）"
+    ],
+    "threshold": 0.6
+  }
+}

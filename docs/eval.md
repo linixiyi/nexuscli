@@ -602,6 +602,66 @@ turn budget, write attempts forbidden) and `02_repo_question_answer.json`
 run them from a checkout with `uv run nexuscli eval run --real` and expect a
 small, visible token bill in the report.
 
+### Evaluation suite (`examples/evals/suite`)
+
+The two scenarios above are wiring smoke. The evaluation suite is the real
+track's actual measurement instrument: a **self-built vertical dataset** for
+the workload this CLI exists for — repository operations and code
+comprehension inside a terminal/CLI agent. It is a fixed grid of
+**5 categories × 3 difficulties × 2 scenarios = 30 scenarios**
+(`codebase-qa`, `repo-facts`, `diagnosis`, `skill-compliance`,
+`extraction` × `short` / `medium` / `long`), and every prompt is written in
+Chinese — the language the CLI's target users operate in.
+
+Layout: the 30 scenario files sit **flat** in the suite directory (one JSON
+per scenario; the file-name prefix encodes category and difficulty, e.g.
+`cqa-sh-…`, `dgn-lg-…`), the frozen question data lives under `fixtures/`
+(one subdirectory per category), and the dataset's catalog is
+`meta/manifest.json`. `tests/test_eval_suite.py` mechanically pins this
+shape (12 checks: manifest↔file alignment, grid fullness, difficulty→
+`max_turns` mapping, answer-anchor leak guard, Chinese prompts, assertion
+mirroring).
+
+**Layout constraint — keep the manifest inside `meta/`.** Both directory
+loaders glob `*.json` **non-recursively**, so the manifest is only safe in
+a subdirectory. `examples/evals/` is the hermetic track's built-in scenario
+directory (resolved by `builtin_eval_dir()` in
+`src/nexuscli/eval/loader.py`), so `eval list` / `eval run` load every
+top-level `*.json` as a hermetic scenario: a manifest at either top level
+gets loaded as a scenario and fails loudly (observed with `eval list` on a
+top-level manifest: `unknown scenario key(s) ['categories', 'language',
+'scenarios']` — `EvalSchemaError`, exit 1), and the suite directory itself
+goes through `load_real_eval_scenarios`, which would swallow a top-level
+manifest the same way. `suite/meta/`, like `suite/fixtures/`, is outside
+both globs.
+
+The manifest records one entry per scenario — the dataset's paper trail:
+
+| field | meaning |
+| --- | --- |
+| `id` | scenario name, 1:1 with the flat JSON file stems |
+| `category` | one of the five categories, matching the file-name prefix |
+| `difficulty` | `short` / `medium` / `long`; also the `max_turns` budget (3 / 5 / 8) |
+| `summary` | one-sentence statement of what the scenario asks |
+| `source_rationale` | why the scenario made the cut — the selection criteria kept on record |
+| `anchor_type` | what the expected answer is anchored in: `fixture` (frozen data file), `repo-stable` (a fact read-verified in this repository) or `judge` (open-ended, rubric-scored) |
+| `assertions` | the scenario's assertion summary (`forbidden`, `has_judge`, `max_turns`, `required_tools`, `final_contains`, `judge_threshold`), mirrored from the scenario file |
+| `calibration` | backfilled after calibrated runs: `status`, `tokens`, `turns` (plus a `note` for observations deliberately kept) |
+
+Run the whole suite as a directory target:
+
+```bash
+nexuscli eval run --real --file examples/evals/suite
+```
+
+Calibration convention: a **FAIL is a normal component of the difficulty
+distribution** — a suite designed to probe difficulty must keep the misses
+that are genuinely hard. Triage therefore only separates two cases: a
+**scenario defect** (wrong anchor, or an answer that cannot be derived from
+the declared anchor — fix the scenario and recalibrate) versus **genuine
+difficulty** (keep the scenario as designed and record the observation via
+`calibration.note`).
+
 ## Scope and honest boundaries
 
 The two tracks split the question "how is the agent doing?" by what can be

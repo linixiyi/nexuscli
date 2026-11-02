@@ -1,0 +1,17 @@
+{
+  "name": "rfa-lg-01-import-graph",
+  "prompt": "这是一次无人值守的只读评测。目录 examples/evals/suite/fixtures/repo-facts/minilog 是一个迷你 Python 包。请通读其中全部 .py 文件，梳理包内模块间的导入关系：__init__.py 从哪些本地模块分别导入了哪些名字；parser.py、stats.py、format.py 又各自从哪个本地模块导入了哪些名字。回答需逐模块覆盖全部导入来源与被导入的名字（名字用代码原文），并用一句中文总结这条依赖链从最底层模块到最上层模块的先后顺序。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 8,
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "final_contains": [
+      "read_log_file",
+      "split_lines",
+      "parse_header",
+      "parse_entry",
+      "count_levels",
+      "top_messages",
+      "render_table"
+    ]
+  }
+}

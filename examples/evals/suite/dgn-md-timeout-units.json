@@ -1,0 +1,10 @@
+{
+  "name": "dgn-md-timeout-units",
+  "prompt": "这是一次无人值守的只读诊断评测。orders 服务部署后触发回滚。现象记录在 examples/evals/suite/fixtures/diagnosis/deploy-orders.log，对应配置文件是 examples/evals/suite/fixtures/diagnosis/orders-service.ini。请分别用 read_file 读取这两个文件，交叉比对后回答：1) 配置文件里因单位语义不一致而互相冲突、最终都作用于同一次上游调用的两个键名（原样写出）；2) 用一两句话解释这个不一致如何一步步导致重试耗尽、健康检查超时与回滚。不要修改任何文件。",
+  "assertions": {
+    "required_tools": ["read_file"],
+    "final_contains": ["request_timeout", "upstream_read_timeout"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 5
+  }
+}

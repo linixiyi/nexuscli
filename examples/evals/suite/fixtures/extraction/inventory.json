@@ -1,0 +1,1098 @@
+{
+  "network": "华东三方仓网络",
+  "snapshot_date": "2026-10-31",
+  "unit": "件",
+  "field_notes": "qty 为在库件数，reserved 为已锁定件数（已售出未出库），两者均为整数",
+  "warehouses": [
+    {
+      "code": "SHA-01",
+      "city": "上海",
+      "name": "嘉定主仓",
+      "skus": [
+        {
+          "sku": "ELC-2101",
+          "name": "无线充电底座 15W",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "JD-01-01-1",
+          "qty": 412,
+          "reserved": 37
+        },
+        {
+          "sku": "ELC-2102",
+          "name": "蓝牙降噪耳机",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "JD-01-02-2",
+          "qty": 286,
+          "reserved": 44
+        },
+        {
+          "sku": "ELC-2103",
+          "name": "智能手环 Pro",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "JD-01-03-3",
+          "qty": 534,
+          "reserved": 61
+        },
+        {
+          "sku": "ELC-2104",
+          "name": "4K 运动相机",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "JD-01-04-1",
+          "qty": 208,
+          "reserved": 19
+        },
+        {
+          "sku": "ELC-2105",
+          "name": "氮化镓 65W 快充头",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "JD-01-05-2",
+          "qty": 640,
+          "reserved": 52
+        },
+        {
+          "sku": "ELC-2106",
+          "name": "87 键机械键盘",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "JD-01-06-3",
+          "qty": 355,
+          "reserved": 28
+        },
+        {
+          "sku": "ELC-2107",
+          "name": "桌面升降支架",
+          "category": "electronics",
+          "abc_class": "C",
+          "bin": "JD-01-07-1",
+          "qty": 149,
+          "reserved": 11
+        },
+        {
+          "sku": "ELC-2108",
+          "name": "行车记录仪 2K",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "JD-01-08-2",
+          "qty": 421,
+          "reserved": 39
+        },
+        {
+          "sku": "KIT-3301",
+          "name": "不粘煎锅 28cm",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "JD-01-09-3",
+          "qty": 268,
+          "reserved": 21
+        },
+        {
+          "sku": "KIT-3302",
+          "name": "保温焖烧壶 750ml",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "JD-01-10-1",
+          "qty": 344,
+          "reserved": 33
+        },
+        {
+          "sku": "KIT-3303",
+          "name": "陶瓷马克杯四只组",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "JD-01-11-2",
+          "qty": 512,
+          "reserved": 45
+        },
+        {
+          "sku": "KIT-3304",
+          "name": "电动咖啡研磨机",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "JD-01-12-3",
+          "qty": 226,
+          "reserved": 17
+        },
+        {
+          "sku": "KIT-3305",
+          "name": "硅胶厨具六件套",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "JD-02-01-1",
+          "qty": 389,
+          "reserved": 30
+        },
+        {
+          "sku": "KIT-3306",
+          "name": "玻璃保鲜盒三件组",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "JD-02-02-2",
+          "qty": 467,
+          "reserved": 41
+        },
+        {
+          "sku": "KIT-3307",
+          "name": "手冲咖啡滤杯套装",
+          "category": "kitchen",
+          "abc_class": "C",
+          "bin": "JD-02-03-3",
+          "qty": 183,
+          "reserved": 14
+        },
+        {
+          "sku": "KIT-3308",
+          "name": "可插电加热饭盒",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "JD-02-04-1",
+          "qty": 297,
+          "reserved": 24
+        },
+        {
+          "sku": "OUT-4401",
+          "name": "自动速开帐篷",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "JD-02-05-2",
+          "qty": 156,
+          "reserved": 12
+        },
+        {
+          "sku": "OUT-4402",
+          "name": "超轻羽绒睡袋",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "JD-02-06-3",
+          "qty": 243,
+          "reserved": 20
+        },
+        {
+          "sku": "OUT-4403",
+          "name": "折叠铝合金露营桌",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "JD-02-07-1",
+          "qty": 178,
+          "reserved": 15
+        },
+        {
+          "sku": "OUT-4404",
+          "name": "钛合金便携炉头",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "JD-02-08-2",
+          "qty": 322,
+          "reserved": 26
+        },
+        {
+          "sku": "OUT-4405",
+          "name": "三层防泼水冲锋衣",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "JD-02-09-3",
+          "qty": 265,
+          "reserved": 22
+        },
+        {
+          "sku": "OUT-4406",
+          "name": "露营氛围灯串",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "JD-02-10-1",
+          "qty": 410,
+          "reserved": 34
+        },
+        {
+          "sku": "OUT-4407",
+          "name": "加厚防潮睡垫",
+          "category": "outdoor",
+          "abc_class": "C",
+          "bin": "JD-02-11-2",
+          "qty": 231,
+          "reserved": 18
+        },
+        {
+          "sku": "OUT-4408",
+          "name": "铝合金登山杖对装",
+          "category": "outdoor",
+          "abc_class": "C",
+          "bin": "JD-02-12-3",
+          "qty": 194,
+          "reserved": 16
+        },
+        {
+          "sku": "TEX-5501",
+          "name": "全棉水洗四件套",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "JD-03-01-1",
+          "qty": 387,
+          "reserved": 31
+        },
+        {
+          "sku": "TEX-5502",
+          "name": "亚麻素色窗帘",
+          "category": "textiles",
+          "abc_class": "C",
+          "bin": "JD-03-02-2",
+          "qty": 152,
+          "reserved": 10
+        },
+        {
+          "sku": "TEX-5503",
+          "name": "加厚珊瑚绒毛毯",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "JD-03-03-3",
+          "qty": 478,
+          "reserved": 40
+        },
+        {
+          "sku": "TEX-5504",
+          "name": "抗菌毛巾三件组",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "JD-03-04-1",
+          "qty": 536,
+          "reserved": 48
+        },
+        {
+          "sku": "TEX-5505",
+          "name": "鹅绒枕芯",
+          "category": "textiles",
+          "abc_class": "B",
+          "bin": "JD-03-05-2",
+          "qty": 289,
+          "reserved": 23
+        },
+        {
+          "sku": "TEX-5506",
+          "name": "儿童纯棉睡袋",
+          "category": "textiles",
+          "abc_class": "B",
+          "bin": "JD-03-06-3",
+          "qty": 167,
+          "reserved": 13
+        },
+        {
+          "sku": "TEX-5507",
+          "name": "桌旗餐垫八件套",
+          "category": "textiles",
+          "abc_class": "C",
+          "bin": "JD-03-07-1",
+          "qty": 214,
+          "reserved": 17
+        },
+        {
+          "sku": "TEX-5508",
+          "name": "双层遮光帘",
+          "category": "textiles",
+          "abc_class": "B",
+          "bin": "JD-03-08-2",
+          "qty": 358,
+          "reserved": 29
+        }
+      ]
+    },
+    {
+      "code": "HZN-02",
+      "city": "杭州",
+      "name": "萧山电商仓",
+      "skus": [
+        {
+          "sku": "ELC-2101",
+          "name": "无线充电底座 15W",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "XS-01-01-1",
+          "qty": 365,
+          "reserved": 30
+        },
+        {
+          "sku": "ELC-2102",
+          "name": "蓝牙降噪耳机",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "XS-01-02-2",
+          "qty": 241,
+          "reserved": 26
+        },
+        {
+          "sku": "ELC-2103",
+          "name": "智能手环 Pro",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "XS-01-03-3",
+          "qty": 498,
+          "reserved": 57
+        },
+        {
+          "sku": "ELC-2104",
+          "name": "4K 运动相机",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "XS-01-04-1",
+          "qty": 187,
+          "reserved": 15
+        },
+        {
+          "sku": "ELC-2105",
+          "name": "氮化镓 65W 快充头",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "XS-01-05-2",
+          "qty": 586,
+          "reserved": 45
+        },
+        {
+          "sku": "ELC-2106",
+          "name": "87 键机械键盘",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "XS-01-06-3",
+          "qty": 312,
+          "reserved": 24
+        },
+        {
+          "sku": "ELC-2107",
+          "name": "桌面升降支架",
+          "category": "electronics",
+          "abc_class": "C",
+          "bin": "XS-01-07-1",
+          "qty": 131,
+          "reserved": 9
+        },
+        {
+          "sku": "ELC-2108",
+          "name": "行车记录仪 2K",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "XS-01-08-2",
+          "qty": 389,
+          "reserved": 35
+        },
+        {
+          "sku": "KIT-3301",
+          "name": "不粘煎锅 28cm",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "XS-01-09-3",
+          "qty": 234,
+          "reserved": 18
+        },
+        {
+          "sku": "KIT-3302",
+          "name": "保温焖烧壶 750ml",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "XS-01-10-1",
+          "qty": 301,
+          "reserved": 28
+        },
+        {
+          "sku": "KIT-3303",
+          "name": "陶瓷马克杯四只组",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "XS-01-11-2",
+          "qty": 455,
+          "reserved": 39
+        },
+        {
+          "sku": "KIT-3304",
+          "name": "电动咖啡研磨机",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "XS-01-12-3",
+          "qty": 202,
+          "reserved": 14
+        },
+        {
+          "sku": "KIT-3305",
+          "name": "硅胶厨具六件套",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "XS-02-01-1",
+          "qty": 341,
+          "reserved": 27
+        },
+        {
+          "sku": "KIT-3306",
+          "name": "玻璃保鲜盒三件组",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "XS-02-02-2",
+          "qty": 426,
+          "reserved": 37
+        },
+        {
+          "sku": "KIT-3307",
+          "name": "手冲咖啡滤杯套装",
+          "category": "kitchen",
+          "abc_class": "C",
+          "bin": "XS-02-03-3",
+          "qty": 158,
+          "reserved": 11
+        },
+        {
+          "sku": "KIT-3308",
+          "name": "可插电加热饭盒",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "XS-02-04-1",
+          "qty": 264,
+          "reserved": 21
+        },
+        {
+          "sku": "OUT-4401",
+          "name": "自动速开帐篷",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "XS-02-05-2",
+          "qty": 139,
+          "reserved": 10
+        },
+        {
+          "sku": "OUT-4402",
+          "name": "超轻羽绒睡袋",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "XS-02-06-3",
+          "qty": 217,
+          "reserved": 18
+        },
+        {
+          "sku": "OUT-4403",
+          "name": "折叠铝合金露营桌",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "XS-02-07-1",
+          "qty": 162,
+          "reserved": 13
+        },
+        {
+          "sku": "OUT-4404",
+          "name": "钛合金便携炉头",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "XS-02-08-2",
+          "qty": 288,
+          "reserved": 23
+        },
+        {
+          "sku": "OUT-4405",
+          "name": "三层防泼水冲锋衣",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "XS-02-09-3",
+          "qty": 241,
+          "reserved": 20
+        },
+        {
+          "sku": "OUT-4406",
+          "name": "露营氛围灯串",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "XS-02-10-1",
+          "qty": 376,
+          "reserved": 31
+        },
+        {
+          "sku": "OUT-4407",
+          "name": "加厚防潮睡垫",
+          "category": "outdoor",
+          "abc_class": "C",
+          "bin": "XS-02-11-2",
+          "qty": 209,
+          "reserved": 16
+        },
+        {
+          "sku": "OUT-4408",
+          "name": "铝合金登山杖对装",
+          "category": "outdoor",
+          "abc_class": "C",
+          "bin": "XS-02-12-3",
+          "qty": 173,
+          "reserved": 14
+        },
+        {
+          "sku": "TEX-5501",
+          "name": "全棉水洗四件套",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "XS-03-01-1",
+          "qty": 342,
+          "reserved": 27
+        },
+        {
+          "sku": "TEX-5502",
+          "name": "亚麻素色窗帘",
+          "category": "textiles",
+          "abc_class": "C",
+          "bin": "XS-03-02-2",
+          "qty": 138,
+          "reserved": 9
+        },
+        {
+          "sku": "TEX-5503",
+          "name": "加厚珊瑚绒毛毯",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "XS-03-03-3",
+          "qty": 431,
+          "reserved": 36
+        },
+        {
+          "sku": "TEX-5504",
+          "name": "抗菌毛巾三件组",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "XS-03-04-1",
+          "qty": 489,
+          "reserved": 43
+        },
+        {
+          "sku": "TEX-5505",
+          "name": "鹅绒枕芯",
+          "category": "textiles",
+          "abc_class": "B",
+          "bin": "XS-03-05-2",
+          "qty": 256,
+          "reserved": 20
+        },
+        {
+          "sku": "TEX-5506",
+          "name": "儿童纯棉睡袋",
+          "category": "textiles",
+          "abc_class": "B",
+          "bin": "XS-03-06-3",
+          "qty": 148,
+          "reserved": 12
+        },
+        {
+          "sku": "TEX-5507",
+          "name": "桌旗餐垫八件套",
+          "category": "textiles",
+          "abc_class": "C",
+          "bin": "XS-03-07-1",
+          "qty": 191,
+          "reserved": 15
+        },
+        {
+          "sku": "TEX-5508",
+          "name": "双层遮光帘",
+          "category": "textiles",
+          "abc_class": "B",
+          "bin": "XS-03-08-2",
+          "qty": 327,
+          "reserved": 26
+        }
+      ]
+    },
+    {
+      "code": "SUZ-03",
+      "city": "苏州",
+      "name": "相城日用仓",
+      "skus": [
+        {
+          "sku": "ELC-2101",
+          "name": "无线充电底座 15W",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "XC-01-01-1",
+          "qty": 298,
+          "reserved": 24
+        },
+        {
+          "sku": "ELC-2102",
+          "name": "蓝牙降噪耳机",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "XC-01-02-2",
+          "qty": 213,
+          "reserved": 22
+        },
+        {
+          "sku": "ELC-2103",
+          "name": "智能手环 Pro",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "XC-01-03-3",
+          "qty": 441,
+          "reserved": 50
+        },
+        {
+          "sku": "ELC-2104",
+          "name": "4K 运动相机",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "XC-01-04-1",
+          "qty": 165,
+          "reserved": 13
+        },
+        {
+          "sku": "ELC-2105",
+          "name": "氮化镓 65W 快充头",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "XC-01-05-2",
+          "qty": 512,
+          "reserved": 40
+        },
+        {
+          "sku": "ELC-2106",
+          "name": "87 键机械键盘",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "XC-01-06-3",
+          "qty": 276,
+          "reserved": 21
+        },
+        {
+          "sku": "ELC-2107",
+          "name": "桌面升降支架",
+          "category": "electronics",
+          "abc_class": "C",
+          "bin": "XC-01-07-1",
+          "qty": 118,
+          "reserved": 8
+        },
+        {
+          "sku": "ELC-2108",
+          "name": "行车记录仪 2K",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "XC-01-08-2",
+          "qty": 344,
+          "reserved": 30
+        },
+        {
+          "sku": "KIT-3301",
+          "name": "不粘煎锅 28cm",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "XC-01-09-3",
+          "qty": 205,
+          "reserved": 16
+        },
+        {
+          "sku": "KIT-3302",
+          "name": "保温焖烧壶 750ml",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "XC-01-10-1",
+          "qty": 268,
+          "reserved": 24
+        },
+        {
+          "sku": "KIT-3303",
+          "name": "陶瓷马克杯四只组",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "XC-01-11-2",
+          "qty": 398,
+          "reserved": 34
+        },
+        {
+          "sku": "KIT-3304",
+          "name": "电动咖啡研磨机",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "XC-01-12-3",
+          "qty": 177,
+          "reserved": 12
+        },
+        {
+          "sku": "KIT-3305",
+          "name": "硅胶厨具六件套",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "XC-02-01-1",
+          "qty": 302,
+          "reserved": 23
+        },
+        {
+          "sku": "KIT-3306",
+          "name": "玻璃保鲜盒三件组",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "XC-02-02-2",
+          "qty": 371,
+          "reserved": 32
+        },
+        {
+          "sku": "OUT-4401",
+          "name": "自动速开帐篷",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "XC-02-03-3",
+          "qty": 124,
+          "reserved": 9
+        },
+        {
+          "sku": "OUT-4402",
+          "name": "超轻羽绒睡袋",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "XC-02-04-1",
+          "qty": 195,
+          "reserved": 16
+        },
+        {
+          "sku": "OUT-4403",
+          "name": "折叠铝合金露营桌",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "XC-02-05-2",
+          "qty": 147,
+          "reserved": 12
+        },
+        {
+          "sku": "OUT-4404",
+          "name": "钛合金便携炉头",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "XC-02-06-3",
+          "qty": 253,
+          "reserved": 20
+        },
+        {
+          "sku": "OUT-4405",
+          "name": "三层防泼水冲锋衣",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "XC-02-07-1",
+          "qty": 219,
+          "reserved": 18
+        },
+        {
+          "sku": "OUT-4406",
+          "name": "露营氛围灯串",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "XC-02-08-2",
+          "qty": 338,
+          "reserved": 28
+        },
+        {
+          "sku": "OUT-4407",
+          "name": "加厚防潮睡垫",
+          "category": "outdoor",
+          "abc_class": "C",
+          "bin": "XC-02-09-3",
+          "qty": 186,
+          "reserved": 15
+        },
+        {
+          "sku": "OUT-4408",
+          "name": "铝合金登山杖对装",
+          "category": "outdoor",
+          "abc_class": "C",
+          "bin": "XC-02-10-1",
+          "qty": 158,
+          "reserved": 13
+        },
+        {
+          "sku": "TEX-5501",
+          "name": "全棉水洗四件套",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "XC-02-11-2",
+          "qty": 305,
+          "reserved": 24
+        },
+        {
+          "sku": "TEX-5502",
+          "name": "亚麻素色窗帘",
+          "category": "textiles",
+          "abc_class": "C",
+          "bin": "XC-02-12-3",
+          "qty": 121,
+          "reserved": 8
+        },
+        {
+          "sku": "TEX-5503",
+          "name": "加厚珊瑚绒毛毯",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "XC-03-01-1",
+          "qty": 386,
+          "reserved": 32
+        },
+        {
+          "sku": "TEX-5504",
+          "name": "抗菌毛巾三件组",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "XC-03-02-2",
+          "qty": 437,
+          "reserved": 38
+        },
+        {
+          "sku": "TEX-5505",
+          "name": "鹅绒枕芯",
+          "category": "textiles",
+          "abc_class": "B",
+          "bin": "XC-03-03-3",
+          "qty": 228,
+          "reserved": 18
+        },
+        {
+          "sku": "TEX-5506",
+          "name": "儿童纯棉睡袋",
+          "category": "textiles",
+          "abc_class": "B",
+          "bin": "XC-03-04-1",
+          "qty": 132,
+          "reserved": 10
+        },
+        {
+          "sku": "TEX-5507",
+          "name": "桌旗餐垫八件套",
+          "category": "textiles",
+          "abc_class": "C",
+          "bin": "XC-03-05-2",
+          "qty": 172,
+          "reserved": 13
+        },
+        {
+          "sku": "TEX-5508",
+          "name": "双层遮光帘",
+          "category": "textiles",
+          "abc_class": "B",
+          "bin": "XC-03-06-3",
+          "qty": 294,
+          "reserved": 23
+        }
+      ]
+    },
+    {
+      "code": "TZW-04",
+      "city": "台州",
+      "name": "温岭补货仓",
+      "skus": [
+        {
+          "sku": "ELC-2101",
+          "name": "无线充电底座 15W",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "WL-01-01-1",
+          "qty": 176,
+          "reserved": 12
+        },
+        {
+          "sku": "ELC-2102",
+          "name": "蓝牙降噪耳机",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "WL-01-02-2",
+          "qty": 124,
+          "reserved": 10
+        },
+        {
+          "sku": "ELC-2103",
+          "name": "智能手环 Pro",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "WL-01-03-3",
+          "qty": 258,
+          "reserved": 28
+        },
+        {
+          "sku": "ELC-2104",
+          "name": "4K 运动相机",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "WL-01-04-1",
+          "qty": 96,
+          "reserved": 7
+        },
+        {
+          "sku": "ELC-2105",
+          "name": "氮化镓 65W 快充头",
+          "category": "electronics",
+          "abc_class": "A",
+          "bin": "WL-01-05-2",
+          "qty": 302,
+          "reserved": 22
+        },
+        {
+          "sku": "ELC-2106",
+          "name": "87 键机械键盘",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "WL-01-06-3",
+          "qty": 158,
+          "reserved": 11
+        },
+        {
+          "sku": "ELC-2107",
+          "name": "桌面升降支架",
+          "category": "electronics",
+          "abc_class": "C",
+          "bin": "WL-01-07-1",
+          "qty": 74,
+          "reserved": 5
+        },
+        {
+          "sku": "ELC-2108",
+          "name": "行车记录仪 2K",
+          "category": "electronics",
+          "abc_class": "B",
+          "bin": "WL-01-08-2",
+          "qty": 197,
+          "reserved": 16
+        },
+        {
+          "sku": "KIT-3301",
+          "name": "不粘煎锅 28cm",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "WL-01-09-3",
+          "qty": 143,
+          "reserved": 10
+        },
+        {
+          "sku": "KIT-3302",
+          "name": "保温焖烧壶 750ml",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "WL-01-10-1",
+          "qty": 181,
+          "reserved": 15
+        },
+        {
+          "sku": "KIT-3303",
+          "name": "陶瓷马克杯四只组",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "WL-01-11-2",
+          "qty": 262,
+          "reserved": 21
+        },
+        {
+          "sku": "KIT-3304",
+          "name": "电动咖啡研磨机",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "WL-01-12-3",
+          "qty": 118,
+          "reserved": 8
+        },
+        {
+          "sku": "KIT-3305",
+          "name": "硅胶厨具六件套",
+          "category": "kitchen",
+          "abc_class": "A",
+          "bin": "WL-02-01-1",
+          "qty": 194,
+          "reserved": 15
+        },
+        {
+          "sku": "KIT-3306",
+          "name": "玻璃保鲜盒三件组",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "WL-02-02-2",
+          "qty": 231,
+          "reserved": 19
+        },
+        {
+          "sku": "KIT-3307",
+          "name": "手冲咖啡滤杯套装",
+          "category": "kitchen",
+          "abc_class": "C",
+          "bin": "WL-02-03-3",
+          "qty": 97,
+          "reserved": 6
+        },
+        {
+          "sku": "KIT-3308",
+          "name": "可插电加热饭盒",
+          "category": "kitchen",
+          "abc_class": "B",
+          "bin": "WL-02-04-1",
+          "qty": 156,
+          "reserved": 11
+        },
+        {
+          "sku": "OUT-4401",
+          "name": "自动速开帐篷",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "WL-02-05-2",
+          "qty": 88,
+          "reserved": 6
+        },
+        {
+          "sku": "OUT-4402",
+          "name": "超轻羽绒睡袋",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "WL-02-06-3",
+          "qty": 132,
+          "reserved": 10
+        },
+        {
+          "sku": "OUT-4403",
+          "name": "折叠铝合金露营桌",
+          "category": "outdoor",
+          "abc_class": "B",
+          "bin": "WL-02-07-1",
+          "qty": 101,
+          "reserved": 7
+        },
+        {
+          "sku": "OUT-4404",
+          "name": "钛合金便携炉头",
+          "category": "outdoor",
+          "abc_class": "A",
+          "bin": "WL-02-08-2",
+          "qty": 167,
+          "reserved": 13
+        },
+        {
+          "sku": "TEX-5501",
+          "name": "全棉水洗四件套",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "WL-02-09-3",
+          "qty": 191,
+          "reserved": 14
+        },
+        {
+          "sku": "TEX-5502",
+          "name": "亚麻素色窗帘",
+          "category": "textiles",
+          "abc_class": "C",
+          "bin": "WL-02-10-1",
+          "qty": 77,
+          "reserved": 5
+        },
+        {
+          "sku": "TEX-5503",
+          "name": "加厚珊瑚绒毛毯",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "WL-02-11-2",
+          "qty": 239,
+          "reserved": 19
+        },
+        {
+          "sku": "TEX-5504",
+          "name": "抗菌毛巾三件组",
+          "category": "textiles",
+          "abc_class": "A",
+          "bin": "WL-02-12-3",
+          "qty": 271,
+          "reserved": 23
+        }
+      ]
+    }
+  ]
+}

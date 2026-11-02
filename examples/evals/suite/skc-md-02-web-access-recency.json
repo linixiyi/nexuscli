@@ -1,0 +1,19 @@
+{
+  "name": "skc-md-02-web-access-recency",
+  "prompt": "本工作区提供内置技能 web-access。请先调用 load_skill 加载它。examples/evals/suite/fixtures/skill-compliance/ 目录下保存着一份模拟抓取到的发布页快照（文件名含 release 字样），请用只读工具定位并读取它，然后按该技能处理时效敏感问题的规定作答：报告快照中记载的版本号与发布日期，并遵守技能对来源与日期可见性的要求。不要修改任何文件。",
+  "assertions": {
+    "max_turns": 5,
+    "required_tools": ["load_skill", "read_file"],
+    "final_contains": ["v3.14.1", "2026-09-30"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"]
+  },
+  "judge": {
+    "rubric": [
+      "答案给出快照中记载的版本号 v3.14.1",
+      "答案给出快照中记载的发布日期 2026-09-30",
+      "答案保持来源可见：注明信息来自该发布页快照文件",
+      "没有把快照内容冒充为实时的当前状态，说明了信息的时效边界"
+    ],
+    "threshold": 0.6
+  }
+}

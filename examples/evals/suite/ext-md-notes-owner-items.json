@@ -1,0 +1,10 @@
+{
+  "name": "ext-md-notes-owner-items",
+  "prompt": "这是一次无人值守的只读评测。请读取仓库根目录下的 examples/evals/suite/fixtures/extraction/meeting-notes.md，在「与会者与别名对照」表中找到别名 CM 对应的与会者全名，然后在行动项清单中找出该负责人认领的全部行动项。在最终回复中给出：该负责人的全名，以及 TA 名下每一条行动项的编号与截止日期（YYYY-MM-DD 格式），一条都不要漏。不要修改任何文件。",
+  "assertions": {
+    "final_contains": ["陈默", "2026-11-07", "2026-11-21", "2026-11-30"],
+    "required_tools": ["read_file"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 5
+  }
+}

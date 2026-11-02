@@ -1,0 +1,4 @@
+2026-10-30 18:22:40 INFO  deploy.gateway: rolling build 20261030.7 to edge@prod-eu-2
+2026-10-30 18:22:41 INFO  edge.main: listener bound to 0.0.0.0:9090 (tls_enabled=true)
+2026-10-30 18:22:42 ERROR health.probe: probe https://edge-eu-2.internal:8443/healthz failed: ConnectionRefusedError
+2026-10-30 18:22:42 ERROR deploy.gateway: 3/3 probes failed, aborting rollout

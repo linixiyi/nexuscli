@@ -1,0 +1,10 @@
+{
+  "name": "ext-sh-metrics-cell-newusers",
+  "prompt": "这是一次无人值守的只读评测。请读取仓库根目录下的 examples/evals/suite/fixtures/extraction/metrics.csv，定位 month 为 2026-02 且 region 为 south 的那一行，在最终回复中给出该行 new_users 列的值。该值必须与文件中的原始写法完全一致（保留千位分隔符，不要改写为其他格式）。不要修改任何文件。",
+  "assertions": {
+    "final_contains": ["1,122"],
+    "required_tools": ["read_file"],
+    "forbidden_tools": ["bash", "write_file", "edit_file"],
+    "max_turns": 3
+  }
+}

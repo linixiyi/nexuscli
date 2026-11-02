@@ -1,0 +1,20 @@
+{
+  "name": "cqa-lg-memory-recall-signal-chain",
+  "prompt": "请追踪本仓库 search_memory 工具的完整调用链：从 src/nexuscli/tools/builtins.py 里 search_memory 的处理器实现开始，一路追到它最终做内容相关性打分的信号模块。请说明每一跳所在的文件与函数/方法名，召回打分默认装载了哪些信号类，以及一条记忆的最终得分由哪几部分组成（内容分如何门控、元数据项有哪些、查询时间意图与记忆时间层不匹配时会怎样）。只读代码作答，不要修改任何文件。",
+  "assertions": {
+    "forbidden_tools": [
+      "bash",
+      "write_file",
+      "edit_file"
+    ],
+    "max_turns": 8
+  },
+  "judge": {
+    "rubric": [
+      "链路的文件与关键入口点名正确：tools/builtins.py 的 _search_memory 处理器调用 memory/manager.py 的 MemoryManager.recall，recall 再经 _relevance_scores/content_scores 用到 memory/signals.py 的内容信号（三个文件都要点到，函数名大致准确即可）",
+      "指出默认装载的信号类：default_signals() 只返回 LexicalSignal、BM25Signal、EntitySignal 三个，VectorSignal 槽位默认空缺（没有 embedder 不装）",
+      "指出打分结构：内容相关性 ≤0 的记忆直接记 0 分（门控，防止仅靠元数据入选）；内容分有预算上限 CONTENT_BUDGET（0.80），其上再加 importance/confidence/hotness 三个元数据项（权重 0.08/0.06/0.06，hotness 是访问频率×按半衰期衰减的新鲜度）；查询时间意图与记忆有效时间层不匹配时整分乘 TEMPORAL_MISMATCH_MULTIPLIER（0.85）降权"
+    ],
+    "threshold": 0.6
+  }
+}
