@@ -764,6 +764,54 @@ the declared anchor — fix the scenario and recalibrate) versus **genuine
 difficulty** (keep the scenario as designed and record the observation via
 `calibration.note`).
 
+### Stability baseline (`--repeat k`)
+
+The suite's stability baseline is one command:
+
+```bash
+nexuscli eval run --real --file examples/evals/suite --repeat 3
+```
+
+`--repeat k` reruns every scenario k times serially, and the pass^k verdict
+credits a scenario only when **all** k runs passed (see
+[pass^k, real cost, and the report](#passk-real-cost-and-the-report)) — the
+aggregation exists precisely because single shots swing. Measured on the real
+gateway (3 × 30 = 90 runs): single-shot passes of the same suite have landed
+anywhere in **19–24 / 30** across three samples (calibration 24/30, ablation
+agent arm 19/30), while pass^3 stabilizes at **20/30** (`all_pass_rate`
+0.6667) — compare nightly runs against the 20, not against any single-shot
+figure.
+
+Per-scenario outcomes fall into three classes, and the suite's
+`meta/manifest.json` records each scenario's outcome in its `stability`
+field:
+
+- **rock-pass (20 scenarios, 3/3)** — passes every repeat; deterministic
+  under sampling.
+- **rock-fail (5 scenarios, 0/3)** — `cqa-lg-memory-recall-signal-chain`,
+  `cqa-lg-load-skill-layered-chain`, `rfa-md-01-todo-census`,
+  `ext-lg-inventory-outdoor-threewh`,
+  `ext-lg-inventory-kitchen-available`. All five are **guard-compliance
+  signals, not quality regressions**: the model attempts a `bash` call, the
+  track's read-only guard denies it, and the answer cannot be produced
+  without the blocked surface — the deny chain working as designed is what
+  these scenarios observe.
+- **sway (5 scenarios, 1–2/3)** — `cqa-md-vision-capability-tristate`
+  (1/3), `rfa-sh-02-license` (1/3), `skc-sh-02-rule-demo-conflict` (2/3),
+  `skc-lg-01-incident-dispatch` (2/3), `skc-lg-02-freeze-abort` (2/3).
+  These five are what a nightly run should watch first: a rock decaying
+  into sway, or a sway scenario dropping to 0/3, is the earliest stability
+  signal.
+
+One known noise source is by design: an unparsable or empty judge reply
+scores 0.0 **fail-closed** (see [LLM-as-judge](#llm-as-judge)) — in the
+baseline measurement `skc-sh-02-rule-demo-conflict`'s third run failed
+exactly this way (the judge returned an empty string on a gateway hiccup),
+so that FAIL is the judging semantics working, not an agent regression.
+
+Cost: `--repeat 3` bills roughly **3× a full-suite run** — on the order of
+**2M tokens** per measurement (judge calls included).
+
 ## Scope and honest boundaries
 
 The two tracks split the question "how is the agent doing?" by what can be

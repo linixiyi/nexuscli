@@ -35,6 +35,12 @@
         "status": "pass",
         "tokens": 11822,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 35473
       }
     },
     {
@@ -64,7 +70,13 @@
         "tokens": 17707,
         "turns": 3
       },
-      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷",
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 34354
+      }
     },
     {
       "id": "cqa-md-real-readonly-whitelist",
@@ -88,6 +100,12 @@
         "status": "pass",
         "tokens": 27211,
         "turns": 3
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 67308
       }
     },
     {
@@ -112,6 +130,12 @@
         "status": "pass",
         "tokens": 91880,
         "turns": 5
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 1,
+        "all_pass": false,
+        "tokens_total": 446701
       }
     },
     {
@@ -137,7 +161,13 @@
         "tokens": 271740,
         "turns": 13
       },
-      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷",
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 0,
+        "all_pass": false,
+        "tokens_total": 591326
+      }
     },
     {
       "id": "cqa-lg-load-skill-layered-chain",
@@ -161,6 +191,12 @@
         "status": "pass",
         "tokens": 171840,
         "turns": 8
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 0,
+        "all_pass": false,
+        "tokens_total": 881252
       }
     },
     {
@@ -187,6 +223,12 @@
         "status": "pass",
         "tokens": 12028,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 35242
       }
     },
     {
@@ -214,7 +256,13 @@
         "tokens": 33550,
         "turns": 5
       },
-      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷",
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 1,
+        "all_pass": false,
+        "tokens_total": 81643
+      }
     },
     {
       "id": "rfa-md-01-todo-census",
@@ -241,7 +289,13 @@
         "tokens": 24360,
         "turns": 4
       },
-      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷",
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 0,
+        "all_pass": false,
+        "tokens_total": 81066
+      }
     },
     {
       "id": "rfa-md-02-function-census",
@@ -270,6 +324,12 @@
         "status": "pass",
         "tokens": 11763,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 34620
       }
     },
     {
@@ -302,6 +362,12 @@
         "status": "pass",
         "tokens": 19639,
         "turns": 3
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 58205
       }
     },
     {
@@ -332,6 +398,12 @@
         "status": "pass",
         "tokens": 26490,
         "turns": 4
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 57045
       }
     },
     {
@@ -361,6 +433,12 @@
         "status": "pass",
         "tokens": 11911,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 36951
       }
     },
     {
@@ -390,6 +468,12 @@
         "status": "pass",
         "tokens": 11802,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 36289
       }
     },
     {
@@ -419,6 +503,12 @@
         "status": "pass",
         "tokens": 13772,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 63454
       }
     },
     {
@@ -448,6 +538,12 @@
         "status": "pass",
         "tokens": 14027,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 38518
       }
     },
     {
@@ -481,6 +577,12 @@
         "status": "pass",
         "tokens": 20828,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 57470
       }
     },
     {
@@ -514,6 +616,12 @@
         "status": "pass",
         "tokens": 17068,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 55884
       }
     },
     {
@@ -542,6 +650,12 @@
         "status": "pass",
         "tokens": 10936,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 32853
       }
     },
     {
@@ -571,6 +685,12 @@
         "status": "pass",
         "tokens": 13408,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 2,
+        "all_pass": false,
+        "tokens_total": 37976
       }
     },
     {
@@ -602,6 +722,12 @@
         "status": "pass",
         "tokens": 21181,
         "turns": 3
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 67611
       }
     },
     {
@@ -633,6 +759,12 @@
         "status": "pass",
         "tokens": 20648,
         "turns": 3
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 62373
       }
     },
     {
@@ -665,6 +797,12 @@
         "status": "pass",
         "tokens": 35034,
         "turns": 5
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 2,
+        "all_pass": false,
+        "tokens_total": 145120
       }
     },
     {
@@ -696,6 +834,12 @@
         "status": "pass",
         "tokens": 26987,
         "turns": 3
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 2,
+        "all_pass": false,
+        "tokens_total": 80502
       }
     },
     {
@@ -726,6 +870,12 @@
         "status": "pass",
         "tokens": 10901,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 32593
       }
     },
     {
@@ -754,6 +904,12 @@
         "status": "pass",
         "tokens": 11017,
         "turns": 2
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 33405
       }
     },
     {
@@ -783,6 +939,12 @@
         "status": "pass",
         "tokens": 38558,
         "turns": 3
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 115663
       }
     },
     {
@@ -814,6 +976,12 @@
         "status": "pass",
         "tokens": 38659,
         "turns": 3
+      },
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 3,
+        "all_pass": true,
+        "tokens_total": 116268
       }
     },
     {
@@ -844,7 +1012,13 @@
         "tokens": 50772,
         "turns": 4
       },
-      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷",
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 0,
+        "all_pass": false,
+        "tokens_total": 160736
+      }
     },
     {
       "id": "ext-lg-inventory-kitchen-available",
@@ -874,7 +1048,13 @@
         "tokens": 73643,
         "turns": 5
       },
-      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷"
+      "triage_note": "真实难度保留——校准中模型尝试调用 bash 被只读守卫拦截（forbidden_tools 断言按设计标记尝试），部分场景因重试消耗额外回合；在只读工具面内完成任务本身就是考点（与 real-readonly-converge 同信号），非题缺陷",
+      "stability": {
+        "repeat": 3,
+        "passed_runs": 0,
+        "all_pass": false,
+        "tokens_total": 139497
+      }
     }
   ]
 }
