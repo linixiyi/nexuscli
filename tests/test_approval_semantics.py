@@ -112,9 +112,14 @@ def _register_card(
         decisions.append(str(callback(request)))
         done.set()
 
+    # 等到本调用自己的卡登记进表，而不是「表里有任意卡」：连续两次
+    # _register_card（如 test_recheck_revoked_overrides_auto 的 bash/write_file）
+    # 时第二把等待条件因第一张卡已 pending 而立即返回，调用方的断言就会与
+    # waiter 线程竞态（间歇性 len(list_pending())==1）。
+    baseline = len(bridge.list_pending())
     threading.Thread(target=waiter, daemon=True).start()
     deadline = time.monotonic() + 5
-    while not bridge.list_pending() and time.monotonic() < deadline:
+    while len(bridge.list_pending()) <= baseline and time.monotonic() < deadline:
         time.sleep(0.02)
     return done, decisions
 
