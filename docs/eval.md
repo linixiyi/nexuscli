@@ -47,10 +47,14 @@ The real-model track adds two flags to `eval run` (see
 nexuscli eval run --real             # real-model track (examples/evals/real)
 nexuscli eval run --real --repeat k  # every real scenario k times, serially
 nexuscli eval run --real --file path # one real-track scenario file/directory
+nexuscli eval run --real --baseline  # + the bare-model ablation, comparison file
 ```
 
 `--repeat` defaults to `1` and only applies to `--real` — passing it on the
-hermetic track is a usage error, not a silent no-op.
+hermetic track is a usage error, not a silent no-op. `--baseline` likewise only
+applies to `--real`, and it cannot combine with `--repeat` (the comparison is a
+single-shot fair sample on both sides — see
+[Baseline ablation](#baseline-ablation---real---baseline)).
 
 ## Scenario schema
 
@@ -423,7 +427,9 @@ runner's budget or the loop guard fails with `react loop terminated early:
 …` — an unconverged real run must not look like a pass with truncated
 output. The track is nightly/manual evidence, deliberately **not** a CI
 gate: every repetition bills real tokens and a flaky provider would fail a
-gate for the wrong reason.
+gate for the wrong reason. With `--baseline` the track can also run the same
+scenarios against the bare model and report the harness's gain over it —
+see [Baseline ablation](#baseline-ablation---real---baseline).
 
 ### Safety model: read-only surface, fail-closed writes
 
@@ -586,6 +592,102 @@ only when **all** of its repeats passed — the metric exists to surface
 `PASS/FAIL <name> [run <i>/<k>]` line per repetition (FAIL lines carry the
 reasons), then a `total_runs=… passed=… failed=…` summary line, and exits
 `1` on any failed run.
+
+### Baseline ablation (`--real --baseline`)
+
+`--baseline` turns the real track into a two-arm double run: after the agent
+arm — unchanged, the report below is still exactly what a plain `--real` run
+writes — the same scenario list runs against the **bare model**, and the
+harness-gain comparison lands in its own file,
+`<cwd>/.nexuscli/evals/last-real-comparison.json`:
+
+```bash
+nexuscli eval run --real --baseline                              # examples/evals/real
+nexuscli eval run --real --baseline --file examples/evals/suite  # the 30-scenario suite
+```
+
+The ablation answers the question a single agent score cannot: *how much of
+this score is the harness, and how much is the model?* The bare model is the
+same-model lower bound, so `agent_pass − baseline_pass` is the harness's net
+gain.
+
+**The bare arm.** The same LLM through the same config chain (same
+provider/model — the gain must be attributable to the harness, not to a model
+swap), as **one direct chat completion**: an empty tool list, no skill
+candidates, no agent system prompt — just
+`You are a helpful assistant. Answer directly.` That minimal prompt is the
+arm's entire system message, chosen to say nothing the model could leverage;
+it is recorded verbatim in the comparison document
+(`baseline.system_prompt`) so readers can see exactly what the bare arm got.
+Scenarios whose questions need tools are expected to fail here — that is the
+gap the ablation measures, not a defect.
+
+**Assertion subset.** Only the checks that depend on the final text carry
+over to the bare arm:
+
+| check | bare arm |
+| --- | --- |
+| `final_contains` | judged, same failure wording as the agent arm |
+| `judge` | reused verbatim from the scenario — same rubric, same threshold, same `judge.model` override; one ruler for both arms (the judge call's tokens land in that arm's total) |
+| `expected_tool_sequence` / `forbidden_tools` / `required_tools` / `max_tool_calls` / `max_total_tool_calls` | **N/A** — the bare model gets no tools, so tool-trajectory assertions are meaningless |
+| `max_turns` | **N/A** — one completion has no turn budget |
+
+The document states the N/A set once, up front (`baseline.assertions` with
+`evaluated` / `not_applicable`), instead of marking every scenario entry.
+
+**Single-shot on purpose, and what it costs.** Model output varies between
+calls, so caching an earlier agent side would compare against a different
+sample; both arms run serially against the same client factory, one fresh
+client per run. That is also why `--repeat` cannot combine with `--baseline`
+— the combination is a usage error, not a silent reinterpretation. Cost
+consequence: a `--baseline` double run bills roughly **2× a full-suite run**
+(agent arm + bare arm, judge calls included in each arm's tokens). The
+credential/provider check fires before any scenario starts, exactly like
+`--real` (`No key, no run` below applies unchanged), and the exit code still
+reflects the **agent arm only** — the bare model failing tool-required
+questions is the ablation's expected signal, reported in the comparison, not
+a command failure.
+
+**Comparison file fields.** `last-real-report.json` keeps its exact schema
+and stays agent-side only (its consumers — `/skill propose`, the post-landing
+diff — never see baseline data); the comparison is a third file that a plain
+`--real` run never writes. Per scenario:
+
+| field | meaning |
+| --- | --- |
+| `id` | scenario name |
+| `agent.status` / `baseline.status` | `pass` / `fail` of that arm |
+| `agent.tokens` / `baseline.tokens` | that arm's `total_tokens` (judge usage included) |
+| `delta.pass_delta` | agent − baseline: `+1` the harness passed where the bare model failed, `-1` the reverse |
+| `delta.token_delta` | agent − baseline tokens: the harness's extra token cost for this scenario |
+
+Summary:
+
+| field | meaning |
+| --- | --- |
+| `scenarios_total` | paired scenarios (both arms run the same list) |
+| `agent_pass` / `baseline_pass` | passed-count per arm |
+| `pass_delta` | `agent_pass − baseline_pass` — the headline harness gain |
+| `agent_pass_rate` / `baseline_pass_rate` | pass rates per arm, rounded to 4 decimals |
+| `quadrants` | `both_pass` / `agent_only` / `baseline_only` / `both_fail` counts |
+| `total_tokens` | `{agent, baseline}` run-wide token totals |
+
+**Reading the quadrants.** `agent_only` is the harness's net wins —
+questions the bare model could not answer (usually because they need tools)
+but the agent did; together with `pass_delta` this is the number the
+ablation exists for. `baseline_only` is the harness's net losses — rare, and
+worth a look when non-zero (sampling variance or an agent-side failure
+mode), not a defect by itself. `both_fail` makes the genuinely-hard tail
+visible: bare-model misses on tool-required questions are expected to
+concentrate here. `both_pass` is agreement — no differentiation. The CLI
+prints one line per scenario plus a summary line (numbers illustrative):
+
+```
+cqa-sh-pyproject-name-license	agent=PASS baseline=FAIL tokens=11822/931 (pass_delta=+1, token_delta=+10891)
+...
+agent_pass=24/30 baseline_pass=17/30 pass_delta=+7 | quadrants: both_pass=16 agent_only=8 baseline_only=1 both_fail=5
+Comparison written to <cwd>/.nexuscli/evals/last-real-comparison.json
+```
 
 ### No key, no run
 

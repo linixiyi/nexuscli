@@ -29,6 +29,16 @@ a constructor-parameter seam; monkeypatching
 ``nexuscli.eval.real.create_llm_client`` is the equivalent surface), and the
 judge is injectable the same way. Real network traffic only happens on an
 explicit ``--real`` run.
+
+The baseline ablation (``eval run --real --baseline``) runs the same scenario
+set twice — once through the agent harness above, once against the bare
+model (:func:`run_baseline_scenario`: a single direct completion, no tools,
+no skill injection, no agent system prompt) — and assembles the harness-gain
+comparison into ``.nexuscli/evals/last-real-comparison.json``
+(:func:`run_baseline_comparison` / :func:`build_real_comparison`). The
+comparison is a third report file on purpose: ``last-real-report.json`` keeps
+its exact schema and stays agent-side only, so its downstream consumers
+(propose / post-landing diff) never see baseline data.
 """
 
 from __future__ import annotations
@@ -62,6 +72,23 @@ from nexuscli.types import Message, Usage
 # hermetic baseline last-report.json so a --real run can never touch the
 # regression baseline (and vice versa).
 REAL_REPORT_RELATIVE = Path(".nexuscli") / "evals" / "last-real-report.json"
+
+# The baseline-ablation comparison file — a THIRD report file, deliberately
+# independent of last-real-report.json: that report's schema and its
+# agent-side-only content are a contract with downstream consumers (skill
+# propose / post-landing diff read it), so comparison data must never be
+# folded in. A --baseline run writes BOTH files; a plain --real run writes
+# only the report above and never touches this one.
+REAL_COMPARISON_RELATIVE = Path(".nexuscli") / "evals" / "last-real-comparison.json"
+
+# The bare-model baseline's ENTIRE system prompt, chosen to say nothing the
+# model could leverage: no tool guidance, no persona, no workspace context —
+# the smallest nudge that still yields a direct answer. Everything the agent
+# side adds on top of this (tool registry, skill candidates, harness prompt)
+# is what the ablation measures. Recorded verbatim in the comparison document
+# (``baseline.system_prompt``) so nightly readers can see exactly what the
+# bare arm got.
+BASELINE_SYSTEM_PROMPT = "You are a helpful assistant. Answer directly."
 
 # The curated read-only builtin subset the real track allows to EXECUTE.
 # Curated by name, not derived from Tool.is_read_only: the flag is the repo's
@@ -630,5 +657,303 @@ def format_real_report(report: dict[str, Any]) -> list[str]:
     lines.append(
         f"total_runs={summary.get('total_runs', 0)} passed={summary.get('passed', 0)} "
         f"failed={summary.get('failed', 0)}"
+    )
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Baseline ablation — the bare-model arm (`eval run --real --baseline`)
+# ---------------------------------------------------------------------------
+
+# Tool-trajectory and turn-budget assertions are meaningless against the bare
+# model (it gets no tools and has no turn loop); the comparison document names
+# them once, up front, instead of marking every scenario entry.
+_BASELINE_NA_ASSERTIONS: tuple[str, ...] = (
+    "expected_tool_sequence",
+    "forbidden_tools",
+    "required_tools",
+    "max_tool_calls",
+    "max_total_tool_calls",
+    "max_turns",
+)
+
+
+async def run_baseline_scenario(
+    scenario: RealEvalScenario,
+    *,
+    config: NexusCliConfig,
+    llm_client_factory: Callable[[Any], Any],
+    judge: RealJudge | None = None,
+) -> RealEvalResult:
+    """Run one scenario against the bare model: a single direct completion.
+
+    The ablation's "no harness" arm. The scenario's prompt goes to the SAME
+    LLM the agent side uses (same config chain, same provider/model — the
+    gain must be attributable to the harness, not to a model difference) as
+    ONE ``chat`` completion with an empty tool list, no skill candidates and
+    no agent system prompt — just :data:`BASELINE_SYSTEM_PROMPT`. The result
+    reuses :class:`RealEvalResult` so the two arms stay shape-comparable;
+    ``turns`` is pinned to 1 (one LLM call, no react loop) and
+    ``tool_sequence`` stays empty (nothing can be called).
+
+    Assertion subset: ``final_contains`` plus the scenario's own judge,
+    reused verbatim (same rubric, same threshold, same judge-model override —
+    one ruler for both arms). The tool-sequence class and ``max_turns`` are
+    not evaluated here; :func:`build_real_comparison` marks them N/A in the
+    document. ``judge=None`` selects the default LLM-backed judge on the same
+    factory, exactly like :func:`run_real_scenario`.
+    """
+    result = RealEvalResult(name=scenario.name, passed=False)
+    result.source = scenario.source
+    texts: list[str] = []
+    failure_reasons: list[str] = []
+    total_usage = Usage()
+
+    llm_client = llm_client_factory(config.llm)
+    messages = [Message(role="user", content=scenario.prompt)]
+    async for event in llm_client.chat(messages, [], system_prompt=BASELINE_SYSTEM_PROMPT):
+        event_type = event.get("type")
+        if event_type == "text_delta":
+            texts.append(str(event.get("text") or ""))
+        elif event_type == "usage":
+            total_usage = total_usage + Usage.from_mapping(event.get("usage") or {})
+        elif event_type == "error":
+            failure_reasons.append(f"model errored: {event.get('error')}")
+    # The completion's text deltas ARE the final answer: there is no message
+    # list to extract a last assistant turn from, unlike the agent arm.
+    result.final_text = "".join(texts)
+    result.turns = 1
+
+    judge_usage: list[Usage] = []
+    if scenario.judge is not None and judge is None:
+        judge = _default_judge(llm_client_factory, config, judge_usage)
+    judge_reasons, judge_detail = await _judge_verdict(scenario, result.final_text, judge)
+    for extra in judge_usage:
+        total_usage = total_usage + extra
+
+    result.usage = total_usage
+    result.cost = _calculate_costs(llm_client, total_usage)
+    result.judge = judge_detail
+    result.failure_reasons = (
+        failure_reasons + _baseline_assertion_failures(scenario, result) + judge_reasons
+    )
+    result.passed = not result.failure_reasons
+    return result
+
+
+def _baseline_assertion_failures(scenario: RealEvalScenario, result: RealEvalResult) -> list[str]:
+    """The text-only subset of the scenario's assertions: ``final_contains``.
+
+    Deliberately NOT :func:`nexuscli.eval.runner._assertion_failures`: the
+    other six keys read a tool trajectory the bare model cannot have (it
+    receives an empty tool list), so judging them would report every scenario
+    as a tool failure instead of the answer quality the ablation compares.
+    The wording matches the shared evaluator so reports read the same.
+    """
+    failures: list[str] = []
+    assertions = scenario.assertions
+    if assertions.final_contains is not None:
+        for needle in assertions.final_contains:
+            if needle not in result.final_text:
+                failures.append(f"final text does not contain: {needle!r}")
+    return failures
+
+
+@dataclass(slots=True)
+class BaselineComparisonRun:
+    """Everything one ``--baseline`` double-run produced.
+
+    ``agent_results`` feeds the unchanged real-track report: the CLI builds
+    ``last-real-report.json`` from it exactly as a plain ``--real`` run
+    would, so that file's schema and agent-side-only content are untouched.
+    ``baseline_results`` is the bare-model arm and stays in memory — it is
+    never folded into the real-track report. ``comparison`` is the document
+    for ``last-real-comparison.json`` (:func:`write_real_comparison`).
+    """
+
+    agent_results: list[RealEvalResult]
+    baseline_results: list[RealEvalResult]
+    comparison: dict[str, Any]
+
+
+def run_baseline_comparison(
+    scenarios: list[RealEvalScenario],
+    *,
+    root: str,
+    llm_client_factory: Callable[[Any], Any] | None = None,
+    judge: RealJudge | None = None,
+) -> BaselineComparisonRun:
+    """Run the agent arm, then the bare-model arm, and assemble the deltas.
+
+    Both arms run the same scenario list serially against the same client
+    factory (one fresh client per run, per-side usage and judge). A one-shot
+    double-run is the fair-sampling choice — model output varies between
+    calls, so caching an earlier agent side would compare against a different
+    sample; that is also why ``--repeat`` cannot combine with ``--baseline``
+    (the CLI rejects the combination outright).
+
+    The agent arm reuses :func:`run_real_scenarios` unchanged — track config
+    enforcement, read-only deny rules, fail-closed approval, the judge seam,
+    and (with no injected factory) the same up-front no-key
+    :class:`RealTrackError` as a plain ``--real`` run. The bare-model arm
+    stays in memory: this function writes nothing; persistence is the
+    caller's job (report via the unchanged :func:`build_real_report` /
+    :func:`write_real_report` path, comparison via
+    :func:`write_real_comparison`).
+    """
+    agent_results = run_real_scenarios(
+        scenarios,
+        root=root,
+        repeat=1,
+        llm_client_factory=llm_client_factory,
+        judge=judge,
+    )
+    config = _load_real_config(root)
+    if llm_client_factory is None:
+        llm_client_factory = _default_llm_factory(config, root=root)
+    baseline_results = [
+        asyncio.run(
+            run_baseline_scenario(
+                scenario,
+                config=config,
+                llm_client_factory=llm_client_factory,
+                judge=judge,
+            )
+        )
+        for scenario in scenarios
+    ]
+    return BaselineComparisonRun(
+        agent_results=agent_results,
+        baseline_results=baseline_results,
+        comparison=build_real_comparison(agent_results, baseline_results),
+    )
+
+
+def build_real_comparison(
+    agent_results: list[RealEvalResult],
+    baseline_results: list[RealEvalResult],
+) -> dict[str, Any]:
+    """Assemble the agent-vs-baseline comparison document (pure data).
+
+    Results pair **positionally**: both arms iterate the same scenario list
+    in the same order and produce exactly one result per scenario
+    (:func:`run_real_scenarios` with ``repeat=1``, and the bare-model loop
+    above), so ``zip(..., strict=True)`` gives each agent run its own
+    baseline run. A length mismatch is a caller bug and fails loudly rather
+    than silently truncating. Pairing by name would be wrong instead: the
+    loader rejects duplicate tool names but not duplicate scenario names,
+    so two same-named files in a ``--file`` directory would both map to the
+    last baseline entry and double-count its tokens/pass. Deltas are agent
+    minus baseline: ``pass_delta > 0`` is the harness's net gain (scenarios
+    only the agent passed), ``token_delta > 0`` is the harness's extra token
+    cost. The four-quadrant counts make the agreement structure visible:
+    scenarios both arms pass, only the agent passes, only the bare model
+    passes, and neither passes (the bare model failing tool-required
+    questions is the expected ablation signal, not a defect). The bare
+    arm's N/A assertions are stated once up front instead of per scenario.
+    """
+    quadrants = {"both_pass": 0, "agent_only": 0, "baseline_only": 0, "both_fail": 0}
+    scenarios: list[dict[str, Any]] = []
+    agent_pass = baseline_pass = 0
+    agent_tokens = baseline_tokens = 0
+    for agent, baseline in zip(agent_results, baseline_results, strict=True):
+        if agent.passed:
+            agent_pass += 1
+        if baseline.passed:
+            baseline_pass += 1
+        agent_total = agent.usage.total_tokens
+        baseline_total = baseline.usage.total_tokens
+        agent_tokens += agent_total
+        baseline_tokens += baseline_total
+        if agent.passed and baseline.passed:
+            quadrants["both_pass"] += 1
+        elif agent.passed:
+            quadrants["agent_only"] += 1
+        elif baseline.passed:
+            quadrants["baseline_only"] += 1
+        else:
+            quadrants["both_fail"] += 1
+        scenarios.append(
+            {
+                "id": agent.name,
+                "agent": {"status": "pass" if agent.passed else "fail", "tokens": agent_total},
+                "baseline": {
+                    "status": "pass" if baseline.passed else "fail",
+                    "tokens": baseline_total,
+                },
+                "delta": {
+                    "pass_delta": int(agent.passed) - int(baseline.passed),
+                    "token_delta": agent_total - baseline_total,
+                },
+            }
+        )
+    total = len(scenarios)
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "track": "real-baseline-comparison",
+        "baseline": {
+            "system_prompt": BASELINE_SYSTEM_PROMPT,
+            "assertions": {
+                "evaluated": ["final_contains", "judge"],
+                "not_applicable": list(_BASELINE_NA_ASSERTIONS),
+            },
+        },
+        "scenarios": scenarios,
+        "summary": {
+            "scenarios_total": total,
+            "agent_pass": agent_pass,
+            "baseline_pass": baseline_pass,
+            "pass_delta": agent_pass - baseline_pass,
+            "agent_pass_rate": round(agent_pass / total, 4) if total else 0.0,
+            "baseline_pass_rate": round(baseline_pass / total, 4) if total else 0.0,
+            "quadrants": quadrants,
+            "total_tokens": {"agent": agent_tokens, "baseline": baseline_tokens},
+        },
+    }
+
+
+def write_real_comparison(project_root: str | Path, comparison: dict[str, Any]) -> Path:
+    """Write the comparison under ``<root>/.nexuscli/evals/last-real-comparison.json``.
+
+    A separate writer from :func:`write_real_report` on purpose: the two
+    files serve different consumers (propose / post-landing diff read the
+    agent-side report; nightly readers read this one) and neither may leak
+    into the other.
+    """
+    path = Path(project_root) / REAL_COMPARISON_RELATIVE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(comparison, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def format_real_comparison(comparison: dict[str, Any]) -> list[str]:
+    """Human-readable lines for the CLI: one per scenario, then the summary."""
+    lines: list[str] = []
+    for entry in comparison.get("scenarios", []):
+        agent = entry.get("agent") or {}
+        baseline = entry.get("baseline") or {}
+        delta = entry.get("delta") or {}
+        lines.append(
+            f"{entry.get('id', '?')}\t"
+            f"agent={str(agent.get('status', '?')).upper()} "
+            f"baseline={str(baseline.get('status', '?')).upper()} "
+            f"tokens={agent.get('tokens', 0)}/{baseline.get('tokens', 0)} "
+            f"(pass_delta={delta.get('pass_delta', 0):+d}, "
+            f"token_delta={delta.get('token_delta', 0):+d})"
+        )
+    summary = comparison.get("summary") or {}
+    quadrants = summary.get("quadrants") or {}
+    quadrant_text = " ".join(
+        f"{key}={quadrants.get(key, 0)}"
+        for key in ("both_pass", "agent_only", "baseline_only", "both_fail")
+    )
+    total = summary.get("scenarios_total", 0)
+    lines.append(
+        f"agent_pass={summary.get('agent_pass', 0)}/{total} "
+        f"baseline_pass={summary.get('baseline_pass', 0)}/{total} "
+        f"pass_delta={summary.get('pass_delta', 0):+d} | quadrants: {quadrant_text}"
     )
     return lines

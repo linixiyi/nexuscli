@@ -71,7 +71,12 @@ from nexuscli.eval import (
     write_real_report,
     write_report,
 )
-from nexuscli.eval.real import RealTrackError
+from nexuscli.eval.real import (
+    RealTrackError,
+    format_real_comparison,
+    run_baseline_comparison,
+    write_real_comparison,
+)
 from nexuscli.llm import create_llm_client
 from nexuscli.mcp import (
     McpConfigError,
@@ -602,6 +607,17 @@ def eval_run(
             help="Real track only: run every scenario k times serially (default 1)",
         ),
     ] = 1,
+    baseline: Annotated[
+        bool,
+        typer.Option(
+            "--baseline",
+            help=(
+                "Real track only: also run the bare-model ablation (same LLM, one "
+                "direct completion, no tools/skills/harness prompt) and write the "
+                "harness-gain comparison to .nexuscli/evals/last-real-comparison.json"
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Run eval scenarios and write the track's report.
 
@@ -616,14 +632,31 @@ def eval_run(
     are fail-closed denied and audited, and the report goes to
     ``<cwd>/.nexuscli/evals/last-real-report.json`` (the hermetic baseline is
     never touched). Exits 1 on any failed run or when no API key is configured.
+
+    ``--real --baseline`` adds the bare-model ablation: after the agent arm,
+    the same scenarios run as single direct completions (no tools, no skill
+    injection, no harness prompt), and the per-scenario/summary harness-gain
+    comparison lands in ``<cwd>/.nexuscli/evals/last-real-comparison.json``.
+    The real-track report keeps its exact schema and stays agent-side only.
+    The double-run is single-shot on purpose (``--repeat`` is rejected with
+    ``--baseline``), and the exit code still reflects the AGENT arm only —
+    the bare model failing tool-required questions is the expected ablation
+    signal, not a command failure.
     """
     _ = all_scenarios  # --all is the default behaviour; kept as an explicit flag
     root = (cwd or Path.cwd()).resolve()
     if real:
-        _eval_run_real(file, root, repeat=repeat)
+        if baseline and repeat != 1:
+            raise typer.BadParameter(
+                "--repeat cannot be combined with --baseline: the comparison is a "
+                "single-shot fair sample on both sides"
+            )
+        _eval_run_real(file, root, repeat=repeat, baseline=baseline)
         return
     if repeat != 1:
         raise typer.BadParameter("--repeat only applies to the real track (--real)")
+    if baseline:
+        raise typer.BadParameter("--baseline only applies to the real track (--real)")
     target: Path
     if file is not None:
         target = file
@@ -656,7 +689,7 @@ def eval_run(
         raise typer.Exit(1)
 
 
-def _eval_run_real(file: Path | None, root: Path, *, repeat: int) -> None:
+def _eval_run_real(file: Path | None, root: Path, *, repeat: int, baseline: bool = False) -> None:
     """The ``--real`` branch of ``eval run`` (see the command docstring)."""
     target = file if file is not None else builtin_real_eval_dir()
     if target is None:
@@ -670,8 +703,17 @@ def _eval_run_real(file: Path | None, root: Path, *, repeat: int) -> None:
     if not scenarios:
         typer.echo(f"No real-track eval scenarios in {target}", err=True)
         raise typer.Exit(1)
+    comparison_run = None
     try:
-        results = run_real_scenarios(scenarios, root=str(root), repeat=repeat)
+        if baseline:
+            # The ablation double-run: agent arm first (its results feed the
+            # unchanged report below — same path, same schema), then the
+            # bare-model arm, which stays in memory until the comparison
+            # document lands in its own file.
+            comparison_run = run_baseline_comparison(scenarios, root=str(root))
+            results = comparison_run.agent_results
+        else:
+            results = run_real_scenarios(scenarios, root=str(root), repeat=repeat)
     except RealTrackError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
@@ -680,6 +722,14 @@ def _eval_run_real(file: Path | None, root: Path, *, repeat: int) -> None:
     for line in format_real_report(report):
         typer.echo(line)
     typer.echo(f"Report written to {report_path}")
+    if comparison_run is not None:
+        comparison_path = write_real_comparison(root, comparison_run.comparison)
+        for line in format_real_comparison(comparison_run.comparison):
+            typer.echo(line)
+        typer.echo(f"Comparison written to {comparison_path}")
+    # The exit code reflects the AGENT arm only: the bare model failing
+    # tool-required questions is the ablation's expected signal, reported in
+    # the comparison document, not a command failure.
     if report["summary"]["failed"]:
         raise typer.Exit(1)
 
