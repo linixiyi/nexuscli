@@ -39,8 +39,8 @@
 ## 3. 功能范围
 
 ### 3.1 核心功能（MVP）
-- [ ] repeat=3 全量真网关测定：last-real-report.json 含 30 题 × pass_k.repeat=3
-- [ ] manifest 逐题回填 stability（repeat/passed_runs/all_pass）+ docs/eval.md 方差量化段
+- [x] repeat=3 全量真网关测定：last-real-report.json 含 30 题 × pass_k.repeat=3
+- [x] manifest 逐题回填 stability（repeat/passed_runs/all_pass）+ docs/eval.md 方差量化段
   （三次采样对比：校准 24/30、消融 19/30、pass^3 = N/30，摇摆题清单）
 
 ### 3.2 扩展功能
@@ -79,9 +79,9 @@
   spec_verify 600s 上限，同包 C/D 处置）；回填与文档由子代理完成
 
 ## 6. 成功标准与验证方式
-- [ ] last-real-report.json 30 题 pass_k.repeat=3 且 summary.all_pass_rate 有值 ->
+- [x] last-real-report.json 30 题 pass_k.repeat=3 且 summary.all_pass_rate 有值 ->
   verify: task_0001
-- [ ] manifest 逐题 stability 回填、docs 方差段（三次采样对比 + 摇摆题清单）、全量与
+- [x] manifest 逐题 stability 回填、docs 方差段（三次采样对比 + 摇摆题清单）、全量与
   Ruff 双检全绿 -> verify: task_0002
 
 ## 7. 风险与约束

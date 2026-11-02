@@ -7,7 +7,7 @@
 - verify 命令不得自引用本包 check 门禁（自指命令在「最近一条」语义下不可满足）
 
 ## 阶段一：实现
-- [ ] repeat=3 全量真网关测定（主会话后台执行，90 次运行）
+- [x] repeat=3 全量真网关测定（主会话后台执行，90 次运行）
   - boundary: 只运行真实入口与读取报告，不产生代码改动
   - verify: `uv run python -c "import json,pathlib; rep=json.loads(pathlib.Path('.nexuscli/evals/last-real-report.json').read_text()); scs=rep['scenarios']; assert len(scs)==30, len(scs); assert all(s['pass_k']['repeat']==3 for s in scs), [s['pass_k'] for s in scs[:3]]; assert rep['summary'].get('all_pass_rate') is not None, rep['summary']; print('STABILITY-RUN-OK all_pass_rate=', rep['summary']['all_pass_rate'])"`
     - 运行目录：仓库根；前置：本地网关 127.0.0.1:20128 在线；双跑本体
@@ -16,7 +16,7 @@
     - 成功判定：打印 STABILITY-RUN-OK 与 pass^3 全通过率
     - 失败处理：场景数≠30 或 repeat≠3 说明 run 未完成或被中途打断——查
       /tmp/stability-run.log 尾部，重跑
-- [ ] manifest 回填 stability + docs 方差量化 + 全量回归
+- [x] manifest 回填 stability + docs 方差量化 + 全量回归
   - depends-on: task_0001
   - boundary: 只改 examples/evals/suite/meta/manifest.json（新增 stability 字段，不动
     calibration）、docs/eval.md（方差量化段：三次采样对比 + 摇摆题清单）、README 评测
