@@ -758,6 +758,10 @@ def test_cli_baseline_keeps_report_schema_and_writes_comparison_separately(tmp_p
         "usage",
         "cost",
         "judge",
+        # The sandbox_write quality block (2026-11-03_add-real-sandbox-write-quality)
+        # is the report schema's one sanctioned additive extension; null for
+        # every read-only run like this one.
+        "quality",
     }
 
     def _all_keys(node):  # noqa: ANN001, ANN202

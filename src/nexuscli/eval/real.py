@@ -39,23 +39,64 @@ comparison into ``.nexuscli/evals/last-real-comparison.json``
 comparison is a third report file on purpose: ``last-real-report.json`` keeps
 its exact schema and stays agent-side only, so its downstream consumers
 (propose / post-landing diff) never see baseline data.
+
+**The controlled write sandbox** (``sandbox_write: true``, spec
+2026-11-03_add-real-sandbox-write-quality) is the track's one, explicitly
+scoped exception to the zero-write invariant above — a per-scenario opt-in,
+never a widening of :data:`REAL_TRACK_TOOLS`. A sandbox scenario:
+
+- gets a fresh empty ``tempfile.mkdtemp`` sandbox (prefix
+  :data:`SANDBOX_DIR_PREFIX`) and its Agent runs with the sandbox as
+  ``cwd`` — the file tools build their :class:`~nexuscli.policy.PathGuard`
+  from ``ToolContext.cwd`` (``tools/file_ops.resolve_path``), so the guard
+  root IS the sandbox and the repository itself stays unwritable;
+- keeps the registry unchanged (all builtins mounted) but un-denies
+  :data:`REAL_SANDBOX_WRITE_TOOLS` (``write_file`` / ``edit_file``) in the
+  scenario's config and allow-rules them, so the real gate chain lets them
+  execute (a bare allow rule is the executor's standing auto-approve);
+  ``bash`` and every other non-whitelisted tool stays deny-ruled — the
+  sandbox opens *file writes only*, never command execution;
+- is audited exactly like the read-only track: every write attempt (allowed,
+  escaped or denied) leaves an audit record;
+- runs a quality gate after the loop (:func:`run_quality_gate`: py_compile
+  every sandbox ``.py``, then ``python -m ruff check --output-format
+  concise`` in a subprocess; a missing ruff degrades the metric to ``null``
+  with an explanatory note) and records the result as the run's ``quality``
+  block. The ``max_ruff_violations`` / ``require_compile_clean`` assertion
+  keys judge that block fail-closed: a ``null`` ruff metric fails a declared
+  ``max_ruff_violations`` (never silently passes it);
+- has its sandbox removed after the run (best-effort: a failed removal
+  becomes a single in-process :class:`SandboxCleanupWarning`, never an
+  exception and never silence).
+
+A scenario without ``sandbox_write`` runs exactly as before — the sandbox
+branch is unreachable, no sandbox is created, and the report's ``quality``
+field is ``null``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import json
+import py_compile
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import warnings
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
 from nexuscli.agent import Agent
 from nexuscli.config import NexusCliConfig, load_config
-from nexuscli.eval.loader import RealEvalScenario, RealJudgeSpec
+from nexuscli.eval.loader import EvalAssertions, RealEvalScenario, RealJudgeSpec
 from nexuscli.eval.reporter import append_report_history
 from nexuscli.eval.runner import (
     _CAP_HEADROOM,
@@ -140,6 +181,36 @@ REAL_TRACK_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+# The sandbox_write extension set (spec 2026-11-03_add-real-sandbox-write-quality):
+# the ONLY tools a ``sandbox_write`` scenario adds to its own executable
+# surface, and only for that one scenario's config. :data:`REAL_TRACK_TOOLS`
+# itself stays untouched — the main whitelist's "default read-only" semantics
+# are the track invariant; this set is the explicitly reviewed exception a
+# scenario must opt into. Both tools stay outside REAL_TRACK_TOOLS: a
+# non-sandbox scenario denies them exactly as before. ``bash`` is deliberately
+# absent — the sandbox opens file writes only, never command execution.
+REAL_SANDBOX_WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file"})
+
+# The write sandbox's temp-directory prefix (system temp dir, fresh empty
+# directory per scenario run, removed after the run). The recognizable prefix
+# is the residue story: a failed cleanup leaves a findable
+# ``nexuscli-eval-write-*`` directory instead of silent junk.
+SANDBOX_DIR_PREFIX = "nexuscli-eval-write-"
+
+
+class SandboxCleanupWarning(UserWarning):
+    """A sandbox_write scenario's sandbox directory could not be removed.
+
+    The run itself is unaffected (the report and its quality block are fine);
+    the warning names the leftover path so it can be removed manually.
+    """
+
+
+# The in-process one-shot flag behind :func:`_cleanup_sandbox`: at most one
+# cleanup warning per process, per the spec's "一次性警告" contract — a
+# repeated failure must not flood every scenario's output.
+_SANDBOX_CLEANUP_WARNED = False
+
 
 class RealTrackError(RuntimeError):
     """Raised when the real track cannot start (no key, unusable provider).
@@ -172,6 +243,15 @@ _JUDGE_SYSTEM_PROMPT = (
 _SCORE_RE = re.compile(r"score\s*[:：]\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 _REASON_RE = re.compile(r"reason\s*[:：]\s*(.+)", re.IGNORECASE)
 
+# One violation line of `ruff check --output-format concise`: every diagnostic
+# starts with the ``path:line:col: `` position prefix — classic rules carry an
+# alphanumeric code there (``demo.py:1:8: F401 [*] ...``), newer ruff versions
+# report syntax errors as ``invalid-syntax`` messages. Counting the prefix
+# (the trailing ``Found N errors.`` summary line has none) covers both; a
+# violation exit with no matching line is reported as unjudgeable rather than
+# as zero violations.
+_RUFF_CONCISE_LINE = re.compile(r"\S+:\d+:\d+: ")
+
 
 # The failure reason appended when a run's react loop hit its turn cap or the
 # loop guard aborted: a real-track scenario must converge within its own
@@ -189,6 +269,11 @@ class RealEvalResult:
 
     ``repetition`` is the 1-based repeat index (``--repeat k`` runs each
     scenario k times, serially, with a fresh LLM client per run).
+
+    ``quality`` is the sandbox_write scenario's quality-gate block
+    (:func:`run_quality_gate`); ``None`` for every read-only scenario and for
+    a sandbox scenario whose agent loop raised before the gate could run. The
+    report carries it verbatim (additive — existing report keys unchanged).
     """
 
     name: str
@@ -202,6 +287,7 @@ class RealEvalResult:
     cost: dict[str, Any] = field(default_factory=dict)
     judge: dict[str, Any] | None = None
     source: str = ""
+    quality: dict[str, Any] | None = None
 
 
 def run_real_scenarios(
@@ -264,6 +350,14 @@ async def run_real_scenario(
     ``judge=None`` selects the default LLM-backed judge built on the same
     client factory; the judge's own token usage is folded into the run's
     usage total (injected fake judges contribute none — expected in tests).
+
+    A ``sandbox_write`` scenario runs against a fresh one-shot sandbox
+    directory instead of ``root``: the Agent's ``cwd`` is the sandbox, so the
+    file tools' PathGuard root is the sandbox and the repository stays
+    unwritable; the scenario's config additionally opens the
+    :data:`REAL_SANDBOX_WRITE_TOOLS` channel (:func:`_apply_sandbox_write_config`).
+    After the loop (successful or not) the quality gate runs over the sandbox
+    while it still exists, and the sandbox is then removed best-effort.
     """
     result = RealEvalResult(name=scenario.name, passed=False, repetition=repetition)
     result.source = scenario.source
@@ -272,29 +366,46 @@ async def run_real_scenario(
     failure_reasons: list[str] = []
     total_usage = Usage()
 
-    llm_client = llm_client_factory(config.llm)
-    agent = Agent(
-        llm_client=llm_client,
-        tool_registry=_real_registry(),
-        config=copy.deepcopy(config),
-        cwd=root,
-        max_turns=(scenario.assertions.max_turns or _DEFAULT_TURN_BUDGET) + _CAP_HEADROOM,
-    )
-    async for event in agent.run(scenario.prompt):
-        event_type = event.get("type")
-        if event_type == "tool_call":
-            tool_sequence.append(str(event.get("name") or ""))
-        elif event_type == "text_delta":
-            texts.append(str(event.get("text") or ""))
-        elif event_type == "usage":
-            total_usage = total_usage + Usage.from_mapping(event.get("usage") or {})
-        elif event_type == "warning" and _is_termination_warning(event):
-            failure_reasons.append(_TERMINATION_REASON)
-        elif event_type == "error":
-            failure_reasons.append(f"agent errored: {event.get('error')}")
-        elif event_type == "done":
-            result.turns += int(event.get("total_turns") or 0)
-            result.final_text = _final_assistant_text(event.get("messages"), fallback=texts)
+    sandbox: Path | None = None
+    run_config = copy.deepcopy(config)
+    cwd = root
+    if scenario.sandbox_write:
+        sandbox = Path(tempfile.mkdtemp(prefix=SANDBOX_DIR_PREFIX))
+        cwd = str(sandbox)
+        _apply_sandbox_write_config(run_config)
+
+    quality: dict[str, Any] | None = None
+    try:
+        llm_client = llm_client_factory(config.llm)
+        agent = Agent(
+            llm_client=llm_client,
+            tool_registry=_real_registry(),
+            config=run_config,
+            cwd=cwd,
+            max_turns=(scenario.assertions.max_turns or _DEFAULT_TURN_BUDGET) + _CAP_HEADROOM,
+        )
+        async for event in agent.run(scenario.prompt):
+            event_type = event.get("type")
+            if event_type == "tool_call":
+                tool_sequence.append(str(event.get("name") or ""))
+            elif event_type == "text_delta":
+                texts.append(str(event.get("text") or ""))
+            elif event_type == "usage":
+                total_usage = total_usage + Usage.from_mapping(event.get("usage") or {})
+            elif event_type == "warning" and _is_termination_warning(event):
+                failure_reasons.append(_TERMINATION_REASON)
+            elif event_type == "error":
+                failure_reasons.append(f"agent errored: {event.get('error')}")
+            elif event_type == "done":
+                result.turns += int(event.get("total_turns") or 0)
+                result.final_text = _final_assistant_text(event.get("messages"), fallback=texts)
+        if sandbox is not None:
+            # Gate while the sandbox still exists; the cleanup below runs
+            # whether the gate (or the loop above) failed or not.
+            quality = run_quality_gate(sandbox)
+    finally:
+        if sandbox is not None:
+            _cleanup_sandbox(sandbox)
 
     judge_usage: list[Usage] = []
     if scenario.judge is not None and judge is None:
@@ -310,7 +421,13 @@ async def run_real_scenario(
     # approximately (the token counts stay exact).
     result.cost = _calculate_costs(llm_client, total_usage)
     result.judge = judge_detail
-    result.failure_reasons = failure_reasons + _assertion_failures(scenario, result) + judge_reasons
+    result.quality = quality
+    result.failure_reasons = (
+        failure_reasons
+        + _assertion_failures(scenario, result)
+        + _quality_assertion_failures(quality, scenario.assertions)
+        + judge_reasons
+    )
     result.passed = not result.failure_reasons
     return result
 
@@ -427,10 +544,18 @@ def _load_real_config(root: str) -> NexusCliConfig:
     #   "always" would deny even read-only tools and "never" would widen the
     #   surface;
     # - plan_mode stays off: the deny rules below do the rejecting AND audit
-    #   it, while the plan-mode gate short-circuits before the audit record.
+    #   it, while the plan-mode gate short-circuits before the audit record;
+    # - path_guard pinned ON: the track's confinement promise (reads confined
+    #   to the workspace; sandbox_write writes confined to the sandbox) rests
+    #   entirely on the file tools' PathGuard (tools/file_ops.resolve_path
+    #   builds it from policy.path_guard_enabled), and the sandbox branch
+    #   allow-rules the write pair into executor auto-approve — a user config
+    #   with path_guard_enabled=false must not be able to switch that
+    #   confinement off underneath an unattended run.
     config.features.audit_log = True
     config.policy.hitl_mode = "auto"
     config.policy.plan_mode = False
+    config.policy.path_guard_enabled = True
     # Deny everything outside the read-only subset. Deny beats ask/allow, so
     # user-level allow rules cannot punch through, and deny decisions are
     # audited by the executor (approver="permission-rule").
@@ -450,6 +575,207 @@ def _real_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register_all(get_builtin_tools())
     return registry
+
+
+# ---------------------------------------------------------------------------
+# sandbox_write — the controlled write sandbox
+# ---------------------------------------------------------------------------
+
+
+def _apply_sandbox_write_config(config: NexusCliConfig) -> None:
+    """Open the controlled write channel for ONE sandbox_write scenario.
+
+    Mutates the run's deep-copied config in place (the caller passes a copy;
+    the shared track config is never touched). Two edits, nothing else:
+
+    - un-deny :data:`REAL_SANDBOX_WRITE_TOOLS` by removing their bare-name
+      deny rules — those are the track's own computed denies
+      (``builtin_names - REAL_TRACK_TOOLS``), and a scenario that opted into
+      the sandbox explicitly overrides the track's default posture (the same
+      category of track pin as audit-on / hitl-auto above). Any *spec'd* deny
+      rule the user wrote (e.g. ``write_file(src/**)``) stays and keeps
+      denying — deny still beats allow;
+    - allow-rule both tools, so ``requires_approval`` calls execute through
+      the executor's standing allow-rule auto-approve instead of failing
+      closed on the missing approval callback (the audit then attributes the
+      calls to ``permission-rule``, same as any allow-ruled execution).
+
+    ``bash`` and every other tool outside ``REAL_TRACK_TOOLS |
+    REAL_SANDBOX_WRITE_TOOLS`` remain deny-ruled.
+    """
+    config.permissions.deny = [
+        rule for rule in config.permissions.deny if rule not in REAL_SANDBOX_WRITE_TOOLS
+    ]
+    config.permissions.allow = sorted(set(config.permissions.allow) | REAL_SANDBOX_WRITE_TOOLS)
+
+
+def _python_executable() -> str:
+    """The interpreter for the quality gate's ``python -m ruff`` subprocess.
+
+    Indirection exists so tests can point it at a path that cannot spawn a
+    process (exercising the degradation branch hermetically).
+    """
+    return sys.executable
+
+
+def _ruff_install_guidance() -> str:
+    return (
+        "ruff is not available in this environment; the lint metric is recorded as null. "
+        "Install it with 'uv sync --extra dev' (ruff ships in the dev extra) to enable it."
+    )
+
+
+def _ruff_violations(sandbox: Path) -> tuple[int | None, str | None]:
+    """Count ruff violations in the sandbox; ``(None, note)`` when unjudgeable.
+
+    Runs ``<python> -m ruff check --output-format concise <sandbox>`` as a
+    subprocess and parses the concise lines (``path:line:col: CODE message``).
+    Fail-closed by contract: any run that cannot be *parsed* into a count —
+    ruff missing, the subprocess unusable, an unexpected exit code, a
+    violation exit with zero parsable lines — returns ``None`` plus a
+    human-readable note instead of a guessed number.
+    """
+    if find_spec("ruff") is None:
+        return None, _ruff_install_guidance()
+    try:
+        completed = subprocess.run(
+            [
+                _python_executable(),
+                "-m",
+                "ruff",
+                "check",
+                "--output-format",
+                "concise",
+                str(sandbox),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"ruff check could not run ({exc}); the lint metric is recorded as null"
+    if "No module named ruff" in (completed.stderr or ""):
+        return None, _ruff_install_guidance()
+    if completed.returncode not in (0, 1):
+        excerpt = ((completed.stderr or "") + (completed.stdout or "")).strip()[:200]
+        return None, (
+            f"ruff check exited with {completed.returncode} (expected 0/1); "
+            f"raw output excerpt: {excerpt!r}"
+        )
+    lines = [
+        line for line in (completed.stdout or "").splitlines() if _RUFF_CONCISE_LINE.search(line)
+    ]
+    if completed.returncode == 1 and not lines:
+        excerpt = ((completed.stderr or "") + (completed.stdout or "")).strip()[:200]
+        return None, (
+            "ruff reported a violation exit but no parsable concise line; "
+            f"raw output excerpt: {excerpt!r}"
+        )
+    return len(lines), None
+
+
+def run_quality_gate(sandbox: Path) -> dict[str, Any]:
+    """The sandbox_write quality gate: objective metrics over the sandbox's .py.
+
+    Collects every ``*.py`` file under the sandbox (sorted relative POSIX
+    paths), compiles each with :mod:`py_compile` (``compile_ok`` — a single
+    syntax error makes it ``False``), then counts ruff violations in one
+    subprocess (:func:`_ruff_violations`; missing ruff degrades to ``null``
+    with a note). Returns the report's ``quality`` block::
+
+        {"files_written": [...], "ruff_violations": int | None,
+         "compile_ok": bool, "ruff_note": str | None}
+
+    An empty sandbox is a clean gate (no files, 0 violations, compile ok) —
+    whether "the agent wrote nothing" passes is the assertions' job, not the
+    gate's.
+    """
+    files = sorted(path for path in sandbox.rglob("*.py") if path.is_file())
+    compile_ok = True
+    for file in files:
+        try:
+            # Writes the .pyc next to the source (inside the sandbox, which is
+            # about to be removed) — standard py_compile behavior, no side
+            # effect outside the sandbox.
+            py_compile.compile(str(file), doraise=True)
+        except (py_compile.PyCompileError, OSError):
+            compile_ok = False
+    violations, note = _ruff_violations(sandbox)
+    return {
+        "files_written": [file.relative_to(sandbox).as_posix() for file in files],
+        "ruff_violations": violations,
+        "compile_ok": compile_ok,
+        "ruff_note": note,
+    }
+
+
+def _quality_assertion_failures(
+    quality: dict[str, Any] | None, assertions: EvalAssertions
+) -> list[str]:
+    """The quality assertions' verdict on the recorded gate block.
+
+    ``max_ruff_violations`` (match on ``is not None`` — ``0`` is a real cap)
+    fails when the metric is null (fail-closed: an unjudgeable metric must
+    never silently pass its cap; the reason carries the gate's note so the
+    reader sees the install guidance), or when the count exceeds the cap.
+    ``require_compile_clean`` fails when the sandbox did not compile cleanly.
+    Without either key the gate block is recorded but never touches
+    PASS/FAIL. A declared assertion with no gate block at all is a broken
+    run, not a pass — it fails loudly.
+    """
+    declared = assertions.max_ruff_violations is not None or bool(assertions.require_compile_clean)
+    if not declared:
+        return []
+    if quality is None:
+        return [
+            "scenario declares quality assertion(s) but the run produced no quality block; "
+            "refusing to pass it unjudged"
+        ]
+    failures: list[str] = []
+    if assertions.max_ruff_violations is not None:
+        violations = quality.get("ruff_violations")
+        if violations is None:
+            failures.append(
+                "max_ruff_violations cannot be judged: the ruff metric is null "
+                f"({quality.get('ruff_note') or 'no note recorded'}) — a null metric "
+                "fails closed; install ruff ('uv sync --extra dev') to make it judgeable"
+            )
+        elif violations > assertions.max_ruff_violations:
+            failures.append(
+                f"ruff violations {violations} exceed max_ruff_violations "
+                f"{assertions.max_ruff_violations}"
+            )
+    if assertions.require_compile_clean and not quality.get("compile_ok"):
+        failures.append("sandbox code does not compile cleanly (require_compile_clean)")
+    return failures
+
+
+def _cleanup_sandbox(sandbox: Path) -> None:
+    """Remove the sandbox after the run; a failure warns once, never raises.
+
+    Best-effort by contract (spec §2.2): the run's results are already in
+    hand, so a stubborn sandbox (locked file, transient OSError) must not
+    fail the run — but it must also not vanish silently: the FIRST failure in
+    this process emits one :class:`SandboxCleanupWarning` naming the leftover
+    path (recognizable by :data:`SANDBOX_DIR_PREFIX`); further failures in the
+    same process stay silent.
+    """
+    global _SANDBOX_CLEANUP_WARNED
+    try:
+        shutil.rmtree(sandbox)
+    except OSError as exc:
+        if _SANDBOX_CLEANUP_WARNED:
+            return
+        _SANDBOX_CLEANUP_WARNED = True
+        # Mirror the reporter's degradation: even a -W error warning filter
+        # must not turn the cleanup into a raise.
+        with contextlib.suppress(Exception):
+            warnings.warn(
+                f"eval write sandbox not removed ({exc}): {sandbox} — remove the "
+                f"'{SANDBOX_DIR_PREFIX}' directory manually; the run itself is unaffected",
+                SandboxCleanupWarning,
+                stacklevel=2,
+            )
 
 
 def _default_llm_factory(config: NexusCliConfig, *, root: str) -> Callable[[Any], Any]:
@@ -512,9 +838,13 @@ def build_real_report(results: list[RealEvalResult], *, repeat: int) -> dict[str
     only when ALL its repeats passed) and the cost block (accumulated and
     per-run-average token usage with the cache/reasoning splits, plus the
     summed per-currency cost). Per run: status, reasons, tool sequence,
-    turns, usage, cost and the structured judge verdict. The summary carries
-    the all-pass rate and the run-wide usage/cost totals. Deliberately no
-    comparison block: the real track does not diff against a baseline.
+    turns, usage, cost, the structured judge verdict and — additive as of
+    spec 2026-11-03_add-real-sandbox-write-quality — the sandbox_write
+    scenario's ``quality`` block (``null`` for every read-only run; existing
+    report keys are unchanged, so pre-sandbox consumers keep reading the
+    document). The summary carries the all-pass rate and the run-wide
+    usage/cost totals. Deliberately no comparison block: the real track does
+    not diff against a baseline.
     """
     ordered: dict[str, list[RealEvalResult]] = {}
     for result in results:
@@ -533,6 +863,7 @@ def build_real_report(results: list[RealEvalResult], *, repeat: int) -> dict[str
                 "usage": run.usage.to_dict(),
                 "cost": run.cost,
                 "judge": dict(run.judge) if run.judge is not None else None,
+                "quality": dict(run.quality) if run.quality is not None else None,
             }
             for run in runs
         ]

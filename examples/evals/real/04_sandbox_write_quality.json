@@ -1,0 +1,21 @@
+{
+  "name": "real-sandbox-write-quality",
+  "prompt": "This is an unattended sandboxed write evaluation. The current workspace is an empty scratch directory created only for this run; nothing else needs to be read. Use the write_file tool to create greeting.py in the workspace root with exactly this content:\n\ndef build_greeting(name):\n    greeting = f\"Hello, {name}!\"\n    return greeting\n\n\nprint(build_greeting(\"nexuscli\"))\n\nDo not create any other files and do not run shell commands. When the file is written, reply with one short sentence that contains the marker SANDBOX-WRITE-OK.",
+  "sandbox_write": true,
+  "assertions": {
+    "max_turns": 6,
+    "final_contains": ["SANDBOX-WRITE-OK"],
+    "max_ruff_violations": 0,
+    "require_compile_clean": true,
+    "forbidden_tools": [
+      "bash",
+      "execute_command",
+      "task",
+      "task_stop",
+      "save_memory",
+      "save_skill",
+      "revert_turn",
+      "todo_write"
+    ]
+  }
+}

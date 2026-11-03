@@ -78,13 +78,28 @@ agent-loop key (``prompt``, ``scripted_turns``, ``tools``, ``assertions``,
 The real-model track (``nexuscli eval run --real``, see ``eval/real.py``)
 loads scenarios from ``examples/evals/real/`` through
 :func:`load_real_eval_scenarios` with its own minimal schema: ``name``,
-``prompt``, an ``assertions`` subset of the same seven keys, and an optional
-``judge`` block (rubric + score threshold + optional judge-model override).
+``prompt``, an ``assertions`` subset of the same seven keys, an optional
+``judge`` block (rubric + score threshold + optional judge-model override)
+and the optional ``sandbox_write`` switch (spec
+2026-11-03_add-real-sandbox-write-quality): when ``true``, that one scenario
+runs with a controlled write channel — ``write_file`` / ``edit_file`` execute
+against a one-shot temporary sandbox directory (the PathGuard root is pinned
+to the sandbox for the run; the repository itself stays unwritable and
+``bash`` stays denied), and a quality gate (ruff check + py_compile over the
+sandbox's ``.py`` files) records a ``quality`` block onto the run. The two
+quality assertion keys ``max_ruff_violations`` (a non-negative int) and
+``require_compile_clean`` (a bool) turn the recorded metrics into
+PASS/FAIL; both require ``sandbox_write: true`` — without a sandbox there is
+no quality gate to judge, and the loader rejects that combination instead of
+letting a scenario fail-closed on a metric that can never exist.
 There are no stub tools and no scripted turns against a real model, so the
 hermetic-only keys (``scripted_turns``, ``tools``, ``memory_eval``, ...) are
 rejected outright as track conflicts. ``expected_tool_sequence`` is accepted
 but discouraged for real models (the docs say so): it stays usable for
 smoke-checking a fixed wiring, but it is brittle against real LLM variance.
+The hermetic track rejects ``sandbox_write`` and the quality assertion keys
+as unknown keys — the write sandbox and its gate exist only on the real
+track.
 
 Validation is strict on purpose: unknown keys (at every level, top level
 included) and wrong shapes raise :class:`EvalSchemaError` with the file path
@@ -121,6 +136,12 @@ _ASSERTION_KEYS = {
     "max_tool_calls",
     "max_total_tool_calls",
 }
+# Quality assertion keys of the real track's sandbox_write scenarios (spec
+# 2026-11-03_add-real-sandbox-write-quality): they judge the write-sandbox
+# quality gate (ruff violations cap, py_compile cleanliness) and are rejected
+# on the hermetic track, where no sandbox or gate exists.
+_REAL_QUALITY_ASSERTION_KEYS = {"max_ruff_violations", "require_compile_clean"}
+_REAL_ASSERTION_KEYS = _ASSERTION_KEYS | _REAL_QUALITY_ASSERTION_KEYS
 _TOOL_KEYS = {
     "name",
     "description",
@@ -165,7 +186,7 @@ _SCENARIO_KEYS = {
 # plus an optional judge — nothing else. Every hermetic-only key is a track
 # conflict and is rejected with a dedicated message (stub tools, scripted
 # turns and the memory-recall track are meaningless against a real LLM).
-_REAL_SCENARIO_KEYS = {"name", "prompt", "assertions", "judge"}
+_REAL_SCENARIO_KEYS = {"name", "prompt", "assertions", "judge", "sandbox_write"}
 _REAL_CONFLICT_KEYS: tuple[str, ...] = (
     "tools",
     "scripted_turns",
@@ -262,6 +283,13 @@ class EvalAssertions:
     ``required_tools`` is the unordered subset counterpart of
     ``expected_tool_sequence``; ``max_tool_calls`` maps a tool name to its
     call-count cap and ``max_total_tool_calls`` caps the run's total.
+
+    ``max_ruff_violations`` / ``require_compile_clean`` are real-track-only:
+    they judge the sandbox_write quality gate (see the module docstring). The
+    hermetic loader never accepts them, so on the hermetic track they stay
+    ``None``; ``None`` means "not asserted" and a recorded quality block then
+    never touches PASS/FAIL. ``max_ruff_violations`` may legitimately be ``0``
+    ("no violations allowed") — assert on ``is not None``, never truthiness.
     """
 
     expected_tool_sequence: list[str] | None = None
@@ -271,6 +299,8 @@ class EvalAssertions:
     required_tools: list[str] | None = None
     max_tool_calls: dict[str, int] | None = None
     max_total_tool_calls: int | None = None
+    max_ruff_violations: int | None = None
+    require_compile_clean: bool | None = None
 
 
 @dataclass(slots=True)
@@ -329,6 +359,13 @@ class RealEvalScenario:
     has no stub tools, no scripted turns and no memory spec, and keeping the
     types apart makes it impossible to hand a hermetic scenario to the real
     runner (or vice versa) by accident.
+
+    ``sandbox_write`` (default ``False``) opens the scenario's controlled
+    write channel: the runner then executes it against a one-shot sandbox
+    directory with ``write_file`` / ``edit_file`` allowed and the PathGuard
+    root pinned to that sandbox (see the module docstring and
+    ``eval/real.py``). ``False`` — the default — is the unchanged read-only
+    real track.
     """
 
     name: str
@@ -336,6 +373,7 @@ class RealEvalScenario:
     assertions: EvalAssertions
     judge: RealJudgeSpec | None
     source: str
+    sandbox_write: bool = False
 
 
 def load_eval_scenarios(path: str | Path) -> list[EvalScenario]:
@@ -456,7 +494,32 @@ def _real_scenario_from_mapping(data: dict[str, Any], *, source: str) -> RealEva
     prompt = data.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise EvalSchemaError(f"{source}: 'prompt' must be a non-empty string")
-    assertions = _parse_assertions(data.get("assertions", {}), source=source)
+    # Absent -> False (the unchanged read-only real track). Present means it
+    # must be a real boolean: a string/int/null would silently read as a
+    # different posture than the author wrote, so they are rejected.
+    sandbox_write = data.get("sandbox_write", False)
+    if not isinstance(sandbox_write, bool):
+        raise EvalSchemaError(f"{source}: 'sandbox_write' must be a boolean, got {sandbox_write!r}")
+    assertions = _parse_assertions(
+        data.get("assertions", {}), source=source, allowed_keys=_REAL_ASSERTION_KEYS
+    )
+    # The quality assertions judge the sandbox_write gate's metrics; without a
+    # sandbox the gate never runs, so the run would fail-closed on a metric
+    # that cannot exist — a scenario bug, rejected at load time.
+    declared_quality_keys = [
+        key
+        for key, declared in (
+            ("max_ruff_violations", assertions.max_ruff_violations is not None),
+            ("require_compile_clean", bool(assertions.require_compile_clean)),
+        )
+        if declared
+    ]
+    if declared_quality_keys and not sandbox_write:
+        raise EvalSchemaError(
+            f"{source}: assertion key(s) {sorted(declared_quality_keys)} require "
+            "'sandbox_write': true — without the write sandbox no quality gate runs and "
+            "the assertion could never pass"
+        )
     judge: RealJudgeSpec | None = None
     if "judge" in data:
         judge = _parse_judge(data["judge"], source=source)
@@ -466,6 +529,7 @@ def _real_scenario_from_mapping(data: dict[str, Any], *, source: str) -> RealEva
         assertions=assertions,
         judge=judge,
         source=source,
+        sandbox_write=sandbox_write,
     )
 
 
@@ -879,14 +943,23 @@ def _reject_duplicate_seed_content(seed: list[MemorySeedEntry], *, source: str) 
         seen[normalized] = index
 
 
-def _parse_assertions(raw: Any, *, source: str) -> EvalAssertions:
+def _parse_assertions(
+    raw: Any, *, source: str, allowed_keys: frozenset[str] | set[str] = _ASSERTION_KEYS
+) -> EvalAssertions:
+    """Validate an ``assertions`` block against the caller track's key set.
+
+    The hermetic track speaks the base seven keys; the real track additionally
+    accepts the sandbox_write quality keys. Unknown keys are rejected with the
+    track's own supported list, so a quality key on the hermetic track (or any
+    typo anywhere) fails loudly instead of silently asserting nothing.
+    """
     if not isinstance(raw, dict):
         raise EvalSchemaError(f"{source}: 'assertions' must be an object when present")
-    unknown = set(raw) - _ASSERTION_KEYS
+    unknown = set(raw) - allowed_keys
     if unknown:
         raise EvalSchemaError(
             f"{source}: assertions has unknown key(s) {sorted(unknown)}; supported: "
-            f"{sorted(_ASSERTION_KEYS)}"
+            f"{sorted(allowed_keys)}"
         )
     expected = raw.get("expected_tool_sequence")
     if expected is not None:
@@ -913,6 +986,26 @@ def _parse_assertions(raw: Any, *, source: str) -> EvalAssertions:
             f"{source}: assertions.max_total_tool_calls must be a positive integer, "
             f"got {max_total!r}"
         )
+    # Real-track quality keys (shape only; the sandbox_write dependency is
+    # checked by the real-track loader with the parsed scenario in hand).
+    # Present-but-null is a wrong shape like any other — only an absent key
+    # means "not asserted" (same strictness as ``max_rounds``).
+    max_ruff_violations = None
+    if "max_ruff_violations" in raw:
+        max_ruff_violations = raw["max_ruff_violations"]
+        if not _is_non_negative_int(max_ruff_violations):
+            raise EvalSchemaError(
+                f"{source}: assertions.max_ruff_violations must be a non-negative integer, "
+                f"got {max_ruff_violations!r}"
+            )
+    require_compile_clean = None
+    if "require_compile_clean" in raw:
+        require_compile_clean = raw["require_compile_clean"]
+        if not isinstance(require_compile_clean, bool):
+            raise EvalSchemaError(
+                f"{source}: assertions.require_compile_clean must be a boolean, "
+                f"got {require_compile_clean!r}"
+            )
     return EvalAssertions(
         expected_tool_sequence=expected,
         final_contains=final_contains,
@@ -921,6 +1014,8 @@ def _parse_assertions(raw: Any, *, source: str) -> EvalAssertions:
         required_tools=required,
         max_tool_calls=max_tool_calls,
         max_total_tool_calls=max_total,
+        max_ruff_violations=max_ruff_violations,
+        require_compile_clean=require_compile_clean,
     )
 
 
@@ -955,6 +1050,11 @@ def _parse_tool_call_caps(raw: Any, *, source: str) -> dict[str, int]:
 def _is_positive_int(value: Any) -> bool:
     """True for an ``int >= 1`` that is not a ``bool`` (``true`` is not a count)."""
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _is_non_negative_int(value: Any) -> bool:
+    """True for an ``int >= 0`` that is not a ``bool`` (a cap may legitimately be 0)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _parse_string_list(raw: Any, label: str, *, source: str) -> list[str]:
