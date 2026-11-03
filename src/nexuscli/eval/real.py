@@ -56,6 +56,7 @@ from typing import Any
 from nexuscli.agent import Agent
 from nexuscli.config import NexusCliConfig, load_config
 from nexuscli.eval.loader import RealEvalScenario, RealJudgeSpec
+from nexuscli.eval.reporter import append_report_history
 from nexuscli.eval.runner import (
     _CAP_HEADROOM,
     _DEFAULT_TURN_BUDGET,
@@ -624,11 +625,20 @@ def _sum_costs(cost_dicts: Any) -> dict[str, dict[str, Any]]:
     return merged
 
 
-def write_real_report(project_root: str | Path, report: dict[str, Any]) -> Path:
+def write_real_report(
+    project_root: str | Path, report: dict[str, Any], *, append_history: bool = True
+) -> Path:
     """Write the report under ``<project_root>/.nexuscli/evals/last-real-report.json``.
 
     Kept separate from the hermetic :func:`nexuscli.eval.reporter.write_report`
     on purpose: the two tracks must never touch each other's report files.
+    After the main file lands, the same document is also appended as a
+    best-effort timestamped snapshot under ``history/real/``
+    (:func:`append_real_report_history`); a snapshot failure never fails the
+    write. ``append_history=False`` opts out — for instrumentation that
+    writes a report the caller is about to roll back (the post-landing diff
+    in ``skill/propose.py``): history must never record a run whose main
+    report the backup/restore then erases.
     """
     path = Path(project_root) / REAL_REPORT_RELATIVE
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -636,7 +646,21 @@ def write_real_report(project_root: str | Path, report: dict[str, Any]) -> Path:
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    if append_history:
+        append_real_report_history(project_root, report)
     return path
+
+
+def append_real_report_history(project_root: str | Path, report: dict[str, Any]) -> Path | None:
+    """Append the real-track report under ``history/real/`` (best-effort).
+
+    Thin wrapper over :func:`nexuscli.eval.reporter.append_report_history` so
+    both tracks carry one history-append function each (spec
+    2026-11-03_add-eval-history-and-skill-polish): identical degradation
+    contract — a snapshot failure becomes a single :class:`EvalHistoryWarning`
+    and never an exception.
+    """
+    return append_report_history(project_root, report, track="real")
 
 
 def format_real_report(report: dict[str, Any]) -> list[str]:

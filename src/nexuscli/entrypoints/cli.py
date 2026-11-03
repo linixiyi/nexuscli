@@ -55,6 +55,8 @@ from nexuscli.entrypoints.slash_commands import (
     split_command_message,
 )
 from nexuscli.eval import (
+    EVAL_HISTORY_RELATIVE,
+    HISTORY_TRACKS,
     EvalSchemaError,
     PreviousReportError,
     build_real_report,
@@ -732,6 +734,76 @@ def _eval_run_real(file: Path | None, root: Path, *, repeat: int, baseline: bool
     # the comparison document, not a command failure.
     if report["summary"]["failed"]:
         raise typer.Exit(1)
+
+
+@eval_app.command("history")
+def eval_history(
+    limit: Annotated[
+        int,
+        typer.Argument(help="How many recent runs to list per track (default 10)"),
+    ] = 10,
+    track: Annotated[
+        str | None,
+        typer.Option("--track", help="Only list one track: 'hermetic' or 'real'"),
+    ] = None,
+    cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
+) -> None:
+    """List recent eval runs from the history snapshots (read-only).
+
+    Reads ``<cwd>/.nexuscli/evals/history/{hermetic,real}/`` — one timestamped
+    report snapshot per successful ``eval run``, newest first — and shows per
+    snapshot: the UTC timestamp, passed/total, the run's exit verdict derived
+    from the report summary (exit=1 when it failed), plus the track's headline
+    signal: the cost-alert count (hermetic ``cost_increased``) or the all-pass
+    rate (real ``all_pass_rate``).
+    """
+    if limit < 1:
+        raise typer.BadParameter("limit must be >= 1")
+    if track is not None and track not in HISTORY_TRACKS:
+        raise typer.BadParameter("--track must be 'hermetic' or 'real'")
+    root = (cwd or Path.cwd()).resolve()
+    for name in (track,) if track else HISTORY_TRACKS:
+        for line in _eval_history_lines(root, name, limit):
+            typer.echo(line)
+
+
+def _eval_history_lines(root: Path, track: str, limit: int) -> list[str]:
+    """The history listing for one track: the newest ``limit`` snapshots first.
+
+    Read-only. A missing or empty history directory gets a friendly line (the
+    listing must stay usable before the first run), an unreadable or
+    summary-less snapshot gets a placeholder line instead of aborting the
+    listing. Snapshot filenames are the UTC stamps, so lexicographic order is
+    chronological order.
+    """
+    directory = root / EVAL_HISTORY_RELATIVE / track
+    snapshots = sorted(directory.glob("*.json")) if directory.is_dir() else []
+    if not snapshots:
+        return [f"{track}: no eval history yet (nothing recorded under {directory})"]
+    head = f"{track} (last {min(limit, len(snapshots))}):"
+    body = [_eval_history_line(track, path) for path in reversed(snapshots[-limit:])]
+    return [head, *body]
+
+
+def _eval_history_line(track: str, path: Path) -> str:
+    """One history line: time, passed/total, exit verdict, track headline."""
+    stamp = path.stem
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return f"{stamp}\t<unreadable snapshot>"
+    summary = report.get("summary") if isinstance(report, dict) else None
+    if not isinstance(summary, dict):
+        return f"{stamp}\t<snapshot without summary>"
+    passed = summary.get("passed", "?")
+    total = summary.get("total_runs", summary.get("total", "?"))
+    failed = summary.get("failed")
+    exit_part = f"exit={1 if failed else 0}" if isinstance(failed, int) else "exit=?"
+    if track == "real":
+        tail = f"all_pass_rate={summary.get('all_pass_rate', '?')}"
+    else:
+        tail = f"cost_increased={summary.get('cost_increased', 0)}"
+    return f"{stamp}\tpassed={passed}/{total}\t{exit_part}\t{tail}"
 
 
 # ---------------------------------------------------------------------------

@@ -438,11 +438,15 @@ def _default_post_landing_runner(cwd: str | Path, llm_client_factory: Any | None
     Load the one scenario file, run it through
     :func:`nexuscli.eval.real.run_real_scenarios`, build and WRITE the real
     report (that write is what the backup/restore around the runner
-    protects), and return the report for the diff. The eval imports stay
-    inside this function: they pull the agent/tool graph in, and none of it
-    is needed until a real run is actually confirmed. A missing key raises
-    :class:`nexuscli.eval.real.RealTrackError` with install guidance before
-    any scenario starts (real.py fails loudly, never silently).
+    protects), and return the report for the diff. The write opts OUT of the
+    eval-history snapshot (``append_history=False``): this is a throwaway
+    diff run whose report the restore erases again — history must not
+    record a run the track's own persistence then rolls back. The eval
+    imports stay inside this function: they pull the agent/tool graph in,
+    and none of it is needed until a real run is actually confirmed. A
+    missing key raises :class:`nexuscli.eval.real.RealTrackError` with
+    install guidance before any scenario starts (real.py fails loudly,
+    never silently).
     """
     from nexuscli.eval.loader import builtin_real_eval_dir, load_real_eval_scenarios
     from nexuscli.eval.real import build_real_report, run_real_scenarios, write_real_report
@@ -460,7 +464,7 @@ def _default_post_landing_runner(cwd: str | Path, llm_client_factory: Any | None
     scenarios = load_real_eval_scenarios(scenario_path)
     results = run_real_scenarios(scenarios, root=root, llm_client_factory=llm_client_factory)
     report = build_real_report(results, repeat=1)
-    write_real_report(root, report)
+    write_real_report(root, report, append_history=False)
     return report
 
 
