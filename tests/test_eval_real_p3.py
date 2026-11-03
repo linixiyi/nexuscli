@@ -262,15 +262,16 @@ def test_builtin_real_dir_ships_runnable_scenarios():
     assert real_dir is not None, "repository ships examples/evals/real"
     scenarios = load_real_eval_scenarios(real_dir)
     names = [scenario.name for scenario in scenarios]
-    assert len(names) == 3
+    assert len(names) == 4
     assert names == [
         "real-readonly-converge",
         "real-repo-question-answer",
         "real-skill-rule-follow",
+        "real-sandbox-write-quality",
     ]
-    # One plain smoke scenario, one judge-scored repository Q&A scenario and
-    # one skill-rule-follow scenario (load_skill + final marker), all
-    # loadable with the strict real-track schema.
+    # One plain smoke scenario, one judge-scored repository Q&A scenario,
+    # one skill-rule-follow scenario (load_skill + final marker) and one
+    # sandbox_write scenario, all loadable with the strict real-track schema.
     assert all(scenario.judge is None or scenario.judge.threshold for scenario in scenarios)
     judge_scenarios = [scenario for scenario in scenarios if scenario.judge is not None]
     assert len(judge_scenarios) == 1
@@ -284,6 +285,21 @@ def test_builtin_real_dir_ships_runnable_scenarios():
     assert len(skill_scenarios) == 1
     assert skill_scenarios[0].assertions.required_tools == ["load_skill"]
     assert skill_scenarios[0].assertions.final_contains == ["SKILL-RULE-OK"]
+    # The sandbox scenario (2026-11-03_add-real-sandbox-write-quality) is the
+    # set's one controlled-write entry: sandbox_write on, both quality
+    # assertions declared, and exactly one such scenario in the set.
+    sandbox_scenarios = [
+        scenario for scenario in scenarios if scenario.name == "real-sandbox-write-quality"
+    ]
+    assert len(sandbox_scenarios) == 1
+    assert sandbox_scenarios[0].sandbox_write is True
+    assert sandbox_scenarios[0].assertions.max_ruff_violations == 0
+    assert sandbox_scenarios[0].assertions.require_compile_clean is True
+    assert all(
+        scenario.sandbox_write is False
+        for scenario in scenarios
+        if scenario.name != "real-sandbox-write-quality"
+    ), "the read-only scenarios keep the default closed write channel"
 
 
 # ---------------------------------------------------------------------------

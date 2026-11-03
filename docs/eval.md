@@ -17,7 +17,9 @@ more expensive — without either ever changing a PASS/FAIL verdict.
 
 The optional **real-model track** (`nexuscli eval run --real`) asks what the
 script cannot: how the *real* model — the one your normal config chain
-selects — behaves on the real read-only builtin tools, what it really costs,
+selects — behaves on the real builtin tools (read-only by default; a
+scenario's `sandbox_write` opt-in opens a confined write sandbox with a
+ruff/py_compile quality gate), what it really costs,
 and how stable it is across repeats (pass^k) on open-ended answers
 (LLM-as-judge). It writes its own report and is nightly/manual evidence by
 design: real billing and provider variance make it the wrong thing to gate
@@ -494,13 +496,19 @@ see [Baseline ablation](#baseline-ablation---real---baseline).
 
 ### Safety model: read-only surface, fail-closed writes
 
-Unattended runs must never write. Three stacked layers enforce it:
+Unattended runs must never write. Three stacked layers enforce it — with one
+reviewed, explicitly opt-in exception: a scenario that declares
+`sandbox_write: true` opens a **controlled write sandbox** for that one
+scenario only (confined to a throwaway temp directory, `bash` still denied,
+audit unchanged — see
+[Controlled write sandbox](#controlled-write-sandbox-sandbox_write)). Without
+that declaration the layers below are the whole story, unchanged:
 
 - **Read-only tool subset.** The registry mounts the real builtin tools
   (no MCP, no plugins), but only a curated read-only subset may *execute*:
   `read_file`, `list_dir`, `glob`, `glob_files`, `grep`, `grep_code`,
   `directory_tree`, `get_file_info`, `web_search`, `web_fetch`,
-  `search_code`, `task_output`, `todo_read`.
+  `search_code`, `task_output`, `todo_read`, `load_skill`.
   Every other builtin gets a computed `permissions.deny` rule — deny beats
   ask/allow, so even a user config that allows `write_file` cannot punch
   through. The subset is curated **by name**, not derived from the tools'
@@ -518,7 +526,9 @@ Unattended runs must never write. Three stacked layers enforce it:
   that nothing reads to change behavior. It is IN the allowlist, and the
   track's write invariant is stated accordingly: zero workspace writes plus
   this one declared user-dir counter write; the audit log remains the
-  track's only documented write.
+  track's only documented write. The main whitelist is unchanged by the
+  sandbox feature: `write_file` / `edit_file` stay OUT of it, and a
+  scenario without `sandbox_write` denies them exactly as before.
 - **Fail-closed approval, same as `-p` without `--yes`.** There is no
   approval callback, so anything that still reaches the approval gate
   (`requires_approval` tools, `ask` rules) is denied. `hitl_mode` is pinned
@@ -536,15 +546,19 @@ Unattended runs must never write. Three stacked layers enforce it:
 Real scenarios are their own set (`examples/evals/real/`; `--file` accepts
 one file or a directory of `*.json` from anywhere) and load through a
 separate, deliberately minimal schema. Allowed keys are exactly `name`,
-`prompt`, `assertions` and an optional `judge`:
+`prompt`, `assertions`, an optional `judge` and an optional `sandbox_write`
+(see [Controlled write sandbox](#controlled-write-sandbox-sandbox_write)):
 
 ```jsonc
 {
   "name": "real-repo-question-answer",   // required, non-empty
   "prompt": "Read pyproject.toml ...",   // required, non-empty
-  "assertions": {                        // optional: the same seven checks as
-    "max_turns": 6,                      // the hermetic track, judged against
-    "forbidden_tools": ["write_file"]    // the real run's observed trajectory
+  "sandbox_write": false,                // optional, default false: the closed
+                                         // read-only track; true opens the
+                                         // one-scenario write sandbox
+  "assertions": {                        // optional: the hermetic checks
+    "max_turns": 6,                      // plus, for sandbox_write scenarios
+    "forbidden_tools": ["write_file"]    // only, the two quality keys below
   },
   "judge": {                             // optional: LLM-as-judge scoring
     "rubric": [                          // required, non-empty criteria the
@@ -561,11 +575,98 @@ keys are rejected outright as **track conflicts** (`scripted_turns`,
 `tools`, `memory_eval`, `permission_deny`, `hitl_mode`, `user_turns`,
 `max_rounds`) — stub tools and scripted turns are meaningless against a real
 model, and the two tracks use distinct scenario dataclasses so one cannot be
-fed to the other runner by accident. Other unknown keys (including
-`description` and `difficulty`) fail with the supported list in the message.
-`expected_tool_sequence` is accepted but **discouraged** for real models:
-any reordering the model chooses fails it, so prefer `required_tools` plus
-`forbidden_tools` unless the order really is the contract.
+fed to the other runner by accident. The hermetic track rejects
+`sandbox_write` and the quality assertion keys the same way (unknown keys):
+the write sandbox and its gate exist only on the real track. Other unknown
+keys (including `description` and `difficulty`) fail with the supported list
+in the message. `expected_tool_sequence` is accepted but **discouraged** for
+real models: any reordering the model chooses fails it, so prefer
+`required_tools` plus `forbidden_tools` unless the order really is the
+contract.
+
+### Controlled write sandbox (`sandbox_write`)
+
+The 2026-11-03_add-real-sandbox-write-quality spec is the track's one
+reviewed amendment to "unattended runs must never write": a scenario that
+declares `"sandbox_write": true` measures **controlled output**, not just
+read-only understanding — the agent writes real files, and the quality of
+what it wrote becomes a measurable, assertable metric. The default stays
+`false`, and a scenario without the flag runs exactly as before (the write
+pair deny-ruled and audited, no sandbox, `"quality": null` in the report).
+
+**What the flag opens — and what it never opens.** For that one scenario
+run only:
+
+- the agent runs against a fresh, **empty** `tempfile.mkdtemp` sandbox
+  (prefix `nexuscli-eval-write-` under the system temp directory; no
+  repository copy — the prompt must be self-contained), and the file tools'
+  PathGuard root is pinned to that sandbox: relative paths resolve inside
+  it and anything outside — the repository body included — fails with
+  `path escapes workspace`. The sandbox is removed after the run;
+- `write_file` / `edit_file` become executable **for this scenario's
+  config only**: their computed deny rules are lifted and allow-ruled, so
+  the real gate chain executes them without an approval callback. A
+  spec'd user deny rule (e.g. `write_file(src/**)`) still wins — deny
+  beats allow; the bare-name lift is the track's own pin, the same
+  category as the pinned audit/`hitl_mode`. The main `REAL_TRACK_TOOLS`
+  whitelist is untouched;
+- **`bash` and every other execution/state channel stay deny-ruled.** The
+  sandbox opens file writes only, never command execution — a command can
+  write outside the sandbox and reach the network, which is the opposite
+  of a confined write domain (execution scenarios are their own future
+  work);
+- the audit trail is unchanged: an allowed write is recorded as
+  `allow` / `permission-rule`, an escape attempt (PathGuard rejection) as
+  `error`, a denied call as `deny` — every attempt leaves a record;
+- cleanup is best-effort: the sandbox directory is removed when the run
+  ends, and a failed removal becomes a **single** `SandboxCleanupWarning`
+  per process naming the leftover path (recognizable by its prefix) —
+  never an exception, never silence.
+
+**The quality gate.** Every `sandbox_write` run records a `quality` block
+automatically (the metric is always measured; only the assertions below
+decide whether it judges PASS/FAIL):
+
+| field             | type        | meaning                                                            |
+| ----------------- | ----------- | ------------------------------------------------------------------ |
+| `files_written`   | `string[]`  | every `*.py` found under the sandbox, sorted relative POSIX paths  |
+| `ruff_violations` | `int\|null` | violation count from `python -m ruff check --output-format concise` over the sandbox; `null` when ruff is unavailable or its output is unparsable |
+| `compile_ok`      | `bool`      | every collected `*.py` compiles (`py_compile`, one syntax error fails it) |
+| `ruff_note`       | `str\|null` | the degradation explanation when the metric is `null`, else `null` |
+
+**The quality assertions.** Two keys, both requiring `sandbox_write: true`
+(the loader rejects them without it — without a sandbox no gate runs and
+the assertion could never pass):
+
+- `max_ruff_violations` — a non-negative integer cap (`0` is legal: "no
+  violations allowed"). FAILs when the count exceeds the cap. **Fail-closed
+  on null**: if ruff is unavailable the run FAILS with
+  `max_ruff_violations cannot be judged: the ruff metric is null (…)`
+  plus the install guidance — an unjudgeable metric must never silently
+  pass its cap;
+- `require_compile_clean` — a boolean. FAILs when `compile_ok` is `false`
+  (`sandbox code does not compile cleanly (require_compile_clean)`).
+
+Without either key the `quality` block is recorded but never touches
+PASS/FAIL. The hermetic track rejects both keys as unknown — there is no
+gate to judge there.
+
+**ruff availability.** ruff ships in the `dev` extra; if the environment
+does not have it (`uv sync --extra dev` installs it), the metric degrades
+to `null` with a `ruff_note` explaining so — the gate never guesses a
+count, and only a declared `max_ruff_violations` turns that null into a
+FAIL.
+
+The built-in example is
+`examples/evals/real/04_sandbox_write_quality.json` (`real-sandbox-write-quality`):
+a self-contained prompt writes one clean `greeting.py`, asserts the
+`SANDBOX-WRITE-OK` marker, `max_ruff_violations: 0`,
+`require_compile_clean: true`, and keeps the standard forbidden trio
+(`bash`, `execute_command`, `task`) — the write pair is the only channel
+it opens. Deliberately out of scope for now: `--baseline` combined with
+`sandbox_write` (the bare model cannot write, so the ablation arms are not
+comparable on quality), sandbox repository copies, and multi-sandbox or
+cross-scenario sharing.
 
 ### LLM-as-judge
 
@@ -631,7 +732,10 @@ nightly real-track comparisons are read by a human, not diffed by the tool.
       "cost": {"usd": {"total_cost": 0.0071}},
       "judge": {"score": 0.9, "threshold": 0.6, "passed": true,
                  "explanation": "names nexuscli from pyproject.toml",
-                 "model": null}            // null = judge followed the run model
+                 "model": null},           // null = judge followed the run model
+      "quality": null                      // sandbox_write quality block; null for
+                                           // every read-only run (additive field —
+                                           // see Controlled write sandbox)
     }
     // ... one entry per repetition, nothing dropped
   ]
@@ -892,12 +996,14 @@ cost metrics are deterministic step counts of the wiring, not model cost.
 It stays the CI gate.
 
 **Real-model track — look at quality, stability and cost.** The `--real`
-track runs the configured provider/model on the real read-only tools and
-reports what a script cannot stand in for: real token cost with
-cache/reasoning splits, pass^k stability across repeats, and open-ended
-answer quality via the rubric-scored judge. It is nightly/manual evidence,
-not a gate: real billing and provider variance make a hard exit-code gate
-wrong here, and the report is meant to be read, not diffed.
+track runs the configured provider/model on the real builtin tools —
+read-only by default, with the one per-scenario `sandbox_write` opt-in
+opening a confined write sandbox and its quality gate — and reports what a
+script cannot stand in for: real token cost with cache/reasoning splits,
+pass^k stability across repeats, and open-ended answer quality via the
+rubric-scored judge. It is nightly/manual evidence, not a gate: real
+billing and provider variance make a hard exit-code gate wrong here, and
+the report is meant to be read, not diffed.
 
 Still deliberately out of scope for both tracks: latency measurement, judge
 inter-model consistency (one rubric + one threshold pins one judge's
