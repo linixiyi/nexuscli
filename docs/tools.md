@@ -26,11 +26,12 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具（速�
 
 ## 代码索引与检索
 
-`/index [path]` 扫描工作区中的文本文件，把逐行内容写入 `.nexuscli/code_index.sqlite3` 的 `code_chunks` 表建立本地代码索引，默认跳过 `.git`、`.venv`、`node_modules` 等目录。`/search <query>` 与内置 `search_code` 工具基于同一索引做关键词检索：多个关键词按 AND 匹配，命中行按 **BM25 相关性排序**（纯 Python 实现，k1=1.5、b=0.75，无第三方依赖；词频按大小写不敏感子串计数，CJK 关键词同口径工作），按分降序返回 Top-N（N 即 `limit` 参数，默认 20，同分按路径与行号稳定并列）。`search_code` 工具输出末尾附一行命中统计（命中行数、候选窗口、检索词）；代码变动后重新运行 `/index` 即可刷新。如实边界：这是词法检索不是 embedding 语义检索——索引不做向量化、不联网；BM25 的语料统计在候选窗口（首词 LIKE 预筛的 500 行）内计算，窗口外的行不参与排序。
+`/index [path]` 扫描工作区中的文本文件，把逐行内容写入 `.nexuscli/code_index.sqlite3` 的 `code_chunks` 表建立本地代码索引，默认跳过 `.git`、`.venv`、`node_modules` 等目录。`/search <query>` 与内置 `search_code` 工具基于同一索引做关键词检索：多个关键词按 AND 匹配，命中行按 **BM25 相关性排序**（纯 Python 实现，k1=1.5、b=0.75，无第三方依赖；词频按大小写不敏感子串计数，CJK 关键词同口径工作），按分降序返回 Top-N（N 即 `limit` 参数，默认 20，同分按路径与行号稳定并列）。`search_code` 工具输出末尾附一行命中统计（命中行数、候选窗口、检索词）；代码变动后重新运行 `/index` 即可刷新。`search_code` 工具还接受可选 `scope` 参数做**目录限定检索**：传入相对仓库根的路径，把结果限定在该子树内（语义为「节点自身或其后代」的路径前缀匹配，改写自 OpenViking `PathScope`），例如 `{"query": "BM25", "scope": "src/rag"}` 只在 `src/rag` 子树里找；绝对路径、反斜杠分隔符、`./` 前缀与尾随 `/` 会自动归一，scope 指向仓库根本身时等价于不限定。`scope` 默认 `None`（不传）即不限定，检索行为与从前逐字节一致；scope 落在仓库根之外或该子树内无命中时返回空结果而非报错；限定后的 BM25 语料统计只在子树命中集内计算，因此同一查询在有无 scope 下分数可能不同。`/search` 斜杠命令暂不支持 scope。如实边界：这是词法检索不是 embedding 语义检索——索引不做向量化、不联网；BM25 的语料统计在候选窗口（首词 LIKE 预筛的 500 行）内计算，窗口外的行不参与排序。
 
 ```text
 /index .
 /search 权限评估
+search_code {"query": "BM25", "scope": "src/rag"}   # 目录限定：只在 src/rag 子树内检索
 ```
 
 ## 联网工具

@@ -417,12 +417,23 @@ def get_builtin_tools() -> list[Tool]:
         Tool(
             name="search_code",
             description=(
-                "Search the local code index; keyword AND matches ranked by BM25 relevance."
+                "Search the local code index; keyword AND matches ranked by BM25 relevance. "
+                "Pass scope as a path relative to the project root to restrict hits to that "
+                "subtree."
             ),
             parameters=object_schema(
                 {
                     "query": {"type": "string", "description": "Search query"},
                     "limit": {"type": "number", "description": "Maximum matches"},
+                    "scope": {
+                        "type": "string",
+                        "description": (
+                            "Restrict hits to this subtree, as a path relative to the "
+                            'project root (e.g. "src" or "src/utils"); absolute paths '
+                            "and backslash separators are normalized; a scope with no "
+                            "indexed hits returns no matches instead of an error"
+                        ),
+                    },
                 },
                 ["query"],
             ),
@@ -1083,8 +1094,11 @@ load_skill = _load_skill
 
 async def _search_code(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     index = CodeIndex(context.cwd)
+    raw_scope = payload.get("scope")
     results, stats = index.search_with_stats(
-        str(payload["query"]), limit=int(payload.get("limit") or 20)
+        str(payload["query"]),
+        limit=int(payload.get("limit") or 20),
+        scope=str(raw_scope) if raw_scope else None,
     )
     if not results:
         return ToolResult("(no indexed matches; run /index first)")

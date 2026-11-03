@@ -5,6 +5,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from nexuscli.rag.path_scope import normalize_scope, scope_like_clause, scope_matches
+
 TEXT_SUFFIXES = {
     ".py",
     ".ts",
@@ -133,12 +135,14 @@ class CodeIndex:
                     count += 1
             return count
 
-    def search(self, query: str, limit: int = 20) -> list[CodeSearchResult]:
-        results, _ = self.search_with_stats(query, limit)
+    def search(
+        self, query: str, limit: int = 20, scope: str | None = None
+    ) -> list[CodeSearchResult]:
+        results, _ = self.search_with_stats(query, limit, scope)
         return results
 
     def search_with_stats(
-        self, query: str, limit: int = 20
+        self, query: str, limit: int = 20, scope: str | None = None
     ) -> tuple[list[CodeSearchResult], SearchStats]:
         """AND-match rows for every query term, rank the matches with BM25, return top-N.
 
@@ -147,28 +151,57 @@ class CodeIndex:
         deterministic for a given index state and query term order. Term frequency
         is the case-insensitive substring count, which keeps the existing matching
         semantics (substring, whitespace-split terms) and works for CJK terms.
+
+        ``scope`` (optional) restricts hits to that subtree, interpreted relative
+        to the index root; absolute forms, ``\\`` separators, ``./`` and trailing
+        ``/`` are normalized (semantic port of OpenViking PathScope's unbounded
+        subtree contract, see ``nexuscli/rag/path_scope.py``). A scope outside
+        the root, or one with no indexed hits, yields ``[]`` rather than an
+        error. ``scope=None`` keeps the legacy unscoped behavior untouched.
         """
         terms = [term.lower() for term in query.split() if term.strip()]
         stats = SearchStats(terms=terms)
         if not terms:
             return [], stats
+        scope_prefix: str | None = None
+        if scope is not None:
+            scope_prefix = normalize_scope(self.root, scope)
+            if scope_prefix is None:
+                # Scope cannot intersect the index (outside the root): empty, not an error.
+                return [], stats
         rows: list[tuple[str, int, str]]
         with self._connect() as conn:
             like = f"%{terms[0]}%"
-            rows = conn.execute(
-                """
-                select path, line, content
-                from code_chunks
-                where root = ? and lower(content) like ?
-                order by path, line
-                limit ?
-                """,
-                (str(self.root), like, CANDIDATE_WINDOW),
-            ).fetchall()
+            scoped = scope_like_clause(scope_prefix) if scope_prefix is not None else None
+            if scoped is None:
+                rows = conn.execute(
+                    """
+                    select path, line, content
+                    from code_chunks
+                    where root = ? and lower(content) like ?
+                    order by path, line
+                    limit ?
+                    """,
+                    (str(self.root), like, CANDIDATE_WINDOW),
+                ).fetchall()
+            else:
+                clause, scope_params = scoped
+                rows = conn.execute(
+                    f"""
+                    select path, line, content
+                    from code_chunks
+                    where root = ? and lower(content) like ? and {clause}
+                    order by path, line
+                    limit ?
+                    """,
+                    (str(self.root), like, *scope_params, CANDIDATE_WINDOW),
+                ).fetchall()
         stats.candidate_rows = len(rows)
 
         docs: list[tuple[str, int, str, str]] = []
         for path, line, content in rows:
+            if scope_prefix is not None and not scope_matches(path, scope_prefix):
+                continue
             lowered = content.lower()
             if all(term in lowered for term in terms):
                 docs.append((path, int(line), content, lowered))
