@@ -30,8 +30,10 @@ so CI pipelines can diff or publish it directly.
 
 from __future__ import annotations
 
+import contextlib
 import json
-from datetime import datetime
+import warnings
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,18 @@ from nexuscli.eval.loader import DIFFICULTY_LEVELS
 from nexuscli.eval.runner import EvalRunResult
 
 REPORT_RELATIVE = Path(".nexuscli") / "evals" / "last-report.json"
+
+# The history root (spec 2026-11-03_add-eval-history-and-skill-polish): every
+# successful run appends its report here as a timestamped snapshot, per track,
+# so "only the last run" becomes a reviewable sequence. Track subdirectories
+# keep same-second hermetic/real snapshots from colliding and make cleanup
+# semantics per-track. Anything outside these two tracks is a caller bug.
+EVAL_HISTORY_RELATIVE = Path(".nexuscli") / "evals" / "history"
+HISTORY_TRACKS = ("hermetic", "real")
+
+
+class EvalHistoryWarning(UserWarning):
+    """The history snapshot could not be written; the run report itself is fine."""
 
 
 class PreviousReportError(ValueError):
@@ -239,13 +253,86 @@ def difficulty_summary(entries: list[dict[str, Any]]) -> dict[str, dict[str, int
 
 
 def write_report(project_root: str | Path, report: dict[str, Any]) -> Path:
-    """Write the report under ``<project_root>/.nexuscli/evals/last-report.json``."""
+    """Write the report under ``<project_root>/.nexuscli/evals/last-report.json``.
+
+    After the main file lands, the same document is also appended as a
+    best-effort timestamped snapshot under ``history/hermetic/``
+    (:func:`append_report_history`); a snapshot failure never fails the write.
+    """
     path = Path(project_root) / REPORT_RELATIVE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    append_report_history(project_root, report, track="hermetic")
+    return path
+
+
+def _history_stamp() -> str:
+    """UTC second-precision stamp, colon-free so it is a portable filename."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
+
+
+def _history_snapshot_path(directory: Path, stamp: str) -> Path:
+    """The first snapshot candidate path for ``stamp``.
+
+    No existence probe here: creation is exclusive (``open("x")``, atomic at
+    the OS level), so two same-second writers can never silently pick and
+    overwrite the same file — whoever loses the create race retries with the
+    next zero-padded collision suffix (see :func:`append_report_history`).
+    """
+    return directory / f"{stamp}.json"
+
+
+def append_report_history(
+    project_root: str | Path, report: dict[str, Any], *, track: str
+) -> Path | None:
+    """Append ``report`` as a timestamped snapshot under ``history/<track>/``.
+
+    Best-effort by contract (spec §2.2): a snapshot failure (disk full,
+    permission, serialization, ...) must never block the run, so any
+    :class:`OSError` (or a non-serializable report) degrades to a single
+    :class:`EvalHistoryWarning` and ``None``; success returns the snapshot
+    path. The snapshot is the SAME document as the main report — identical
+    serialization, no schema drift; the filename is the UTC second-precision
+    write time (``_history_stamp``). Same-second collisions retry on
+    exclusive-create failure with zero-padded ``_NN`` suffixes (``_02``,
+    ``_03``, ...): the create is atomic, so nothing is ever overwritten, and
+    ``'_' > '.'`` + zero padding keep lexicographic order chronological —
+    the base name first, then ``_02`` ... ``_99`` in write order.
+    """
+    if track not in HISTORY_TRACKS:
+        raise ValueError(f"track must be one of {HISTORY_TRACKS}, got {track!r}")
+    try:
+        directory = Path(project_root) / EVAL_HISTORY_RELATIVE / track
+        payload = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+        stamp = _history_stamp()
+        path = _history_snapshot_path(directory, stamp)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        suffix = 2
+        while True:
+            try:
+                # Exclusive create: FileExistsError means that exact name is
+                # taken (a same-second twin won the race) — never truncate.
+                with path.open("x", encoding="utf-8") as handle:
+                    handle.write(payload)
+            except FileExistsError:
+                path = directory / f"{stamp}_{suffix:02d}.json"
+                suffix += 1
+            else:
+                break
+    except (OSError, TypeError, ValueError) as exc:
+        # Even an error-action warning filter (-W error / PYTHONWARNINGS=error)
+        # turns warnings.warn into a raise — suppress that too: the "never
+        # blocks the run" contract must hold under every warning config.
+        with contextlib.suppress(Exception):
+            warnings.warn(
+                f"eval history snapshot not written ({exc}); the run report itself is unaffected",
+                EvalHistoryWarning,
+                stacklevel=2,
+            )
+        return None
     return path
 
 

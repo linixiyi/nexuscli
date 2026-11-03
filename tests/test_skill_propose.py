@@ -1050,6 +1050,43 @@ def test_post_landing_default_runner_without_key_records_guidance(tmp_path, monk
     assert report_path.read_bytes() == original_bytes
 
 
+def test_post_landing_default_runner_leaves_no_history_snapshot(tmp_path, monkeypatch):
+    """The diff run's report write opts out of the eval history.
+
+    ``_default_post_landing_runner`` writes through ``write_real_report`` with
+    ``append_history=False``: the backup/restore protects only
+    ``last-real-report.json``, so a ``history/real/`` snapshot of the
+    throwaway diff run would survive the restore and list a run the track's
+    own persistence just rolled back.
+    """
+    _isolate_home(tmp_path, monkeypatch)
+    import nexuscli.eval.real as real_module
+    from nexuscli.eval.real import RealEvalResult
+
+    monkeypatch.setattr(
+        real_module,
+        "run_real_scenarios",
+        lambda scenarios, **_kwargs: [RealEvalResult(name="real-skill-rule-follow", passed=True)],
+    )
+
+    out = run_post_landing_diff(
+        {"skill": "rule-demo"},
+        tmp_path,
+        runner=None,
+        confirm=lambda _reason: True,
+        interactive=True,
+    )
+
+    post = out["post_landing"]
+    assert post["after"]["scenario"] == "real-skill-rule-follow"
+    assert post["after"]["all_pass"] is True
+    assert post["report_restored"] is True
+    # The diff run left no history snapshot behind, and the main report is
+    # back to its pre-run state (absent — nothing existed before the run).
+    assert not (tmp_path / ".nexuscli" / "evals" / "history" / "real").exists()
+    assert not (tmp_path / ".nexuscli" / "evals" / "last-real-report.json").exists()
+
+
 def test_post_landing_runner_error_still_restores(tmp_path, monkeypatch):
     _isolate_home(tmp_path, monkeypatch)
     report_path = _write_report(

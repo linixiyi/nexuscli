@@ -1,8 +1,8 @@
 ---
 name: rule-demo
-description: Real-track eval demo skill that carries a reply-format rule; load it with load_skill and follow its rule in the final reply.
+description: Fixture skill for eval scenario 03_skill_rule_follow only — carries the SKILL-RULE-OK reply-format rule for that unattended chain proof; not for general use.
 version: "1.0.0"
-tags: [eval, rule, demo]
+tags: [eval-fixture]
 ---
 
 # Rule Demo

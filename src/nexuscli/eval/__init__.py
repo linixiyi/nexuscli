@@ -26,6 +26,10 @@ Public surface:
         Offline scripted execution (:class:`EvalRunResult`) on both tracks.
     :func:`load_previous_report` / :func:`build_report` / :func:`write_report`
         Regression comparison and persistence.
+    :func:`append_report_history` / :func:`append_real_report_history`
+        Best-effort timestamped run snapshots under :data:`EVAL_HISTORY_RELATIVE`
+        (per-track subdirectories); a snapshot failure degrades to a single
+        :class:`EvalHistoryWarning` and never blocks the run.
     :func:`load_real_eval_scenarios` / :func:`load_real_eval_scenario`
         Real-track scenario loading (minimal strict schema, track-conflict
         keys rejected); :func:`builtin_real_eval_dir` locates the set.
@@ -63,6 +67,7 @@ from nexuscli.eval.real import (
     REAL_TRACK_TOOLS,
     RealEvalResult,
     RealTrackError,
+    append_real_report_history,
     build_real_report,
     format_real_report,
     run_real_scenario,
@@ -70,8 +75,12 @@ from nexuscli.eval.real import (
     write_real_report,
 )
 from nexuscli.eval.reporter import (
+    EVAL_HISTORY_RELATIVE,
+    HISTORY_TRACKS,
     REPORT_RELATIVE,
+    EvalHistoryWarning,
     PreviousReportError,
+    append_report_history,
     build_report,
     comparison_verdict,
     format_report,
@@ -85,10 +94,13 @@ __all__ = [
     "DEFAULT_DIFFICULTY",
     "DEFAULT_MEMORY_TOP_K",
     "DIFFICULTY_LEVELS",
+    "EVAL_HISTORY_RELATIVE",
+    "HISTORY_TRACKS",
     "REAL_REPORT_RELATIVE",
     "REAL_TRACK_TOOLS",
     "REPORT_RELATIVE",
     "EvalAssertions",
+    "EvalHistoryWarning",
     "EvalRunResult",
     "EvalScenario",
     "EvalSchemaError",
@@ -103,6 +115,8 @@ __all__ = [
     "ScriptedTool",
     "ScriptedTurn",
     "ScriptedUserTurn",
+    "append_real_report_history",
+    "append_report_history",
     "builtin_eval_dir",
     "builtin_real_eval_dir",
     "build_real_report",

@@ -31,6 +31,7 @@ nexuscli eval list              # list built-in scenarios (examples/evals)
 nexuscli eval run               # run every built-in scenario (same as --all)
 nexuscli eval run --all         # explicit form of the default
 nexuscli eval run --file path   # one scenario file, or a directory of *.json
+nexuscli eval history [N]       # list recent runs from the history snapshots (default 10)
 ```
 
 `eval run` prints one `PASS/FAIL` line per scenario, a `COST` warning line
@@ -38,7 +39,8 @@ under any scenario whose cost grew since the previous report, an overall
 summary line and a per-tier `difficulty:` line; it writes the report to
 `<cwd>/.nexuscli/evals/last-report.json` and exits `1` when any scenario
 failed (CI-friendly). Cost warnings and tier counts are informational and
-never affect the exit code.
+never affect the exit code. Every successful run also appends a timestamped
+history snapshot — see [History snapshots](#history-snapshots-eval-history).
 
 The real-model track adds two flags to `eval run` (see
 [Real-model track](#real-model-track---real) for the full picture):
@@ -412,6 +414,65 @@ total=9 passed=9 failed=0 regressions=0 fixed=0 cost_increased=0 cost_decreased=
 difficulty: short total=0 passed=0 failed=0 regressions=0 | medium total=8 passed=8 failed=0 regressions=0 | long total=1 passed=1 failed=0 regressions=0
 Report written to <cwd>/.nexuscli/evals/last-report.json
 ```
+
+## History snapshots (`eval history`)
+
+A run's report does not only live as a single `last-*.json`: every
+successful `eval run` — hermetic or real — also appends the **same report
+document** as a timestamped snapshot, so "only the last run" becomes a
+reviewable sequence:
+
+- hermetic: `<cwd>/.nexuscli/evals/history/hermetic/<UTC timestamp>.json`
+- real: `<cwd>/.nexuscli/evals/history/real/<UTC timestamp>.json`
+
+The filename is the UTC write time to the second, colon-free
+(`2026-11-03T02-05-12Z.json`), so lexicographic order is chronological
+order. Same-second collisions are handled by exclusive file creation
+(atomic at the OS level — two concurrent writers can never silently
+overwrite each other): whoever loses the create race retries with
+zero-padded `_NN` suffixes (`_02`, `_03`, ...), which sort *after* the base
+name (`'_' > '.'`), so nothing is ever overwritten and lexicographic order
+stays chronological within a same-second pair too (up to `_99`). The
+snapshot is the identical report document — byte-for-byte the same
+serialization, no schema drift — and the two main report files keep their
+exact paths (`last-report.json`, `last-real-report.json`) and schemas.
+
+`eval history [N]` lists the most recent `N` snapshots **per track**
+(default `10`, minimum `1`), optionally filtered with `--track
+hermetic|real`. It is strictly read-only, newest first, one line per
+snapshot: the UTC timestamp, `passed/total`, the run's exit verdict derived
+from the report summary (`exit=1` when the run failed, as the original
+`eval run` exit code did), plus the track's headline signal — the cost-alert
+count (`cost_increased`, hermetic) or the all-pass rate (`all_pass_rate`,
+real). An unreadable or summary-less snapshot renders as a placeholder line
+instead of aborting the listing, and a track with no history yet gets a
+friendly hint naming its (missing) directory — never an error:
+
+```
+hermetic (last 1):
+2026-11-03T02-05-12Z	passed=9/9	exit=0	cost_increased=0
+real: no eval history yet (nothing recorded under /tmp/wk/.nexuscli/evals/history/real)
+```
+
+**Best-effort by contract.** The main report is written first; the history
+append runs after it and any failure there (disk full, permissions, …)
+degrades to a single warning — the run itself, its report file and the exit
+code are unaffected, and the degradation holds even under an error-action
+warning filter (`-W error` / `PYTHONWARNINGS=error`), where the warn call
+itself is suppressed instead of propagating. History is observability,
+never a gate.
+
+**What a "run" is, precisely.** Every user-driven `eval run` lands in
+history. One internal write opts out: the post-landing diff of `/skill
+propose` reruns scenario 03 and writes its report with history disabled —
+that throwaway report is erased again by the diff's own backup/restore, so
+recording it would list a run the track's persistence rolled back.
+
+**On-record deferrals.** Only the two main reports get history sequences:
+the baseline-ablation comparison file (`last-real-comparison.json`) is
+deliberately *not* snapshotted this round, and there is no retention or
+cleanup policy for the history directories yet. Both are conscious
+deferrals, not oversights.
 
 ## Real-model track (`--real`)
 
