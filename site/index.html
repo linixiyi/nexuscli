@@ -102,7 +102,7 @@
       <div class="feature rv">
         <div class="ico">🧠</div>
         <h3>记忆与压缩</h3>
-        <p>静态项目记忆 + SQLite 动态长期记忆（去重、TTL、相关性召回）；上下文达预算 80% 自动压缩旧轮次，<code>/compact</code> 随时手动压缩并指定保留重点。</p>
+        <p>静态项目记忆 + SQLite 动态长期记忆：词法 + BM25 + 实体多信号融合召回，时间感知分层（当前/过去/未来），去重与 TTL 治理；上下文达预算 80% 自动压缩，<code>/compact</code> 随时手动压缩。</p>
       </div>
       <div class="feature rv">
         <div class="ico">📸</div>
@@ -126,8 +126,8 @@
       </div>
       <div class="feature rv">
         <div class="ico">🧪</div>
-        <h3>离线评测回归</h3>
-        <p><code>nexuscli eval</code> 用脚本化假 LLM 驱动真实 Agent 跑 JSON 场景，两次运行自动 diff，<code>regression</code> 计数可直接当 CI 门禁。</p>
+        <h3>双轨评测回归</h3>
+        <p>hermetic 轨用脚本化假 LLM 驱动真实 Agent 跑 JSON 场景，两次运行自动 diff 当 CI 门禁；真模型轨加 baseline 消融、pass^k 稳定性、受控写域质量门与历史留痕。</p>
       </div>
     </div>
   </section>
@@ -158,7 +158,7 @@
     <div class="section-head rv">
       <div class="kicker">Documentation</div>
       <h2>文档中心</h2>
-      <p>以下 13 篇文档与运行教程由仓库 <code>docs/*.md</code> 和 <code>TUTORIAL.md</code> 构建生成，内容与源文件同步；每页带侧边目录与滚动高亮。</p>
+      <p>以下 14 篇文档与运行教程由仓库 <code>docs/*.md</code> 和 <code>TUTORIAL.md</code> 构建生成，内容与源文件同步；每页带侧边目录与滚动高亮。</p>
     </div>
     <div class="docs-grid">
       <a class="doc-card rv" href="tutorial.html"><div class="ico">🚀</div><div><h3>运行教程</h3><p>从安装依赖、配置模型 API 到第一次跑通 Agent 任务。</p></div></a>
@@ -172,7 +172,7 @@
       <a class="doc-card rv" href="docs/slash-commands.html"><div class="ico">🪄</div><div><h3>自定义斜杠命令</h3><p>markdown 提示词、frontmatter 与占位符注入。</p></div></a>
       <a class="doc-card rv" href="docs/observability.html"><div class="ico">🔭</div><div><h3>可观测性与调试</h3><p>trace_id、OTel 遥测、模型 IO 落盘与 usage 统计。</p></div></a>
       <a class="doc-card rv" href="docs/cron.html"><div class="ico">⏰</div><div><h3>定时任务（cron）</h3><p>离线任务注册表与外部调度器驱动方式。</p></div></a>
-      <a class="doc-card rv" href="docs/eval.html"><div class="ico">🧪</div><div><h3>评测回归（eval）</h3><p>脚本化场景、断言体系与回归 diff 门禁。</p></div></a>
+      <a class="doc-card rv" href="docs/eval.html"><div class="ico">🧪</div><div><h3>评测回归（eval）</h3><p>hermetic 回归门禁 + 真模型轨道：消融、pass^k 稳定性、受控写域质量门。</p></div></a>
       <a class="doc-card rv" href="docs/spec-skill.html"><div class="ico">📐</div><div><h3>Spec 任务包工作流</h3><p>规范驱动开发技能的核心概念与质量门禁。</p></div></a>
       <a class="doc-card rv" href="docs/testing-matrix.html"><div class="ico">🧭</div><div><h3>功能测试矩阵</h3><p>147 个用户表面：真人会怎么用、机器验证了没有、真实跑过没有。</p></div></a>
     </div>
