@@ -26,7 +26,7 @@ REPO = "https://github.com/linixiyi/nexuscli"
 DOC_META = {
     "config": ("🔧", "配置优先级链、provider key、价格覆盖与循环/回合上限"),
     "cron": ("⏰", "离线任务注册表与外部调度器驱动方式"),
-    "eval": ("🧪", "脚本化场景、断言体系与回归 diff 门禁"),
+    "eval": ("🧪", "双轨评测：hermetic 回归门禁 + 真模型轨道（消融、pass^k 稳定性、受控写域质量门）"),
     "hooks": ("🪝", "七个生命周期事件的挂载方式与安全约束"),
     "mcp": ("🔌", "stdio / HTTP server 接入、工具过滤与自身暴露为 server"),
     "memory-context": ("🧠", "记忆三层、动态召回、压缩预算与 provider 超限重试"),
@@ -42,7 +42,7 @@ DOC_META = {
     "slash-commands": ("🪄", "markdown 提示词、frontmatter 与占位符注入"),
     "spec-skill": ("📐", "规范驱动开发技能的核心概念与质量门禁"),
     "subagents": ("🧩", "后台委派、自定义代理定义与文件邮箱"),
-    "tools": ("🧰", "内置工具补充口径：pdf/rg 差异、vfs 视图、BM25 检索与图片输入"),
+    "tools": ("🧰", "内置工具补充口径：pdf/rg 差异、vfs 视图、BM25 检索（scope 目录限定）与图片输入"),
     "testing-matrix": ("🧭", "147 个用户表面的测试状态：测过什么、没测过什么"),
     "workflows": ("🔀", "JSON 步骤图 DAG、依赖批次并行与内置专家流程"),
 }
