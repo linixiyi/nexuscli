@@ -101,6 +101,8 @@
 /skill on &lt;name&gt;
 /skill off &lt;name&gt;
 /skill reload
+/skill propose &lt;name&gt; [--report hermetic|real]
+/skill proposals &lt;name&gt;
 /mcp
 /task
 /task add [--mode react|plan|team] &lt;task&gt;
@@ -112,6 +114,8 @@
 /snapshot save [label]
 /snapshot clean
 /restore &lt;snapshot-id-or-index&gt;
+/turn-resume
+/turn-resume &lt;checkpoint-id&gt;
 </code></pre>
 <h2 id="model-交互式模型选择器"><a class="toclink" href="#model-交互式模型选择器">/model 交互式模型选择器</a></h2>
 <p><code>/model</code> 会打开交互式模型选择器：<code>Tab</code> 或左右方向键在 <code>Default</code>、<code>Custom</code>、<code>API 拉取</code> 之间切换，上下方向键选择模型，<code>Enter</code> 立即切换当前 Agent。<code>Custom</code> 中可以选择已保存的 BYOK 模型、创建新的 DeepSeek/GLM/OpenAI-compatible 配置，或按 <code>d</code> 删除配置。自定义配置保存在权限为 <code>0600</code> 的 <code>~/.nexuscli/models.json</code>；建议填写 API Key 环境变量名，只有显式输入 API Key 时才会把密钥写入该文件。</p>
@@ -119,7 +123,7 @@
 <h2 id="skill-load-与一次性注入"><a class="toclink" href="#skill-load-与一次性注入">/skill load 与一次性注入</a></h2>
 <p><code>/skill load &lt;name&gt;</code> 把指定 Skill 的正文强制注入你的下一条消息（一次性消费）：下一回合模型会先读到该 Skill 再继续任务，适合主动确保某个技能被加载。</p>
 <h2 id="usage-双口径"><a class="toclink" href="#usage-双口径">/usage 双口径</a></h2>
-<p><code>/usage stats [N天]</code> 汇总本地 SQLite 用量库 <code>~/.nexuscli/usage.db</code>：近 N 天（缺省 7 天）的回合数、总 Token、总成本（USD/CNY）、按模型分布与按来源分布（By source）。落库为 best-effort：普通 REPL 回合（含自定义命令回合）记为 <code>source=repl</code>，值为该回合主代理自身的用量；<code>task</code> 工具委派的子代理与 <code>/workflow</code>、<code>/expert</code> 派发的工作流步骤，只要真实产出了 token，也各自落一行 <code>source=subagent</code>（记录器在 <code>run_subagent</code> 的 done 事件处，零 token 的空跑不落行），所以统计值覆盖 REPL 直连对话与委派回合两类；team/plan-and-execute 模式的 worker 回合与单次 <code>-p</code> 模式不落库。</p>
+<p><code>/usage stats [N天]</code> 汇总本地 SQLite 用量库 <code>~/.nexuscli/usage.db</code>：近 N 天（缺省 7 天）的回合数、总 Token、总成本（USD/CNY）、按模型分布与按来源分布（By source）。落库为 best-effort：普通 REPL 回合（含自定义命令回合）记为 <code>source=repl</code>，值为该回合主代理自身的用量；<code>task</code> 工具委派的子代理与 <code>/workflow</code>、<code>/expert</code> 派发的工作流步骤，只要真实产出了 token，也各自落一行 <code>source=subagent</code>（记录器在 <code>run_subagent</code> 的 done 事件处，零 token 的空跑不落行），所以统计值覆盖 REPL 直连对话与委派回合两类；team/plan-and-execute 模式的 worker 回合与单次 <code>-p</code> 模式不落库。保留窗口：<code>usage.db</code> 按 90 天保留窗口清理，<code>stats</code> 查询时顺带 best-effort 删除窗口外旧行（<code>UsageStore.prune</code>），库体积不随使用时长无界增长。</p>
 <p>不带参数的 <code>/usage</code> 打印一张四行状态表而不是 JSON dump：<code>turn</code>（本回合 input/output）、<code>session</code>（历史累计回合数与总 Token）、<code>cost</code>（有成本数据时按币种列出）与 <code>note</code>（内置价格表为带日期的默认值）。底层仍是 <code>session_usage</code> 双口径：<code>historical_total</code>（恢复基线 + 本进程累计，两者之和等于当前转录的 usage 台账）与 <code>current_process</code>（仅本进程记录的回合），并附 <code>sources</code> 标注来源，供 SDK 与单次 <code>--json</code> 消费。<code>/clear</code>、<code>/resume</code>、<code>/fork</code> 都会同步重置基线与本进程累计，保证双口径始终对应当前转录。</p>
 <h2 id="history-跨会话检索"><a class="toclink" href="#history-跨会话检索">/history 跨会话检索</a></h2>
 <p><code>/history &lt;query&gt; [--all]</code> 在会话转录正文里做大小写不敏感的关键词检索，按更新时间倒序、每会话最多一条命中（取最早命中的消息片段），缺省只搜当前项目，<code>--all</code> 搜全部项目；结果表附会话 id 与片段，可 <code>/resume &lt;id&gt;</code> 直接跳回。检索基于转录内的消息正文，usage 记录行与损坏行会被跳过；空参数只打印用法提示。</p>

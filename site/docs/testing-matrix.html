@@ -913,7 +913,31 @@
 <td>【已修】MCP server 浏览器安全</td>
 <td>本机跑着别被网页打</td>
 <td><code>test_mcp_http_security.py</code></td>
-<td>实测 GET 405 / 错路径 404 / text/plain 415 / 跨源 403 / 同源 200</td>
+<td>实测 GET 405 / 错路径 404 / text/plain 415 / 跨源 403 / 同源 200 / 缺错 key 401</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.14</td>
+<td>【已修】MCP HTTP 凭证门</td>
+<td>无 key 的本机进程想白嫖工具</td>
+<td><code>test_mcp_http_security.py</code></td>
+<td>实测缺/错 key 401、未配置 <code>NEXUSCLI_MCP_API_KEY</code> 拒绝启动、带 key 调用落审计</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.15</td>
+<td>【已修】写域守卫尊重 full-access</td>
+<td>REPL Auto 模式下域外写被自相矛盾地拦</td>
+<td><code>test_fs_scope.py</code></td>
+<td>实测 Auto 组合不追问、headless 无回调仍 fail-closed</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>6.16</td>
+<td>【已修】hooks 三路径下沉</td>
+<td>/plan /team 绕过 UserPromptSubmit 门</td>
+<td><code>test_hooks_lane_coverage.py</code></td>
+<td>实测 plan/team 入口 exit 2 即拒且不调 LLM</td>
 <td>✅</td>
 </tr>
 </tbody>

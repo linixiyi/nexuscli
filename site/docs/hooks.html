@@ -67,6 +67,7 @@
 </code></pre>
 <ul>
 <li>七个事件：<code>SessionStart</code>、<code>UserPromptSubmit</code>、<code>PreToolUse</code>、<code>PermissionRequest</code>、<code>PostToolUse</code>、<code>PostToolUseFailure</code>、<code>Stop</code>；<code>matcher</code> 是对工具名的正则（默认 <code>*</code> 全匹配，仅工具事件使用）</li>
+<li>覆盖范围（2026-10-27 下沉后）：<code>UserPromptSubmit</code> 阻断门与 <code>Stop</code> 通知在三条执行路径同效——react 在 <code>Agent.run</code> 入口、plan/team 在各自 runner（<code>PlanExecuteAgent.run</code> / <code>AgentOrchestrator.run</code>）入口触发；经 <code>Agent.run(mode=plan/team)</code> 驱动时由内层 runner 触发，全程单次不叠加（<code>tests/test_hooks_lane_coverage.py</code> 锚定）</li>
 <li><code>PermissionRequest</code> 在审批决策前触发，可 deny/ask，payload 含 <code>tool_name</code> / <code>tool_input</code>；<code>PostToolUseFailure</code> 在工具失败时触发，payload 含 <code>tool_name</code> / <code>tool_input</code> / <code>error_message</code>，失败回合不再触发 <code>PostToolUse</code></li>
 <li>每条 hook 是 <code>{"type": "command", "command": "...", "timeout": 60}</code>；进程 stdin 收到 JSON 载荷（<code>hook_event_name</code>、<code>session_id</code>、<code>cwd</code>，工具事件另有 <code>tool_name</code> / <code>tool_input</code>，<code>PostToolUse</code> 另有 <code>tool_response</code>，<code>PostToolUseFailure</code> 另有 <code>error_message</code>，<code>UserPromptSubmit</code> 另有 <code>prompt</code>）</li>
 <li>协议：<strong>exit 2 阻断</strong>（stderr 作为拒绝原因），exit 0 时 stdout 可输出 JSON（<code>decision: block</code> 或 <code>hookSpecificOutput.permissionDecision: deny/ask</code>）同样生效；超时与其他退出码只作为非阻断错误提示</li>

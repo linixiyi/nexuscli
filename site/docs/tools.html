@@ -39,6 +39,7 @@
     <div class="toc">
 <ul>
 <li><a href="#read_file-的-pdf-支持">read_file 的 PDF 支持</a></li>
+<li><a href="#load_skill-的分层加载">load_skill 的分层加载</a></li>
 <li><a href="#grep-的-rg-加速与语义差异">grep 的 rg 加速与语义差异</a></li>
 <li><a href="#task-后台委派与收尾播报">task 后台委派与收尾播报</a></li>
 <li><a href="#vfs_ls--vfs_read-只读快照视图">vfs_ls / vfs_read 只读快照视图</a></li>
@@ -58,6 +59,8 @@
 <p>NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具（速查表见 README「🧰 内置工具」节）。写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作，会经过 policy、HITL 和 audit 处理。<code>save_skill</code> 也必须经过 HITL；模型可以提议沉淀，但不会静默改变后续行为。本文记录 README 速查表之外的补充说明与如实边界（均以实现为准）。</p>
 <h2 id="read_file-的-pdf-支持"><a class="toclink" href="#read_file-的-pdf-支持">read_file 的 PDF 支持</a></h2>
 <p><code>read_file</code> 对 <code>.pdf</code> 后缀走 pypdf 整篇文本提取（不做分页范围），再套用与文本文件相同的行窗口。pypdf 是可选依赖，缺失时返回带安装指引的错误：<code>uv sync --extra pdf</code>（或 <code>pip install "nexuscli[pdf]"</code>）。</p>
+<h2 id="load_skill-的分层加载"><a class="toclink" href="#load_skill-的分层加载">load_skill 的分层加载</a></h2>
+<p><code>load_skill</code> 把项目/用户层 SKILL.md 读进模型上下文，支持可选 <code>level</code> 参数：<code>full</code>（默认）注入整个 Skill 正文（超 5000 字符截断，历史行为逐字节不变）；<code>overview</code> 只注入 L1 概览——frontmatter <code>overview:</code> 显式声明优先，缺省从正文首段自动生成并标注 generated——适合先粗读一屏再决定是否全文加载。<code>level</code> 取其他值直接报错，不静默回落。返回文本与 display_summary 带层信息（L0 abstract、L1 是否 generated），<code>/skill list</code> 的层列同口径显示，还包括 frontmatter 校验告警码（<code>warn:&lt;规则码&gt;</code>）与 <code>requirements</code> 可用性标注（bins 查 PATH、env 查环境变量，未满足不进自动候选、列表标 <code>unavailable (missing: ...)</code>，显式加载仍可用）。字段写法与层语义的完整口径见 <a href="skills.html">skills.md</a>。<code>load_skill</code> 在真模型轨道的只读白名单内，候选 → 加载链路可达；写侧 <code>save_skill</code> 照旧强制 HITL。</p>
 <h2 id="grep-的-rg-加速与语义差异"><a class="toclink" href="#grep-的-rg-加速与语义差异">grep 的 rg 加速与语义差异</a></h2>
 <p><code>grep</code> 对目录搜索先探测 PATH 上的 rg：命中则由 rg 子进程加速并映射回同一 <code>路径:行号: 内容</code> 格式，rg 缺失或失败时回退纯 Python 扫描。已知语义差异：rg 会跳过二进制文件，纯 Python 路径以 <code>errors="ignore"</code> 读取一切，文本文件结果一致。</p>
 <h2 id="task-后台委派与收尾播报"><a class="toclink" href="#task-后台委派与收尾播报">task 后台委派与收尾播报</a></h2>
@@ -65,9 +68,10 @@
 <h2 id="vfs_ls--vfs_read-只读快照视图"><a class="toclink" href="#vfs_ls--vfs_read-只读快照视图">vfs_ls / vfs_read 只读快照视图</a></h2>
 <p><code>vfs_ls</code> / <code>vfs_read</code> 把历史快照挂载为只读虚拟文件系统（逻辑路径 <code>/</code> 即快照根），snapshot 引用接受与 <code>/restore</code> 相同的 id 或 1-based 序号。<strong>只读是结构保证</strong>：视图类上不存在任何写/改/删方法，路径解析强制 resolve 后留在快照根内（<code>..</code> 链与盘符/UNC 真实绝对路径一律拒绝）。<code>vfs_read</code> 与工作区 <code>read_file</code> 语义一致（整文件读取 + 行窗口，无快照专属大小上限）——快照创建时已剔除 <code>build</code>/<code>dist</code>/<code>node_modules</code> 等目录。如实边界：这两个工具只注册进主 agent 的工具表；子代理（自建 registry）、SDK 与 <code>mcp serve</code> 路径不经由它们暴露——全路径接入挂账。可写视图、多快照 diff 与审计层均未做。快照的创建与恢复见 <a href="sessions.html">sessions.md</a>。</p>
 <h2 id="代码索引与检索"><a class="toclink" href="#代码索引与检索">代码索引与检索</a></h2>
-<p><code>/index [path]</code> 扫描工作区中的文本文件，把逐行内容写入 <code>.nexuscli/code_index.sqlite3</code> 的 <code>code_chunks</code> 表建立本地代码索引，默认跳过 <code>.git</code>、<code>.venv</code>、<code>node_modules</code> 等目录。<code>/search &lt;query&gt;</code> 与内置 <code>search_code</code> 工具基于同一索引做关键词检索：多个关键词按 AND 匹配，命中行按 <strong>BM25 相关性排序</strong>（纯 Python 实现，k1=1.5、b=0.75，无第三方依赖；词频按大小写不敏感子串计数，CJK 关键词同口径工作），按分降序返回 Top-N（N 即 <code>limit</code> 参数，默认 20，同分按路径与行号稳定并列）。<code>search_code</code> 工具输出末尾附一行命中统计（命中行数、候选窗口、检索词）；代码变动后重新运行 <code>/index</code> 即可刷新。如实边界：这是词法检索不是 embedding 语义检索——索引不做向量化、不联网；BM25 的语料统计在候选窗口（首词 LIKE 预筛的 500 行）内计算，窗口外的行不参与排序。</p>
+<p><code>/index [path]</code> 扫描工作区中的文本文件，把逐行内容写入 <code>.nexuscli/code_index.sqlite3</code> 的 <code>code_chunks</code> 表建立本地代码索引，默认跳过 <code>.git</code>、<code>.venv</code>、<code>node_modules</code> 等目录。<code>/search &lt;query&gt;</code> 与内置 <code>search_code</code> 工具基于同一索引做关键词检索：多个关键词按 AND 匹配，命中行按 <strong>BM25 相关性排序</strong>（纯 Python 实现，k1=1.5、b=0.75，无第三方依赖；词频按大小写不敏感子串计数，CJK 关键词同口径工作），按分降序返回 Top-N（N 即 <code>limit</code> 参数，默认 20，同分按路径与行号稳定并列）。<code>search_code</code> 工具输出末尾附一行命中统计（命中行数、候选窗口、检索词）；代码变动后重新运行 <code>/index</code> 即可刷新。<code>search_code</code> 工具还接受可选 <code>scope</code> 参数做<strong>目录限定检索</strong>：传入相对仓库根的路径，把结果限定在该子树内（语义为「节点自身或其后代」的路径前缀匹配，改写自 OpenViking <code>PathScope</code>），例如 <code>{"query": "BM25", "scope": "src/rag"}</code> 只在 <code>src/rag</code> 子树里找；绝对路径、反斜杠分隔符、<code>./</code> 前缀与尾随 <code>/</code> 会自动归一，scope 指向仓库根本身时等价于不限定。<code>scope</code> 默认 <code>None</code>（不传）即不限定，检索行为与从前逐字节一致；scope 落在仓库根之外或该子树内无命中时返回空结果而非报错；限定后的 BM25 语料统计只在子树命中集内计算，因此同一查询在有无 scope 下分数可能不同。<code>/search</code> 斜杠命令暂不支持 scope。如实边界：这是词法检索不是 embedding 语义检索——索引不做向量化、不联网；BM25 的语料统计在候选窗口（首词 LIKE 预筛的 500 行）内计算，窗口外的行不参与排序。</p>
 <pre><code class="language-text">/index .
 /search 权限评估
+search_code {&quot;query&quot;: &quot;BM25&quot;, &quot;scope&quot;: &quot;src/rag&quot;}   # 目录限定：只在 src/rag 子树内检索
 </code></pre>
 <h2 id="联网工具"><a class="toclink" href="#联网工具">联网工具</a></h2>
 <p><code>web_search</code> 使用 DuckDuckGo HTML 搜索，返回标题、URL 和摘要。</p>

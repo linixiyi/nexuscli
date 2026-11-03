@@ -81,7 +81,7 @@ curl -sS http://127.0.0.1:8080/v1/tasks \
 <p>也可以只启动队列消费者，不暴露 HTTP：</p>
 <pre><code class="language-bash">uv run nexuscli worker --workers 2 --cwd .
 </code></pre>
-<p>任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。</p>
+<p>任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任务，并通过 lease/heartbeat 恢复崩溃任务。恢复重派有上限：同一任务被租约恢复累计 5 次后不再重派，转 <code>failed</code> 并留原因（毒任务不占死 worker；<code>TaskStore.requeue_expired(max_attempts=...)</code> 可调，2026-10-27 起）。运行中取消会阻止 worker 把迟到结果重新覆盖为 completed。</p>
 <h2 id="端点清单"><a class="toclink" href="#端点清单">端点清单</a></h2>
 <!-- BEGIN GENERATED: endpoint-table (do not edit manually) -->
 <blockquote>
@@ -108,6 +108,12 @@ curl -sS http://127.0.0.1:8080/v1/tasks \
 <td><code>/v1/workbench/bootstrap</code></td>
 <td>一次性口令</td>
 <td>口令一次性换发 HttpOnly cookie 会话与 x-csrf-token</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/v1/workbench/reissue-csrf</code></td>
+<td>cookie 会话</td>
+<td>凭有效会话 cookie 取回当前 x-csrf-token（无 cookie 401；不轮换，多标签页收敛）</td>
 </tr>
 <tr>
 <td>POST</td>
@@ -218,6 +224,15 @@ curl -sS http://127.0.0.1:8080/v1/tasks \
   头（bootstrap 响应体返回，前端存内存不落 localStorage）——cookie 自动携带挡不住
   跨源伪造，csrf 补上这一刀；api_key 通道豁免（外部程序没有 cookie，凭证本身就是
   凭据）。</li>
+<li><strong>csrf 重签（<code>POST /v1/workbench/reissue-csrf</code>）</strong>：一次性的只有 bootstrap 口令，
+  csrf 是会话级衍生秘密，丢了可重签。浏览器刷新会丢掉内存里的 csrf 副本（cookie
+  不受影响），前端探测到「cookie 有效但无 csrf」时自动调本端点：持有效会话 cookie
+  即返回 <code>{"csrf": &lt;当前值&gt;}</code>，<strong>不轮换</strong>（多标签页收敛：第二标签页冷加载重签取回
+  同一值，不会把已打开标签页持有的 csrf 踢成 403——2026-10-27 复审修复；任何时刻
+  服务端恰有一个 csrf，单值语义不变），会话 cookie 本身不变——刷新后无需重开口令
+  即恢复写能力。无有效 cookie（如服务重启清会话）一律 401 且不泄露任何信息，前端
+  回落认证门流程；api_key 头通道对本端点无效（重签的信任根就是会话 cookie）。实现见
+  <code>websession.py</code> 的 <code>WebSession.reissue</code>。</li>
 <li><strong>Origin 白名单</strong>：<code>/v1/*</code> 上任何带 <code>Origin</code> 头且来源非本机回环的请求一律 403，
   且先于凭证判断（无凭证也拒绝跨源探测）；无 <code>Origin</code> 的 curl 等非浏览器客户端
   不受影响。</li>

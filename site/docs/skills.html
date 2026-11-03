@@ -37,7 +37,18 @@
   <aside class="toc">
     <div class="toc-title">目录</div>
     <div class="toc">
-<ul></ul>
+<ul>
+<li><a href="#l0l1l2-分层加载">L0/L1/L2 分层加载</a></li>
+<li><a href="#real-轨的-skill-可达性">real 轨的 skill 可达性</a></li>
+<li><a href="#eval-驱动的提案进化">eval 驱动的提案进化</a><ul>
+<li><a href="#用法">用法</a></li>
+<li><a href="#提案结构与人审语义">提案结构与人审语义</a></li>
+<li><a href="#非交互与失败关闭">非交互与失败关闭</a></li>
+<li><a href="#落地后-real-eval-对比闭环后半环">落地后 real-eval 对比（闭环后半环）</a></li>
+<li><a href="#如实边界">如实边界</a></li>
+</ul>
+</li>
+</ul>
 </div>
 
   </aside>
@@ -58,8 +69,76 @@
 <li><code>allowed-tools</code>：逗号分隔字符串（规范写法，如 <code>Bash(git:*), Read</code>）或内联列表。<code>load_skill</code> 把 Skill 正文注入上下文时会附一行「该技能激活期间允许的工具」提示；<strong>如实边界：这是提示性约束，执行器不做硬限制</strong>，真正的工具白名单仍由代理 frontmatter 的 <code>tools</code> 控制。</li>
 <li><code>disable-model-invocation</code>：<code>true</code> / <code>1</code> / <code>yes</code> 时该 Skill 退出自动 Top-K 匹配候选（模型不会被提示去加载它），但 <code>/skill load</code> 命令与显式 <code>load_skill</code> 调用照常可用——挡的是自动候选，不是加载通道。</li>
 </ul>
-<p>每次用户输入先用 name、description、tags 做中英文词法/字符 n-gram Top-K 匹配，再把候选交给模型决定是否调用 <code>load_skill</code>。Skill 正文只在真正加载后进入当前 ReAct 的下一模型轮；每个并发子 Agent 都有独立 Skill 缓冲区，不会串线。</p>
-<p>当一次成功流程具备稳定输入、明确步骤和可复用边界时，模型可以调用 <code>save_skill</code> 提议写入 project 或 user 层。该工具默认拒绝覆盖已有 Skill，并强制人工确认。</p><div class="pager"><a href="tools.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🧰 内置工具与输入面补充口径</span></a><a href="memory-context.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧠 记忆、动态 Prompt 与上下文压缩</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/skills.md" target="_blank" rel="noopener">docs/skills.md</a> 构建生成 · 源文件与站点内容同步</p>
+<h2 id="l0l1l2-分层加载"><a class="toclink" href="#l0l1l2-分层加载">L0/L1/L2 分层加载</a></h2>
+<p>Skill 上下文分三层（内容抽象层级思路来自 OpenViking，L0 → L1 → L2 逐层加深）：</p>
+<ul>
+<li><strong>L0 abstract</strong>：frontmatter 可选 <code>abstract:</code> 一行，给候选阶段的「更强一句话」。候选行有 abstract 时用它替换 description（二者并存浪费 token），没写则回落 description；Top-K 匹配始终用 description 打分，abstract 不参与匹配，所以加 abstract 不会改变排名。</li>
+<li><strong>L1 overview</strong>：frontmatter 可选 <code>overview:</code>（<code>|</code> 块的多行会折叠成一行）。缺省自动生成：取正文首段（首个 <code>##</code> 小节之前的第一段，跳过开头 H1 标题），折叠一行、500 字符截断；自动生成的概览会标注 generated——<code>load_skill</code> 的 overview 返回正文带 <code>[overview; generated from the skill body]</code>，<code>/skill list</code> 层列显示 <code>L1:gen</code>（显式声明为 <code>L1:+</code>，无正文可生成时 <code>L1:-</code>）。</li>
+<li><strong>L2 全文</strong>：<code>load_skill</code> 的默认行为（<code>level: full</code>），与历史行为逐字节一致，含 5000 字符截断。</li>
+</ul>
+<p>frontmatter 字段参考（均为可选，缺省行为与历史版本一致）：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>写法</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>abstract</code></td>
+<td>单行字符串</td>
+<td>L0 候选行文本；缺省回落 description</td>
+</tr>
+<tr>
+<td><code>overview</code></td>
+<td>单行或 <code>\|</code> 块</td>
+<td>L1 概览；缺省从正文首段生成并标 generated</td>
+</tr>
+<tr>
+<td><code>requirements</code></td>
+<td>flow map：<code>{bins: [git, rg], env: [GITHUB_TOKEN]}</code></td>
+<td>可用性过滤：bins 逐个查 PATH（<code>shutil.which</code>），env 逐个查环境变量（非空即满足）；语义改写自 OpenViking vikingbot <code>skills.py</code> 的 <code>_check_requirements</code>，未整搬代码</td>
+</tr>
+<tr>
+<td><code>allowed-tools</code> / <code>disable-model-invocation</code></td>
+<td>见上节</td>
+<td>Agent Skills 规范字段</td>
+</tr>
+</tbody>
+</table>
+<p><code>requirements</code> 不满足的 Skill：<strong>不进自动候选</strong>（不向模型提示一个跑不起来的技能），<code>/skill list</code> 层列标 <code>unavailable (missing: bin: git env: GITHUB_TOKEN)</code> 列出缺失项；显式 <code>load_skill</code> 与 <code>/skill load</code> 仍可用——过滤是候选阶段的决定，不是加载门。内置 <code>web-access</code> Skill 的 frontmatter 是 abstract/overview 的示范写法。</p>
+<p>frontmatter 解析同时记录 lint 告警（规则改写自 OpenViking <code>core/skill_loader.py</code> 的校验规则）：name/description 必填、name 字符集与 64 字上限、与目录名一致、description 1024 字上限、正文 500 行告警；未知键容忍不报。告警不改加载行为，只在 <code>/skill list</code> 层列以 <code>warn:&lt;规则码&gt;</code> 显示。</p>
+<p>每次用户输入先用 name、description、tags 做中英文词法/字符 n-gram Top-K 匹配，再把候选交给模型决定是否调用 <code>load_skill</code>。<code>load_skill</code> 支持可选 <code>level</code> 参数：<code>full</code>（默认，全文）或 <code>overview</code>（先读一屏 L1 概览省 token，需要细节再 full）；返回文本与 display_summary 带层信息。Skill 正文只在真正加载后进入当前 ReAct 的下一模型轮；每个并发子 Agent 都有独立 Skill 缓冲区，不会串线。</p>
+<h2 id="real-轨的-skill-可达性"><a class="toclink" href="#real-轨的-skill-可达性">real 轨的 skill 可达性</a></h2>
+<p>真模型轨道（<code>nexuscli eval run --real</code>）的只读白名单（<code>eval/real.py</code> 的 <code>REAL_TRACK_TOOLS</code>）包含 <code>load_skill</code>：候选注入 → <code>load_skill</code> → 全文的链路在真实轨道完整可达。此前它被按「用户态写」排除（用量计数器写 <code>~/.nexuscli/usage.json</code>），分层加载 spec 把这归为误伤：内容面按名字在固定 skill 根解析、只读、无路径参数不可遍历，残余的计数器写属记账性质——没有任何行为决策读它，轨道不变量相应收窄为「零工作区写 + 这一处已声明的用户目录计数器写」。行为场景 <code>examples/evals/real/03_skill_rule_follow.json</code> 用仓库根 <code>.agents/skills/rule-demo/</code> 演示链路：prompt 点名 skill → 模型调用 <code>load_skill</code> → 遵循其回复格式规则（<code>final_contains</code> 断言 <code>SKILL-RULE-OK</code> 标记）；场景 PASS/FAIL 是 nightly 行为信号，链路可达性由 hermetic 单测保证。</p>
+<p>当一次成功流程具备稳定输入、明确步骤和可复用边界时，模型可以调用 <code>save_skill</code> 提议写入 project 或 user 层。该工具默认拒绝覆盖已有 Skill，并强制人工确认。</p>
+<h2 id="eval-驱动的提案进化"><a class="toclink" href="#eval-驱动的提案进化">eval 驱动的提案进化</a></h2>
+<p><code>/skill evolve &lt;name&gt; &lt;rule...&gt;</code> 是纯手写的规则追加；<code>/skill propose</code> 是它的评估驱动版：读取最近一次 eval 报告的失败项与成本告警，交给一次真实 LLM 调用产出结构化改进提案，再经逐条人审落地。两条路径并存，互不改动。</p>
+<h3 id="用法"><a class="toclink" href="#用法">用法</a></h3>
+<pre><code class="language-text">/skill propose &lt;name&gt; [--report hermetic|real]
+/skill proposals &lt;name&gt;
+</code></pre>
+<p><code>propose</code> 默认读 hermetic 轨道报告 <code>&lt;cwd&gt;/.nexuscli/evals/last-report.json</code>，<code>--report real</code> 改读真模型轨道的 <code>last-real-report.json</code>；<code>&lt;name&gt;</code> 必须是 user 层 Skill（<code>~/.nexuscli/skills/&lt;name&gt;/SKILL.md</code>，与 <code>/skill evolve</code> 同边界，builtin/project 不在范围）。三种空转情形都会明确提示而不是静默跳过：报告文件不存在（提示先跑 <code>nexuscli eval run</code> / <code>--real</code>）、报告里没有失败项也没有成本告警、没有可用的 LLM Key（走正常配置链报错，附 <code>NEXUSCLI_API_KEY</code> 等配置指引）。</p>
+<h3 id="提案结构与人审语义"><a class="toclink" href="#提案结构与人审语义">提案结构与人审语义</a></h3>
+<p>一次 LLM 调用收到目标 Skill 全文加报告摘要（失败场景的原因、成本告警），被要求只回一个 JSON 数组，每条形如 <code>{"rule": "&lt;可追加进 ## Evolved Rules 的一条规则&gt;", "evidence": "&lt;引用的报告场景名 + 原因/告警片段&gt;"}</code>。落地前有证据门：evidence 必须对得上报告摘要——命中失败/告警场景名（大小写不敏感），或逐字引用一段足够长的失败原因——对不上的条目直接丢弃，人不会看到无据提案；LLM 回复不是合法 JSON 数组时整体报错，不会拿半成品过审。</p>
+<p>人审逐条进行，提示带原因行（<code>Reason: &lt;该条 evidence&gt;</code>，与工具审批弹窗同一规范）；<code>y</code> 落地、<code>n</code> 跳过本条、<code>s</code> 跳过余下；Ctrl+C/Ctrl+D（EOF）视同 <code>s</code>，Esc 不会被拦截——按 Esc 再回车提交的是默认答案 <code>n</code>（只跳过当前条）。两条路都是失败关闭：不敲 <code>y</code> 就不会有任何条目落地。确认项经既有的 <code>SkillEvolutionStore.save_versioned(name, rule, reason="propose")</code> 落地：改动前状态冻结为 <code>skill_history/&lt;name&gt;/v&lt;N&gt;.md</code> 快照（上限 10 个），<code>## Evolved Rules</code> 追加一条带时间戳的规则，<code>audit.jsonl</code> 落一行 <code>op=save</code>——快照、回滚（<code>/skill rollback</code>）、统计（<code>/skill stats</code>）全部复用既有机制。</p>
+<p><code>/skill proposals &lt;name&gt;</code> 列出历史提案记录：时间、条数、落地数、报告轨道与文件路径。</p>
+<h3 id="非交互与失败关闭"><a class="toclink" href="#非交互与失败关闭">非交互与失败关闭</a></h3>
+<p>落地门本身按 <code>sys.stdin.isatty()</code> 判定交互性，是失败关闭的：没有 TTY 可以作答时，提案照常生成并落档，但不会落地任何规则，全部条目记为 <code>pending</code>，并提示回 REPL 里审阅——没有人点头，Skill 就不变。需要如实说明的是，今天并不存在「无 TTY 跑 <code>/skill propose</code>」的生产路径：<code>-p</code> 单次模式只展开自定义斜杠命令，未匹配的 <code>/name</code> 会原样作为普通 prompt 发给模型（<code>entrypoints/cli.py</code> 的 <code>_expand_custom_prompt</code>），管道 stdin 在 REPL 入口就被拒绝（<code>entrypoints/repl.py</code>）。这个门是纵深防御，也是测试注入假答案、验证失败关闭语义的位置。</p>
+<p>每次 propose 都会写一条记录到 <code>~/.nexuscli/skill_history/&lt;name&gt;/proposals/&lt;ts&gt;.json</code>：报告摘要（落地前的快照，供人工对照）、提案全文、每条的人审结论与落地版本号。有落地条目且跑过落地后对比时，同一文件会被原地重写（不会另存新记录），带上 <code>post_landing</code> 字段。</p>
+<h3 id="落地后-real-eval-对比闭环后半环"><a class="toclink" href="#落地后-real-eval-对比闭环后半环">落地后 real-eval 对比（闭环后半环）</a></h3>
+<p>真的有条目落地后，REPL 会再问一次「Run the real-eval post-landing diff now?」——这是第二次人工确认：Reason 行写明这是一次真实网关调用，重跑真模型轨道场景 03（<code>03_skill_rule_follow</code>，skill 规则遵循验证器；<code>--file</code> 语义只跑这一个，不跑全量），预估 1-2 万 token。只有敲 <code>y</code> 才执行；<code>n</code>（默认值，任何非 <code>y</code> 答案同）或 Ctrl+C/Ctrl+D 都记 declined，不产生任何网关调用。确认后的调用在 <code>propose.py</code> 的 <code>run_post_landing_diff</code> 里固定四步：</p>
+<ol>
+<li><strong>备份</strong>：把 <code>.nexuscli/evals/last-real-report.json</code> 原样读入内存；文件不存在则 before 侧为空，读不出来则直接放弃（没有备份就不跑，绝不裸跑）。</li>
+<li><strong>跑</strong>：经 <code>eval/real.py</code> 的 <code>run_real_scenarios</code> 重跑场景 03 并覆写报告——与 <code>eval run --real</code> 同一条链，无 Key 在跑任何场景之前就报错并附 <code>NEXUSCLI_API_KEY</code> 等配置指引。</li>
+<li><strong>对比</strong>：落地前报告 vs 新报告中同一场景的 status / <code>pass_k.all_pass</code> / 失败原因，外加两份报告 summary 的 <code>all_pass_rate</code>，写进提案记录 <code>post_landing</code> 的 before/after。</li>
+<li><strong>还原</strong>：把备份逐字节写回；原本没有报告的，则把这次跑出的报告删掉、恢复「文件不存在」的原状。</li>
+</ol>
+<p>还原是硬保证：nightly 轨道读的就是这个文件，绝不留下单场景报告。还原失败会显式告警并在 <code>post_landing</code> 落 <code>report_restored=false</code>，需要手工恢复后再跑 nightly——绝不静默污染基线。退化路径同样落档：拒绝（declined）、非交互（<code>skipped_reason=non-interactive</code>）、无 Key 或场景文件缺失（errors 带指引）、场景执行异常（errors 落档且仍执行还原）。</p>
+<h3 id="如实边界"><a class="toclink" href="#如实边界">如实边界</a></h3>
+<p><strong>eval 报告是提案依据，不是落地效果验证器。</strong> hermetic eval 运行时关闭 skill 注入（<code>eval/runner.py</code> 置 <code>features.skill = False</code> 以保证确定性），所以「改了 Skill → hermetic 分数变化」这条因果链不存在；真模型轨道是否开 skill 注入亦不在此依赖内。提案记录保存落地前的报告摘要供人工对照；真模型轨道的落地效果对比由上面的可选 post_landing diff 提供——但<strong>单次对比是档案信号，不是门禁</strong>：模型遵循率有波动，一次 before/after 不构成统计结论，diff 结果只进提案记录供人阅读，不回写报告、不做回归判定、不触发任何后续动作，「落地→评测→再提案」的无人值守循环仍然不做。也不要指望无监督批量改写：人审是硬门，每条落地都要过一次 y/n/s，效果对比也要再过一次 y/n。</p><div class="pager"><a href="tools.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🧰 内置工具与输入面补充口径</span></a><a href="memory-context.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧠 记忆、动态 Prompt 与上下文压缩</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/skills.md" target="_blank" rel="noopener">docs/skills.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>

@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Eval — Offline Task-Level Regression · NexusCLI 文档</title>
+  <title>Eval — Task-Level Regression: Hermetic + Real-Model Tracks · NexusCLI 文档</title>
   <meta name="description" content="NexusCLI 文档：脚本化场景、断言体系与回归 diff 门禁。">
-  <meta property="og:title" content="Eval — Offline Task-Level Regression · NexusCLI 文档">
+  <meta property="og:title" content="Eval — Task-Level Regression: Hermetic + Real-Model Tracks · NexusCLI 文档">
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/eval.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
@@ -40,38 +40,99 @@
 <ul>
 <li><a href="#commands">Commands</a></li>
 <li><a href="#scenario-schema">Scenario schema</a><ul>
+<li><a href="#multi-round-user-simulation-user_turns--max_rounds">Multi-round user simulation (user_turns + max_rounds)</a></li>
+<li><a href="#memory-recall-scenarios-memory_eval">Memory-recall scenarios (memory_eval)</a></li>
+<li><a href="#difficulty-tiers">Difficulty tiers</a></li>
 <li><a href="#assertions">Assertions</a></li>
 </ul>
 </li>
-<li><a href="#how-a-scenario-runs">How a scenario runs</a></li>
-<li><a href="#regression-comparison">Regression comparison</a></li>
-<li><a href="#scope-and-honest-boundaries">Scope and honest boundaries</a></li>
+<li><a href="#how-a-scenario-runs-hermetic-track">How a scenario runs (hermetic track)</a></li>
+<li><a href="#regression-comparison">Regression comparison</a><ul>
+<li><a href="#report-shape">Report shape</a></li>
+<li><a href="#cost-metrics">Cost metrics</a></li>
+<li><a href="#difficulty-breakdown">Difficulty breakdown</a></li>
+</ul>
+</li>
+<li><a href="#history-snapshots-eval-history">History snapshots (eval history)</a></li>
+<li><a href="#real-model-track---real">Real-model track (--real)</a><ul>
+<li><a href="#safety-model-read-only-surface-fail-closed-writes">Safety model: read-only surface, fail-closed writes</a></li>
+<li><a href="#real-scenario-schema">Real scenario schema</a></li>
+<li><a href="#controlled-write-sandbox-sandbox_write">Controlled write sandbox (sandbox_write)</a></li>
+<li><a href="#llm-as-judge">LLM-as-judge</a></li>
+<li><a href="#passk-real-cost-and-the-report">pass^k, real cost, and the report</a></li>
+<li><a href="#baseline-ablation---real---baseline">Baseline ablation (--real --baseline)</a></li>
+<li><a href="#no-key-no-run">No key, no run</a></li>
+<li><a href="#evaluation-suite-examplesevalssuite">Evaluation suite (examples/evals/suite)</a></li>
+<li><a href="#stability-baseline---repeat-k">Stability baseline (--repeat k)</a></li>
+</ul>
+</li>
+<li><a href="#scope-and-honest-boundaries">Scope and honest boundaries</a><ul>
+<li><a href="#round-boundaries">Round boundaries</a></li>
+</ul>
+</li>
 </ul>
 </div>
 
   </aside>
   <div class="content">
-    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧪 脚本化场景、断言体系与回归 diff 门禁</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/eval.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="eval--offline-task-level-regression"><a class="toclink" href="#eval--offline-task-level-regression">Eval — Offline Task-Level Regression</a></h1>
-<p><code>nexuscli eval</code> is an offline evaluation harness for task-level agent
-behavior. Instead of calling a real LLM, a <strong>scripted (fake) LLM client</strong>
-drives the real <code>Agent</code> through JSON scenarios; assertions then check the
-tool-call sequence and the final output. Consecutive runs are diffed so a
-change that breaks an agent workflow shows up as a <strong>regression</strong> before it
-reaches production.</p>
+    <div class="doc-meta"><a class="crumb" href="../index.html#docs">← 文档中心</a><span>·</span><span>🧪 脚本化场景、断言体系与回归 diff 门禁</span></div><div class="generated-banner">📄 本页由仓库 <code>docs/eval.md</code> 自动构建生成；如需修改请编辑源文件后重新构建。</div><h1 id="eval--task-level-regression-hermetic--real-model-tracks"><a class="toclink" href="#eval--task-level-regression-hermetic--real-model-tracks">Eval — Task-Level Regression: Hermetic + Real-Model Tracks</a></h1>
+<p><code>nexuscli eval</code> is a two-track evaluation harness for task-level agent
+behavior. The default <strong>hermetic track</strong> guards the wiring you control: a
+<strong>scripted (fake) LLM client</strong> drives the real <code>Agent</code> through JSON
+scenarios; assertions then check the tool-call sequence and the final
+output. A scenario can also be a <strong>multi-round user simulation</strong> — a
+scripted user keeps talking to the <em>same</em> agent session while the
+assertions watch every round — or a <strong>memory-recall evaluation</strong>, which
+seeds a throwaway database and judges the ranking of the real recall chain
+without any agent loop. Consecutive runs are diffed so a change that breaks
+an agent workflow shows up as a <strong>regression</strong> before it reaches
+production. Every report also records deterministic <strong>cost metrics</strong> (turns
+and tool calls, warned on growth) and groups results by <strong>difficulty tier</strong>,
+so a regression report says <em>which</em> tier degraded and whether the run got
+more expensive — without either ever changing a PASS/FAIL verdict.</p>
+<p>The optional <strong>real-model track</strong> (<code>nexuscli eval run --real</code>) asks what the
+script cannot: how the <em>real</em> model — the one your normal config chain
+selects — behaves on the real builtin tools (read-only by default; a
+scenario's <code>sandbox_write</code> opt-in opens a confined write sandbox with a
+ruff/py_compile quality gate), what it really costs,
+and how stable it is across repeats (pass^k) on open-ended answers
+(LLM-as-judge). It writes its own report and is nightly/manual evidence by
+design: real billing and provider variance make it the wrong thing to gate
+CI on, so the hermetic track stays the gate and this track stays honest
+about quality. See <a href="#real-model-track---real">Real-model track</a>.</p>
 <h2 id="commands"><a class="toclink" href="#commands">Commands</a></h2>
 <pre><code class="language-bash">nexuscli eval list              # list built-in scenarios (examples/evals)
 nexuscli eval run               # run every built-in scenario (same as --all)
 nexuscli eval run --all         # explicit form of the default
 nexuscli eval run --file path   # one scenario file, or a directory of *.json
+nexuscli eval history [N]       # list recent runs from the history snapshots (default 10)
 </code></pre>
-<p><code>eval run</code> prints one <code>PASS/FAIL</code> line per scenario plus a summary, writes the
-report to <code>&lt;cwd&gt;/.nexuscli/evals/last-report.json</code>, and exits <code>1</code> when any
-scenario failed (CI-friendly).</p>
+<p><code>eval run</code> prints one <code>PASS/FAIL</code> line per scenario, a <code>COST</code> warning line
+under any scenario whose cost grew since the previous report, an overall
+summary line and a per-tier <code>difficulty:</code> line; it writes the report to
+<code>&lt;cwd&gt;/.nexuscli/evals/last-report.json</code> and exits <code>1</code> when any scenario
+failed (CI-friendly). Cost warnings and tier counts are informational and
+never affect the exit code. Every successful run also appends a timestamped
+history snapshot — see <a href="#history-snapshots-eval-history">History snapshots</a>.</p>
+<p>The real-model track adds two flags to <code>eval run</code> (see
+<a href="#real-model-track---real">Real-model track</a> for the full picture):</p>
+<pre><code class="language-bash">nexuscli eval run --real             # real-model track (examples/evals/real)
+nexuscli eval run --real --repeat k  # every real scenario k times, serially
+nexuscli eval run --real --file path # one real-track scenario file/directory
+nexuscli eval run --real --baseline  # + the bare-model ablation, comparison file
+</code></pre>
+<p><code>--repeat</code> defaults to <code>1</code> and only applies to <code>--real</code> — passing it on the
+hermetic track is a usage error, not a silent no-op. <code>--baseline</code> likewise only
+applies to <code>--real</code>, and it cannot combine with <code>--repeat</code> (the comparison is a
+single-shot fair sample on both sides — see
+<a href="#baseline-ablation---real---baseline">Baseline ablation</a>).</p>
 <h2 id="scenario-schema"><a class="toclink" href="#scenario-schema">Scenario schema</a></h2>
-<p>A scenario is one JSON document. Required keys are <code>name</code>, <code>prompt</code>,
-<code>scripted_turns</code>; everything else is optional but strictly validated — unknown
-keys, wrong shapes, deny rules targeting tools the scenario does not define,
-or invalid JSON all fail with a clear error naming the file.</p>
+<p>A scenario is one JSON document. Required keys are <code>name</code> and — on the
+default agent track — <code>prompt</code> plus <code>scripted_turns</code> (a <code>memory_eval</code>
+scenario needs neither, see below); everything else is optional but strictly
+validated — unknown keys at every level, wrong shapes, deny rules targeting
+tools the scenario does not define, or invalid JSON all fail with a clear
+error naming the file.</p>
 <pre><code class="language-jsonc">{
   &quot;name&quot;: &quot;read-task-details&quot;,          // required, non-empty
   &quot;description&quot;: &quot;Happy path&quot;,          // optional, shown by `eval list`
@@ -97,17 +158,109 @@ or invalid JSON all fail with a clear error naming the file.</p>
       &quot;text&quot;: &quot;The most urgent task is 'fix login'.&quot;  // final assistant text
     }
   ],
+  &quot;user_turns&quot;: [                       // optional: the scripted user's turns,
+    {&quot;message&quot;: &quot;And the second task?&quot;},//   each message starts one more round
+    {&quot;end&quot;: true}                       //   of the same agent session
+  ],
+  &quot;max_rounds&quot;: 3,                      // optional: hard cap on total rounds
   &quot;permission_deny&quot;: [&quot;deploy_app&quot;],    // optional: injected as deny rules
   &quot;hitl_mode&quot;: &quot;auto&quot;,                  // optional: auto | never | always
-  &quot;assertions&quot;: {                       // optional; four supported checks
+  &quot;difficulty&quot;: &quot;short&quot;,                // optional: short | medium | long (default medium)
+  &quot;assertions&quot;: {                       // optional; seven supported checks
     &quot;expected_tool_sequence&quot;: [&quot;list_tasks&quot;],
     &quot;final_contains&quot;: [&quot;fix login&quot;],
     &quot;forbidden_tools&quot;: [&quot;bash&quot;],
-    &quot;max_turns&quot;: 3
+    &quot;max_turns&quot;: 3,
+    &quot;required_tools&quot;: [&quot;list_tasks&quot;],
+    &quot;max_tool_calls&quot;: {&quot;list_tasks&quot;: 2},
+    &quot;max_total_tool_calls&quot;: 4
   }
 }
 </code></pre>
+<h3 id="multi-round-user-simulation-user_turns--max_rounds"><a class="toclink" href="#multi-round-user-simulation-user_turns--max_rounds">Multi-round user simulation (<code>user_turns</code> + <code>max_rounds</code>)</a></h3>
+<p><code>user_turns</code> turns the scenario into a scripted conversation. After the agent
+produces its final text for the current round, the scripted user speaks again
+and the <em>same</em> agent session continues: the message becomes the next user
+turn of the history the previous rounds built, and the fake LLM keeps
+replaying <code>scripted_turns</code> where it left off. Each entry is either
+<code>{"message": "..."}</code> (one more round) or the end marker <code>{"end": true}</code> (the
+user stops talking; the conversation ends). Running out of entries ends the
+conversation too, so an explicit marker is optional.</p>
+<p><code>scripted_turns</code> stays one flat list across all rounds — a round ends exactly
+where a text-only turn ends it today, so each round's segment must end with a
+<code>text</code> turn. <code>max_rounds</code> is the scenario-level hard cap on the total number
+of rounds (round 1 is the initial <code>prompt</code>; each user message starts the next
+one). When the cap is reached the rest of the user script is truncated —
+truncation itself is not a failure; the assertions judge what ran. Both keys
+are optional: a scenario without <code>user_turns</code> runs exactly one round and
+behaves exactly as before.</p>
+<p><code>05_refund_policy_multiturn.json</code> is the built-in policy example (the user
+demands a refund, the agent must look up the order first and must never call
+the direct refund tool — in <em>any</em> round), <code>06_dinner_booking_clarify.json</code>
+the built-in clarification example.</p>
+<h3 id="memory-recall-scenarios-memory_eval"><a class="toclink" href="#memory-recall-scenarios-memory_eval">Memory-recall scenarios (<code>memory_eval</code>)</a></h3>
+<p><code>memory_eval</code> switches the scenario to the memory-recall track, which never
+builds an agent. The runner seeds a real <code>MemoryManager</code> — the same
+lexical + BM25 + entity fusion the <code>search_memory</code> tool uses — on a throwaway
+SQLite file and judges the ranking. A memory scenario declares only <code>name</code>,
+<code>description</code> (optional) and <code>difficulty</code> (optional) besides <code>memory_eval</code>;
+declaring any agent-loop key (<code>prompt</code>, <code>scripted_turns</code>, <code>tools</code>,
+<code>assertions</code>, <code>permission_deny</code>, <code>hitl_mode</code>, <code>user_turns</code>, <code>max_rounds</code>)
+alongside it is a schema error.</p>
+<pre><code class="language-jsonc">{
+  &quot;name&quot;: &quot;memory-recall-entity-noise&quot;,
+  &quot;description&quot;: &quot;Entity anchor against same-word noise&quot;,
+  &quot;memory_eval&quot;: {
+    &quot;seed&quot;: [                            // required, non-empty: the rows to save
+      {
+        &quot;content&quot;: &quot;auth service configuration checklist for realm 1&quot;,
+        &quot;importance&quot;: 0.9                // optional: 0..1 (default 0.5)
+      },
+      {
+        &quot;content&quot;: &quot;Bluefin delegates its logins to Keycloak&quot;,
+        &quot;importance&quot;: 0.4,
+        &quot;kind&quot;: &quot;decision&quot;,              // optional free-form kind
+        &quot;entities&quot;: [&quot;Bluefin&quot;, &quot;Keycloak&quot;],  // optional explicit entity tags
+        &quot;temporal_kind&quot;: &quot;current_state&quot; // optional: current_state | past_event | future_plan
+      }
+    ],
+    &quot;queries&quot;: [                         // required, non-empty: one assertion each
+      {
+        &quot;query&quot;: &quot;Bluefin Keycloak auth service configuration&quot;,
+        &quot;target&quot;: 1,                     // seed index that must land in the window
+        &quot;distractors&quot;: [0],              // seed indexes that must not outrank it
+        &quot;top_k&quot;: 3                       // optional window size (default 5)
+      }
+    ]
+  }
+}
+</code></pre>
+<p>The seed metadata is what makes the distractors adversarial: same-word noise
+(distractors sharing every ordinary query term) is beaten by the entity
+signal, and temporal noise by the temporal layer — a query whose wording
+carries a future intent ("when will ...") scales entries of other
+<code>temporal_kind</code> layers down. Seed contents must be distinct: <code>save()</code> merges
+same-normalized content into one row, which would map two seed indexes onto
+one memory id, so duplicates are rejected at load time.
+<code>07_memory_recall_entity_noise.json</code> and <code>08_memory_recall_temporal_future.json</code>
+are the built-in examples.</p>
+<h3 id="difficulty-tiers"><a class="toclink" href="#difficulty-tiers">Difficulty tiers</a></h3>
+<p><code>difficulty</code> is the author's declared tier for the scenario, one of <code>short</code> /
+<code>medium</code> / <code>long</code> — roughly a one-or-two-step task, a multi-step task that has
+to converge, and an extended trajectory. The key is optional and defaults to
+<code>medium</code>; when present it must be exactly one of the three names
+(case-sensitive: <code>"Short"</code>, <code>""</code>, <code>null</code> and non-strings are all rejected with
+<code>'difficulty' must be one of ['short', 'medium', 'long'], got ...</code>).</p>
+<p>The tier never changes how a scenario runs or is judged. Its only consumer is
+the reporter, which aggregates PASS/FAIL and regression counts per tier (see
+<a href="#difficulty-breakdown">Difficulty breakdown</a>) so a regression report can show
+<em>which</em> tier is degrading. Of the nine built-in scenarios only
+<code>05_refund_policy_multiturn.json</code> declares a tier (<code>long</code>, the multi-round
+policy conversation); the other eight land in the default <code>medium</code>.</p>
 <h3 id="assertions"><a class="toclink" href="#assertions">Assertions</a></h3>
+<p>On the agent track, the seven assertions judge the <strong>cumulative</strong> run — on a
+multi-round scenario that is the whole conversation, not just the first
+round:</p>
 <table>
 <thead>
 <tr>
@@ -118,30 +271,117 @@ or invalid JSON all fail with a clear error naming the file.</p>
 <tbody>
 <tr>
 <td><code>expected_tool_sequence</code></td>
-<td>the exact ordered list of tool names the agent must call</td>
+<td>the exact ordered list of tool names the agent must call, spanning <strong>all rounds</strong></td>
 </tr>
 <tr>
 <td><code>final_contains</code></td>
-<td>every listed substring must appear in the final assistant text</td>
+<td>every listed substring must appear in the final assistant text — the <strong>last round's</strong> final answer</td>
 </tr>
 <tr>
 <td><code>forbidden_tools</code></td>
-<td>none of these tool names may appear anywhere in the call sequence</td>
+<td>none of these tool names may appear anywhere in the call sequence, any round included</td>
 </tr>
 <tr>
 <td><code>max_turns</code></td>
-<td>the react loop must finish within this many turns</td>
+<td>the conversation must finish within this many react-loop turns, <strong>summed across all rounds</strong> (round 1 alone on a single-round scenario, as before)</td>
+</tr>
+<tr>
+<td><code>required_tools</code></td>
+<td>every listed tool must have been called at least once, in any order — the unordered subset counterpart of <code>expected_tool_sequence</code></td>
+</tr>
+<tr>
+<td><code>max_tool_calls</code></td>
+<td><code>{"tool": n}</code> map: each named tool may be called at most <code>n</code> times (total across rounds)</td>
+</tr>
+<tr>
+<td><code>max_total_tool_calls</code></td>
+<td>the run may make at most this many tool calls in total (the efficiency budget)</td>
+</tr>
+</tbody>
+</table>
+<p>Memory-recall scenarios assert ranking instead of the tool trajectory. Each
+<code>queries</code> entry runs one real recall over the seeded temp database and
+produces one human-readable failure reason per miss:</p>
+<table>
+<thead>
+<tr>
+<th>miss</th>
+<th>failure reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>target not inside the recall window</td>
+<td><code>memory query '&lt;query&gt;': target seed #&lt;i&gt; missed the top-&lt;k&gt; (recalled order: #…)</code></td>
+</tr>
+<tr>
+<td>distractor ranked ahead of the target</td>
+<td><code>memory query '&lt;query&gt;': distractor seed #&lt;j&gt; outranked target seed #&lt;i&gt; (rank &lt;p&gt; vs &lt;q&gt;)</code></td>
+</tr>
+</tbody>
+</table>
+<p>Seed references are <code>#&lt;index&gt;</code> positions in the scenario's <code>seed</code> list, so a
+failure is diagnosable from the report alone. A distractor that is not
+recalled at all is trivially "not ahead" and does not fail.</p>
+<p>The two trajectory flavours are deliberate. <code>expected_tool_sequence</code> is
+precise but brittle against real regressions (any reordering fails it);
+<code>required_tools</code> only asks that every listed tool was reached. Use the exact
+sequence when the order <em>is</em> the contract, the subset form when it is not.</p>
+<p>The three call-count assertions share one counting rule with the sequence
+checks: they read every <code>tool_call</code> event the agent emitted, <strong>including calls
+the loop guard intercepted</strong> instead of executing (the agent still surfaces
+them as <code>tool_call</code> events), so they measure what the run <em>attempted</em>. That is
+what lets <code>max_tool_calls</code> pair with the agent's loop guard: the guard blocks
+the third consecutive identical call (default <code>agent.loop_detection_threshold</code>
+= 3) and asks the model to change strategy, so <code>"max_tool_calls": {"poll_job":
+3}</code> says "the same call repeated three times must have been intercepted — a
+fourth attempt is a regression". <code>04_repeat_call_loop_guard.json</code> is the
+built-in scenario for exactly this.</p>
+<p>Validation is as strict as the rest of the schema: <code>max_tool_calls</code> must be a
+non-empty object mapping tool names to positive integers (an empty object
+asserts nothing; a cap of <code>0</code> is rejected — "never call this tool" is what
+<code>forbidden_tools</code> is for), and <code>max_total_tool_calls</code> must be a positive
+integer (<code>true</code> is not a count). Every miss produces one human-readable
+failure reason in the report and on the <code>FAIL</code> line:</p>
+<table>
+<thead>
+<tr>
+<th>assertion</th>
+<th>failure reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>required_tools</code></td>
+<td><code>required tool was never called: &lt;tool&gt;</code></td>
+</tr>
+<tr>
+<td><code>max_tool_calls</code></td>
+<td><code>tool &lt;tool&gt; was called &lt;n&gt; times, limit is &lt;limit&gt;</code></td>
+</tr>
+<tr>
+<td><code>max_total_tool_calls</code></td>
+<td><code>made &lt;n&gt; tool calls in total, limit is &lt;limit&gt;</code></td>
 </tr>
 </tbody>
 </table>
 <p>A turn is one scripted LLM response. A turn with <code>tool_calls</code> gets
 <code>stop_reason=tool_use</code> (so the loop continues after the tools run); a turn
-with only <code>text</code> ends the run.</p>
-<h2 id="how-a-scenario-runs"><a class="toclink" href="#how-a-scenario-runs">How a scenario runs</a></h2>
+with only <code>text</code> ends the react loop — which on a <code>user_turns</code> scenario ends
+the <em>round</em>, and the scripted user's next message starts the next one.</p>
+<h2 id="how-a-scenario-runs-hermetic-track"><a class="toclink" href="#how-a-scenario-runs-hermetic-track">How a scenario runs (hermetic track)</a></h2>
 <p>The runner reuses the same fake-LLM injection pattern as the agent unit tests
 (<code>tests/test_agent_turns.py</code>): a <code>ScriptedLlmClient</code> replays <code>scripted_turns</code>
 as the streaming event protocol, and the scenario's tools are injected as
-deterministic stub tools into a real <code>ToolRegistry</code>.</p>
+deterministic stub tools into a real <code>ToolRegistry</code>. On a multi-round
+scenario one <code>Agent</code> instance drives every round, so the session — and the
+fake LLM's position in the turn script — carries over.</p>
+<p>Memory-recall scenarios take a separate path that is hermetic by
+construction: no agent, no LLM client, no tools. The runner creates a fresh
+SQLite file under a system temp directory (<code>nexuscli-eval-memory-…</code>), saves
+the seed rows into a real <code>MemoryManager</code>, runs each query's recall with
+access-counter marking disabled, and deletes the directory when the scenario
+ends — nothing outside the temp directory is read or written.</p>
 <p><strong>Stub tools, deliberately chosen over a real builtin read-only subset.</strong> The
 whole execution path — tool validation, permission rules, plan/HITL gates,
 the react loop — is the real one; only each tool's <em>effect</em> is canned. Real
@@ -154,11 +394,12 @@ canned result <code>"deployed"</code> never appears — the deny rule intercepts
 (no usage recording), audit log disabled, no context compression or skill
 prefixes. The report itself is written under the project's own
 <code>.nexuscli/evals/</code>.</p>
-<p>One side effect worth naming: scenarios run the real <code>Agent.run</code>. Automatic
-pre/post-turn snapshots are opt-in (<code>features.auto_snapshot</code>, default off), so
-under the default configuration nothing is copied; with the switch on, each
-turn copies the project tree to <code>~/.nexuscli/snapshots/&lt;digest&gt;</code> twice, like
-any other agent run. Nothing else escapes the project or the user home.</p>
+<p>One side effect worth naming: agent-loop scenarios run the real <code>Agent.run</code>.
+Automatic pre/post-turn snapshots are opt-in (<code>features.auto_snapshot</code>, default
+off), so under the default configuration nothing is copied; with the switch
+on, each turn copies the project tree to <code>~/.nexuscli/snapshots/&lt;digest&gt;</code>
+twice, like any other agent run. Memory-recall scenarios touch nothing outside
+their temp directory. Nothing else escapes the project or the user home.</p>
 <h2 id="regression-comparison"><a class="toclink" href="#regression-comparison">Regression comparison</a></h2>
 <p>Every run writes <code>.nexuscli/evals/last-report.json</code>. On the next run the
 previous report is read back and each scenario is marked:</p>
@@ -197,14 +438,795 @@ previous report is read back and each scenario is marked:</p>
 the <code>regressions</code> count tells you which failures are new. A corrupt previous
 report is an error, not a silent reset — silently dropping the baseline would
 turn real regressions into <code>new</code> verdicts.</p>
+<h3 id="report-shape"><a class="toclink" href="#report-shape">Report shape</a></h3>
+<p>One scenario entry and the summary block, exactly as written to
+<code>last-report.json</code> (plain JSON, no dataclass dump, so CI can diff or publish
+it directly). <code>rounds</code> is the number of conversation rounds actually run —
+<code>1</code> for a single-round or memory-recall scenario:</p>
+<pre><code class="language-json">{
+  &quot;name&quot;: &quot;refund-policy-multiturn&quot;,
+  &quot;status&quot;: &quot;pass&quot;,
+  &quot;difficulty&quot;: &quot;long&quot;,
+  &quot;failure_reasons&quot;: [],
+  &quot;tool_sequence&quot;: [&quot;lookup_order&quot;, &quot;open_refund_request&quot;],
+  &quot;turns&quot;: 4,
+  &quot;rounds&quot;: 2,
+  &quot;total_tool_calls&quot;: 2,
+  &quot;comparison&quot;: {&quot;previous&quot;: &quot;pass&quot;, &quot;verdict&quot;: &quot;unchanged&quot;},
+  &quot;cost&quot;: {&quot;change&quot;: &quot;unchanged&quot;, &quot;warnings&quot;: []}
+}
+</code></pre>
+<pre><code class="language-json">&quot;summary&quot;: {
+  &quot;total&quot;: 9, &quot;passed&quot;: 9, &quot;failed&quot;: 0, &quot;regressions&quot;: 0, &quot;fixed&quot;: 0,
+  &quot;cost_increased&quot;: 0, &quot;cost_decreased&quot;: 0, &quot;cost_unchanged&quot;: 9,
+  &quot;difficulty&quot;: {
+    &quot;short&quot;:  {&quot;total&quot;: 0, &quot;passed&quot;: 0, &quot;failed&quot;: 0, &quot;regressions&quot;: 0},
+    &quot;medium&quot;: {&quot;total&quot;: 8, &quot;passed&quot;: 8, &quot;failed&quot;: 0, &quot;regressions&quot;: 0},
+    &quot;long&quot;:   {&quot;total&quot;: 1, &quot;passed&quot;: 1, &quot;failed&quot;: 0, &quot;regressions&quot;: 0}
+  }
+}
+</code></pre>
+<h3 id="cost-metrics"><a class="toclink" href="#cost-metrics">Cost metrics</a></h3>
+<p>A scripted run has no tokens, so its cost is the two quantities that are
+fully deterministic offline: <code>turns</code> (react-loop turns taken) and
+<code>total_tool_calls</code> (the length of the observed <code>tool_sequence</code>,
+loop-guard-intercepted calls included). A memory-recall scenario runs no
+agent loop, so both of its metrics are plain <code>0</code> — the diff conventions apply
+unchanged. Both are recorded on every scenario
+entry and diffed against the same scenario's entry in the previous report:</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cost.change</code></td>
+<td><code>increased</code> when any metric went up; <code>decreased</code> when some metric went down and nothing went up; <code>unchanged</code> otherwise; <code>null</code> when there is no comparable baseline (new scenario, or a previous entry without cost fields)</td>
+</tr>
+<tr>
+<td><code>cost.warnings</code></td>
+<td>one line per metric that grew, in the form <code>4 turns → 7 turns</code> / <code>2 tool calls → 5 tool calls</code></td>
+</tr>
+</tbody>
+</table>
+<p>The summary counts <code>cost_increased</code> / <code>cost_decreased</code> / <code>cost_unchanged</code>
+scenarios separately; scenarios with <code>change: null</code> land in no bucket, so the
+three counts need not add up to <code>total</code>. On the CLI, every scenario whose cost
+grew gets a <code>COST\t&lt;name&gt;\t&lt;warnings&gt;</code> line right under its <code>PASS/FAIL</code> line.</p>
+<p>Cost is <strong>advisory only</strong>: an increase never changes a PASS/FAIL verdict, the
+<code>regressions</code> count or the exit code. The CI gate is still "any failed
+scenario → exit 1"; the cost lines exist to make an efficiency regression
+<em>visible</em>, and the judgement stays with you. A previous report written before
+the cost fields existed is handled by skipping the missing metrics instead of
+inventing a baseline, so upgrading keeps the old <code>last-report.json</code> usable.</p>
+<h3 id="difficulty-breakdown"><a class="toclink" href="#difficulty-breakdown">Difficulty breakdown</a></h3>
+<p>Every entry carries its scenario's <code>difficulty</code> tier, and the summary's
+<code>difficulty</code> block aggregates per tier — all three tiers always present, in
+<code>short</code> / <code>medium</code> / <code>long</code> order, each with <code>total</code> / <code>passed</code> / <code>failed</code> /
+<code>regressions</code>. Empty tiers are emitted as zeros so the block has the same
+shape on every run (stable for CI diffs, and "no coverage at this tier" stays
+visible). A tier's <code>regressions</code> counts its <code>pass → fail</code> verdicts: when the
+top-level <code>regressions</code> is non-zero, this block says <em>which</em> tier is
+degrading. Like cost, the tier never changes a verdict.</p>
+<p>The CLI renders the block as one <code>difficulty:</code> line after the summary line.
+A full second run of the built-ins against its own baseline looks like this:</p>
+<pre><code>PASS    read-task-details   [unchanged]
+PASS    denied-privileged-call  [unchanged]
+PASS    multi-turn-search-converge  [unchanged]
+PASS    memory-recall-target-first  [unchanged]
+PASS    repeat-call-loop-guard  [unchanged]
+PASS    refund-policy-multiturn [unchanged]
+PASS    dinner-booking-clarify  [unchanged]
+PASS    memory-recall-entity-noise  [unchanged]
+PASS    memory-recall-temporal-future   [unchanged]
+total=9 passed=9 failed=0 regressions=0 fixed=0 cost_increased=0 cost_decreased=0 cost_unchanged=9
+difficulty: short total=0 passed=0 failed=0 regressions=0 | medium total=8 passed=8 failed=0 regressions=0 | long total=1 passed=1 failed=0 regressions=0
+Report written to &lt;cwd&gt;/.nexuscli/evals/last-report.json
+</code></pre>
+<h2 id="history-snapshots-eval-history"><a class="toclink" href="#history-snapshots-eval-history">History snapshots (<code>eval history</code>)</a></h2>
+<p>A run's report does not only live as a single <code>last-*.json</code>: every
+successful <code>eval run</code> — hermetic or real — also appends the <strong>same report
+document</strong> as a timestamped snapshot, so "only the last run" becomes a
+reviewable sequence:</p>
+<ul>
+<li>hermetic: <code>&lt;cwd&gt;/.nexuscli/evals/history/hermetic/&lt;UTC timestamp&gt;.json</code></li>
+<li>real: <code>&lt;cwd&gt;/.nexuscli/evals/history/real/&lt;UTC timestamp&gt;.json</code></li>
+</ul>
+<p>The filename is the UTC write time to the second, colon-free
+(<code>2026-11-03T02-05-12Z.json</code>), so lexicographic order is chronological
+order. Same-second collisions are handled by exclusive file creation
+(atomic at the OS level — two concurrent writers can never silently
+overwrite each other): whoever loses the create race retries with
+zero-padded <code>_NN</code> suffixes (<code>_02</code>, <code>_03</code>, ...), which sort <em>after</em> the base
+name (<code>'_' &gt; '.'</code>), so nothing is ever overwritten and lexicographic order
+stays chronological within a same-second pair too (up to <code>_99</code>). The
+snapshot is the identical report document — byte-for-byte the same
+serialization, no schema drift — and the two main report files keep their
+exact paths (<code>last-report.json</code>, <code>last-real-report.json</code>) and schemas.</p>
+<p><code>eval history [N]</code> lists the most recent <code>N</code> snapshots <strong>per track</strong>
+(default <code>10</code>, minimum <code>1</code>), optionally filtered with <code>--track
+hermetic|real</code>. It is strictly read-only, newest first, one line per
+snapshot: the UTC timestamp, <code>passed/total</code>, the run's exit verdict derived
+from the report summary (<code>exit=1</code> when the run failed, as the original
+<code>eval run</code> exit code did), plus the track's headline signal — the cost-alert
+count (<code>cost_increased</code>, hermetic) or the all-pass rate (<code>all_pass_rate</code>,
+real). An unreadable or summary-less snapshot renders as a placeholder line
+instead of aborting the listing, and a track with no history yet gets a
+friendly hint naming its (missing) directory — never an error:</p>
+<pre><code>hermetic (last 1):
+2026-11-03T02-05-12Z    passed=9/9  exit=0  cost_increased=0
+real: no eval history yet (nothing recorded under /tmp/wk/.nexuscli/evals/history/real)
+</code></pre>
+<p><strong>Best-effort by contract.</strong> The main report is written first; the history
+append runs after it and any failure there (disk full, permissions, …)
+degrades to a single warning — the run itself, its report file and the exit
+code are unaffected, and the degradation holds even under an error-action
+warning filter (<code>-W error</code> / <code>PYTHONWARNINGS=error</code>), where the warn call
+itself is suppressed instead of propagating. History is observability,
+never a gate.</p>
+<p><strong>What a "run" is, precisely.</strong> Every user-driven <code>eval run</code> lands in
+history. One internal write opts out: the post-landing diff of <code>/skill
+propose</code> reruns scenario 03 and writes its report with history disabled —
+that throwaway report is erased again by the diff's own backup/restore, so
+recording it would list a run the track's persistence rolled back.</p>
+<p><strong>On-record deferrals.</strong> Only the two main reports get history sequences:
+the baseline-ablation comparison file (<code>last-real-comparison.json</code>) is
+deliberately <em>not</em> snapshotted this round, and there is no retention or
+cleanup policy for the history directories yet. Both are conscious
+deferrals, not oversights.</p>
+<h2 id="real-model-track---real"><a class="toclink" href="#real-model-track---real">Real-model track (<code>--real</code>)</a></h2>
+<p>The hermetic track proves the wiring with a fixed script; the real-model
+track measures the thing the script stands in for. <code>nexuscli eval run
+--real</code> builds a real LLM client through the <strong>normal config chain</strong>
+(<code>load_config</code> → <code>create_llm_client</code>, so <code>~/.nexuscli/config.json</code>, the
+project's <code>.nexuscli/config.json</code>, <code>.env</code> and the <code>NEXUSCLI_*</code> environment
+all apply), drives the real builtin tools with it, and reports real token
+cost. Runs are serial with one fresh client per repetition; the scenario's
+<code>max_turns</code> assertion caps the react loop as usual, and a run that hits the
+runner's budget or the loop guard fails with <code>react loop terminated early:
+…</code> — an unconverged real run must not look like a pass with truncated
+output. The track is nightly/manual evidence, deliberately <strong>not</strong> a CI
+gate: every repetition bills real tokens and a flaky provider would fail a
+gate for the wrong reason. With <code>--baseline</code> the track can also run the same
+scenarios against the bare model and report the harness's gain over it —
+see <a href="#baseline-ablation---real---baseline">Baseline ablation</a>.</p>
+<h3 id="safety-model-read-only-surface-fail-closed-writes"><a class="toclink" href="#safety-model-read-only-surface-fail-closed-writes">Safety model: read-only surface, fail-closed writes</a></h3>
+<p>Unattended runs must never write. Three stacked layers enforce it — with one
+reviewed, explicitly opt-in exception: a scenario that declares
+<code>sandbox_write: true</code> opens a <strong>controlled write sandbox</strong> for that one
+scenario only (confined to a throwaway temp directory, <code>bash</code> still denied,
+audit unchanged — see
+<a href="#controlled-write-sandbox-sandbox_write">Controlled write sandbox</a>). Without
+that declaration the layers below are the whole story, unchanged:</p>
+<ul>
+<li><strong>Read-only tool subset.</strong> The registry mounts the real builtin tools
+  (no MCP, no plugins), but only a curated read-only subset may <em>execute</em>:
+  <code>read_file</code>, <code>list_dir</code>, <code>glob</code>, <code>glob_files</code>, <code>grep</code>, <code>grep_code</code>,
+  <code>directory_tree</code>, <code>get_file_info</code>, <code>web_search</code>, <code>web_fetch</code>,
+  <code>search_code</code>, <code>task_output</code>, <code>todo_read</code>, <code>load_skill</code>.
+  Every other builtin gets a computed <code>permissions.deny</code> rule — deny beats
+  ask/allow, so even a user config that allows <code>write_file</code> cannot punch
+  through. The subset is curated <strong>by name</strong>, not derived from the tools'
+  <code>is_read_only</code> flag: that flag is too loose for unattended runs, because
+  two flagged-read-only builtins actually mutate user state in ways that
+  change behavior — <code>todo_write</code> writes <code>.nexuscli/todo.json</code> (the default
+  read-only flag), and <code>search_memory</code>'s recall runs with the default
+  <code>mark_access=True</code> (an <code>access_count</code> UPDATE plus a DELETE of expired
+  rows on the user's real memory DB per call). Both stay outside the
+  allowlist and are denied+audited like any other write.
+  <code>load_skill</code> was excluded under the same reasoning until the 2026-11-02
+  layered-loading change re-classified it: its content surface is read-only
+  by construction (name-keyed lookup confined to the skill roots), and its
+  only write is accounting — usage counters at <code>~/.nexuscli/usage.json</code>
+  that nothing reads to change behavior. It is IN the allowlist, and the
+  track's write invariant is stated accordingly: zero workspace writes plus
+  this one declared user-dir counter write; the audit log remains the
+  track's only documented write. The main whitelist is unchanged by the
+  sandbox feature: <code>write_file</code> / <code>edit_file</code> stay OUT of it, and a
+  scenario without <code>sandbox_write</code> denies them exactly as before.</li>
+<li><strong>Fail-closed approval, same as <code>-p</code> without <code>--yes</code>.</strong> There is no
+  approval callback, so anything that still reaches the approval gate
+  (<code>requires_approval</code> tools, <code>ask</code> rules) is denied. <code>hitl_mode</code> is pinned
+  to <code>auto</code> for the track so a user's <code>always</code>/<code>never</code> cannot accidentally
+  close or widen the surface.</li>
+<li><strong>Audit pinned on.</strong> Every denied call attempt goes through the real gate
+  chain and is written to the audit log (approver <code>permission-rule</code>, or
+  <code>hitl</code> for the approval-gate backstop) — a write attempt is a <em>known</em>
+  tool whose model-visible result is
+  <code>Tool "write_file" was denied by permission rule: write_file</code>, never an
+  unaudited "tool not found".</li>
+</ul>
+<h3 id="real-scenario-schema"><a class="toclink" href="#real-scenario-schema">Real scenario schema</a></h3>
+<p>Real scenarios are their own set (<code>examples/evals/real/</code>; <code>--file</code> accepts
+one file or a directory of <code>*.json</code> from anywhere) and load through a
+separate, deliberately minimal schema. Allowed keys are exactly <code>name</code>,
+<code>prompt</code>, <code>assertions</code>, an optional <code>judge</code> and an optional <code>sandbox_write</code>
+(see <a href="#controlled-write-sandbox-sandbox_write">Controlled write sandbox</a>):</p>
+<pre><code class="language-jsonc">{
+  &quot;name&quot;: &quot;real-repo-question-answer&quot;,   // required, non-empty
+  &quot;prompt&quot;: &quot;Read pyproject.toml ...&quot;,   // required, non-empty
+  &quot;sandbox_write&quot;: false,                // optional, default false: the closed
+                                         // read-only track; true opens the
+                                         // one-scenario write sandbox
+  &quot;assertions&quot;: {                        // optional: the hermetic checks
+    &quot;max_turns&quot;: 6,                      // plus, for sandbox_write scenarios
+    &quot;forbidden_tools&quot;: [&quot;write_file&quot;]    // only, the two quality keys below
+  },
+  &quot;judge&quot;: {                             // optional: LLM-as-judge scoring
+    &quot;rubric&quot;: [                          // required, non-empty criteria the
+      &quot;The answer states that the project's name is nexuscli&quot;
+    ],
+    &quot;threshold&quot;: 0.6,                    // required: 0..1 minimum score
+    &quot;model&quot;: &quot;glm-5.2&quot;                   // optional: judge model override
+  }
+}
+</code></pre>
+<p>Validation is strict with the file named in every error. The hermetic-only
+keys are rejected outright as <strong>track conflicts</strong> (<code>scripted_turns</code>,
+<code>tools</code>, <code>memory_eval</code>, <code>permission_deny</code>, <code>hitl_mode</code>, <code>user_turns</code>,
+<code>max_rounds</code>) — stub tools and scripted turns are meaningless against a real
+model, and the two tracks use distinct scenario dataclasses so one cannot be
+fed to the other runner by accident. The hermetic track rejects
+<code>sandbox_write</code> and the quality assertion keys the same way (unknown keys):
+the write sandbox and its gate exist only on the real track. Other unknown
+keys (including <code>description</code> and <code>difficulty</code>) fail with the supported list
+in the message. <code>expected_tool_sequence</code> is accepted but <strong>discouraged</strong> for
+real models: any reordering the model chooses fails it, so prefer
+<code>required_tools</code> plus <code>forbidden_tools</code> unless the order really is the
+contract.</p>
+<h3 id="controlled-write-sandbox-sandbox_write"><a class="toclink" href="#controlled-write-sandbox-sandbox_write">Controlled write sandbox (<code>sandbox_write</code>)</a></h3>
+<p>The 2026-11-03_add-real-sandbox-write-quality spec is the track's one
+reviewed amendment to "unattended runs must never write": a scenario that
+declares <code>"sandbox_write": true</code> measures <strong>controlled output</strong>, not just
+read-only understanding — the agent writes real files, and the quality of
+what it wrote becomes a measurable, assertable metric. The default stays
+<code>false</code>, and a scenario without the flag runs exactly as before (the write
+pair deny-ruled and audited, no sandbox, <code>"quality": null</code> in the report).</p>
+<p><strong>What the flag opens — and what it never opens.</strong> For that one scenario
+run only:</p>
+<ul>
+<li>the agent runs against a fresh, <strong>empty</strong> <code>tempfile.mkdtemp</code> sandbox
+  (prefix <code>nexuscli-eval-write-</code> under the system temp directory; no
+  repository copy — the prompt must be self-contained), and the file tools'
+  PathGuard root is pinned to that sandbox: relative paths resolve inside
+  it and anything outside — the repository body included — fails with
+  <code>path escapes workspace</code>. The sandbox is removed after the run;</li>
+<li><code>write_file</code> / <code>edit_file</code> become executable <strong>for this scenario's
+  config only</strong>: their computed deny rules are lifted and allow-ruled, so
+  the real gate chain executes them without an approval callback. A
+  spec'd user deny rule (e.g. <code>write_file(src/**)</code>) still wins — deny
+  beats allow; the bare-name lift is the track's own pin, the same
+  category as the pinned audit/<code>hitl_mode</code>. The main <code>REAL_TRACK_TOOLS</code>
+  whitelist is untouched;</li>
+<li><strong><code>bash</code> and every other execution/state channel stay deny-ruled.</strong> The
+  sandbox opens file writes only, never command execution — a command can
+  write outside the sandbox and reach the network, which is the opposite
+  of a confined write domain (execution scenarios are their own future
+  work);</li>
+<li>the audit trail is unchanged: an allowed write is recorded as
+  <code>allow</code> / <code>permission-rule</code>, an escape attempt (PathGuard rejection) as
+  <code>error</code>, a denied call as <code>deny</code> — every attempt leaves a record;</li>
+<li>cleanup is best-effort: the sandbox directory is removed when the run
+  ends, and a failed removal becomes a <strong>single</strong> <code>SandboxCleanupWarning</code>
+  per process naming the leftover path (recognizable by its prefix) —
+  never an exception, never silence.</li>
+</ul>
+<p><strong>The quality gate.</strong> Every <code>sandbox_write</code> run records a <code>quality</code> block
+automatically (the metric is always measured; only the assertions below
+decide whether it judges PASS/FAIL):</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>files_written</code></td>
+<td><code>string[]</code></td>
+<td>every <code>*.py</code> found under the sandbox, sorted relative POSIX paths</td>
+</tr>
+<tr>
+<td><code>ruff_violations</code></td>
+<td><code>int\|null</code></td>
+<td>violation count from <code>python -m ruff check --output-format concise</code> over the sandbox; <code>null</code> when ruff is unavailable or its output is unparsable</td>
+</tr>
+<tr>
+<td><code>compile_ok</code></td>
+<td><code>bool</code></td>
+<td>every collected <code>*.py</code> compiles (<code>py_compile</code>, one syntax error fails it)</td>
+</tr>
+<tr>
+<td><code>ruff_note</code></td>
+<td><code>str\|null</code></td>
+<td>the degradation explanation when the metric is <code>null</code>, else <code>null</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>The quality assertions.</strong> Two keys, both requiring <code>sandbox_write: true</code>
+(the loader rejects them without it — without a sandbox no gate runs and
+the assertion could never pass):</p>
+<ul>
+<li><code>max_ruff_violations</code> — a non-negative integer cap (<code>0</code> is legal: "no
+  violations allowed"). FAILs when the count exceeds the cap. <strong>Fail-closed
+  on null</strong>: if ruff is unavailable the run FAILS with
+  <code>max_ruff_violations cannot be judged: the ruff metric is null (…)</code>
+  plus the install guidance — an unjudgeable metric must never silently
+  pass its cap;</li>
+<li><code>require_compile_clean</code> — a boolean. FAILs when <code>compile_ok</code> is <code>false</code>
+  (<code>sandbox code does not compile cleanly (require_compile_clean)</code>).</li>
+</ul>
+<p>Without either key the <code>quality</code> block is recorded but never touches
+PASS/FAIL. The hermetic track rejects both keys as unknown — there is no
+gate to judge there.</p>
+<p><strong>ruff availability.</strong> ruff ships in the <code>dev</code> extra; if the environment
+does not have it (<code>uv sync --extra dev</code> installs it), the metric degrades
+to <code>null</code> with a <code>ruff_note</code> explaining so — the gate never guesses a
+count, and only a declared <code>max_ruff_violations</code> turns that null into a
+FAIL.</p>
+<p>The built-in example is
+<code>examples/evals/real/04_sandbox_write_quality.json</code> (<code>real-sandbox-write-quality</code>):
+a self-contained prompt writes one clean <code>greeting.py</code>, asserts the
+<code>SANDBOX-WRITE-OK</code> marker, <code>max_ruff_violations: 0</code>,
+<code>require_compile_clean: true</code>, and keeps the standard forbidden trio
+(<code>bash</code>, <code>execute_command</code>, <code>task</code>) — the write pair is the only channel
+it opens. Deliberately out of scope for now: <code>--baseline</code> combined with
+<code>sandbox_write</code> (the bare model cannot write, so the ablation arms are not
+comparable on quality), sandbox repository copies, and multi-sandbox or
+cross-scenario sharing.</p>
+<h3 id="llm-as-judge"><a class="toclink" href="#llm-as-judge">LLM-as-judge</a></h3>
+<p>When a scenario declares <code>judge</code>, the run's final answer is scored against
+the rubric by a judge call on the <strong>same client factory</strong> as the run itself.
+Without <code>judge.model</code> the judge follows the run's provider/model; with it,
+the factory builds the judge a client with just the model swapped. The judge
+is prompted for a strict two-line reply that parses deterministically:</p>
+<pre><code>SCORE: 0.8
+REASON: one short sentence citing the rubric evidence
+</code></pre>
+<ul>
+<li><code>score &gt;= threshold</code> passes the check; below it the run FAILS with
+  <code>judge score 0.20 is below threshold 0.60: &lt;explanation&gt;</code> — score and
+  evidence travel together in the failure reason.</li>
+<li>An unparsable reply (no <code>SCORE:</code> line) scores <code>0.0</code> <strong>fail-closed</strong>, with
+  the raw excerpt quoted in the explanation, so a confused judge model can
+  never silently pass a run.</li>
+<li>The judge call's own token usage is folded into the run's usage total, so
+  the report's cost includes judging. (The cost figure is priced with the
+  run's own model profile; token counts stay exact even when
+  <code>judge.model</code> points elsewhere.)</li>
+<li>The judge evaluator is injectable — a plain callable seam, the same
+  pattern as the fake LLM — which is how the track's judge behavior is
+  tested with zero network.</li>
+</ul>
+<h3 id="passk-real-cost-and-the-report"><a class="toclink" href="#passk-real-cost-and-the-report">pass^k, real cost, and the report</a></h3>
+<p><code>--repeat k</code> runs every scenario k times serially (default <code>1</code>, minimum 1).
+The report keeps <strong>every</strong> repetition and adds the stability and cost
+aggregation. It is written to
+<code>&lt;cwd&gt;/.nexuscli/evals/last-real-report.json</code> — never to the hermetic
+baseline <code>last-report.json</code> — and carries no comparison block on purpose:
+nightly real-track comparisons are read by a human, not diffed by the tool.</p>
+<pre><code class="language-jsonc">// one scenario entry
+{
+  &quot;name&quot;: &quot;real-repo-question-answer&quot;,
+  &quot;source&quot;: &quot;examples/evals/real/02_repo_question_answer.json&quot;,
+  &quot;pass_k&quot;: {                              // pass^k verdict for the scenario
+    &quot;repeat&quot;: 3, &quot;passed_runs&quot;: 3, &quot;failed_runs&quot;: 0, &quot;all_pass&quot;: true
+  },
+  &quot;cost&quot;: {
+    &quot;runs&quot;: 3,
+    &quot;total_usage&quot;: {                       // cache/reasoning splits preserved
+      &quot;input_tokens&quot;: 300, &quot;output_tokens&quot;: 90, &quot;cache_hit_tokens&quot;: 120,
+      &quot;cache_miss_tokens&quot;: 180, &quot;reasoning_tokens&quot;: 24, &quot;total_tokens&quot;: 390
+    },
+    &quot;avg_usage&quot;: {&quot;input_tokens&quot;: 100.0, &quot;output_tokens&quot;: 30.0},
+    &quot;total_cost&quot;: {&quot;usd&quot;: {&quot;total_cost&quot;: 0.0214}}   // summed per currency
+  },
+  &quot;runs&quot;: [
+    {
+      &quot;index&quot;: 1,                          // the repetition number
+      &quot;status&quot;: &quot;pass&quot;,
+      &quot;failure_reasons&quot;: [],
+      &quot;tool_sequence&quot;: [&quot;read_file&quot;],
+      &quot;turns&quot;: 2,
+      &quot;usage&quot;: {&quot;input_tokens&quot;: 100, &quot;output_tokens&quot;: 30, &quot;total_tokens&quot;: 130},
+      &quot;cost&quot;: {&quot;usd&quot;: {&quot;total_cost&quot;: 0.0071}},
+      &quot;judge&quot;: {&quot;score&quot;: 0.9, &quot;threshold&quot;: 0.6, &quot;passed&quot;: true,
+                 &quot;explanation&quot;: &quot;names nexuscli from pyproject.toml&quot;,
+                 &quot;model&quot;: null},           // null = judge followed the run model
+      &quot;quality&quot;: null                      // sandbox_write quality block; null for
+                                           // every read-only run (additive field —
+                                           // see Controlled write sandbox)
+    }
+    // ... one entry per repetition, nothing dropped
+  ]
+}
+</code></pre>
+<pre><code class="language-jsonc">&quot;summary&quot;: {
+  &quot;total_runs&quot;: 6, &quot;passed&quot;: 6, &quot;failed&quot;: 0,
+  &quot;scenarios_total&quot;: 2, &quot;scenarios_all_pass&quot;: 2, &quot;all_pass_rate&quot;: 1.0,
+  &quot;total_usage&quot;: {&quot;input_tokens&quot;: 600, &quot;output_tokens&quot;: 180, &quot;total_tokens&quot;: 780},
+  &quot;total_cost&quot;: {&quot;usd&quot;: {&quot;total_cost&quot;: 0.0428}}
+}
+</code></pre>
+<p><code>pass_k.all_pass</code> is the pass^k verdict: a scenario counts toward pass^k
+only when <strong>all</strong> of its repeats passed — the metric exists to surface
+<code>pass → fail</code> flakiness that a single run hides. The CLI prints one
+<code>PASS/FAIL &lt;name&gt; [run &lt;i&gt;/&lt;k&gt;]</code> line per repetition (FAIL lines carry the
+reasons), then a <code>total_runs=… passed=… failed=…</code> summary line, and exits
+<code>1</code> on any failed run.</p>
+<h3 id="baseline-ablation---real---baseline"><a class="toclink" href="#baseline-ablation---real---baseline">Baseline ablation (<code>--real --baseline</code>)</a></h3>
+<p><code>--baseline</code> turns the real track into a two-arm double run: after the agent
+arm — unchanged, the report below is still exactly what a plain <code>--real</code> run
+writes — the same scenario list runs against the <strong>bare model</strong>, and the
+harness-gain comparison lands in its own file,
+<code>&lt;cwd&gt;/.nexuscli/evals/last-real-comparison.json</code>:</p>
+<pre><code class="language-bash">nexuscli eval run --real --baseline                              # examples/evals/real
+nexuscli eval run --real --baseline --file examples/evals/suite  # the 30-scenario suite
+</code></pre>
+<p>The ablation answers the question a single agent score cannot: <em>how much of
+this score is the harness, and how much is the model?</em> The bare model is the
+same-model lower bound, so <code>agent_pass − baseline_pass</code> is the harness's net
+gain.</p>
+<p><strong>The bare arm.</strong> The same LLM through the same config chain (same
+provider/model — the gain must be attributable to the harness, not to a model
+swap), as <strong>one direct chat completion</strong>: an empty tool list, no skill
+candidates, no agent system prompt — just
+<code>You are a helpful assistant. Answer directly.</code> That minimal prompt is the
+arm's entire system message, chosen to say nothing the model could leverage;
+it is recorded verbatim in the comparison document
+(<code>baseline.system_prompt</code>) so readers can see exactly what the bare arm got.
+Scenarios whose questions need tools are expected to fail here — that is the
+gap the ablation measures, not a defect.</p>
+<p><strong>Assertion subset.</strong> Only the checks that depend on the final text carry
+over to the bare arm:</p>
+<table>
+<thead>
+<tr>
+<th>check</th>
+<th>bare arm</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>final_contains</code></td>
+<td>judged, same failure wording as the agent arm</td>
+</tr>
+<tr>
+<td><code>judge</code></td>
+<td>reused verbatim from the scenario — same rubric, same threshold, same <code>judge.model</code> override; one ruler for both arms (the judge call's tokens land in that arm's total)</td>
+</tr>
+<tr>
+<td><code>expected_tool_sequence</code> / <code>forbidden_tools</code> / <code>required_tools</code> / <code>max_tool_calls</code> / <code>max_total_tool_calls</code></td>
+<td><strong>N/A</strong> — the bare model gets no tools, so tool-trajectory assertions are meaningless</td>
+</tr>
+<tr>
+<td><code>max_turns</code></td>
+<td><strong>N/A</strong> — one completion has no turn budget</td>
+</tr>
+</tbody>
+</table>
+<p>The document states the N/A set once, up front (<code>baseline.assertions</code> with
+<code>evaluated</code> / <code>not_applicable</code>), instead of marking every scenario entry.</p>
+<p><strong>Single-shot on purpose, and what it costs.</strong> Model output varies between
+calls, so caching an earlier agent side would compare against a different
+sample; both arms run serially against the same client factory, one fresh
+client per run. That is also why <code>--repeat</code> cannot combine with <code>--baseline</code>
+— the combination is a usage error, not a silent reinterpretation. Cost
+consequence: a <code>--baseline</code> double run bills roughly <strong>2× a full-suite run</strong>
+(agent arm + bare arm, judge calls included in each arm's tokens). The
+credential/provider check fires before any scenario starts, exactly like
+<code>--real</code> (<code>No key, no run</code> below applies unchanged), and the exit code still
+reflects the <strong>agent arm only</strong> — the bare model failing tool-required
+questions is the ablation's expected signal, reported in the comparison, not
+a command failure.</p>
+<p><strong>Comparison file fields.</strong> <code>last-real-report.json</code> keeps its exact schema
+and stays agent-side only (its consumers — <code>/skill propose</code>, the post-landing
+diff — never see baseline data); the comparison is a third file that a plain
+<code>--real</code> run never writes. Per scenario:</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>scenario name</td>
+</tr>
+<tr>
+<td><code>agent.status</code> / <code>baseline.status</code></td>
+<td><code>pass</code> / <code>fail</code> of that arm</td>
+</tr>
+<tr>
+<td><code>agent.tokens</code> / <code>baseline.tokens</code></td>
+<td>that arm's <code>total_tokens</code> (judge usage included)</td>
+</tr>
+<tr>
+<td><code>delta.pass_delta</code></td>
+<td>agent − baseline: <code>+1</code> the harness passed where the bare model failed, <code>-1</code> the reverse</td>
+</tr>
+<tr>
+<td><code>delta.token_delta</code></td>
+<td>agent − baseline tokens: the harness's extra token cost for this scenario</td>
+</tr>
+</tbody>
+</table>
+<p>Summary:</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scenarios_total</code></td>
+<td>paired scenarios (both arms run the same list)</td>
+</tr>
+<tr>
+<td><code>agent_pass</code> / <code>baseline_pass</code></td>
+<td>passed-count per arm</td>
+</tr>
+<tr>
+<td><code>pass_delta</code></td>
+<td><code>agent_pass − baseline_pass</code> — the headline harness gain</td>
+</tr>
+<tr>
+<td><code>agent_pass_rate</code> / <code>baseline_pass_rate</code></td>
+<td>pass rates per arm, rounded to 4 decimals</td>
+</tr>
+<tr>
+<td><code>quadrants</code></td>
+<td><code>both_pass</code> / <code>agent_only</code> / <code>baseline_only</code> / <code>both_fail</code> counts</td>
+</tr>
+<tr>
+<td><code>total_tokens</code></td>
+<td><code>{agent, baseline}</code> run-wide token totals</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Reading the quadrants.</strong> <code>agent_only</code> is the harness's net wins —
+questions the bare model could not answer (usually because they need tools)
+but the agent did; together with <code>pass_delta</code> this is the number the
+ablation exists for. <code>baseline_only</code> is the harness's net losses — rare, and
+worth a look when non-zero (sampling variance or an agent-side failure
+mode), not a defect by itself. <code>both_fail</code> makes the genuinely-hard tail
+visible: bare-model misses on tool-required questions are expected to
+concentrate here. <code>both_pass</code> is agreement — no differentiation. The CLI
+prints one line per scenario plus a summary line (numbers illustrative):</p>
+<pre><code>cqa-sh-pyproject-name-license   agent=PASS baseline=FAIL tokens=11822/931 (pass_delta=+1, token_delta=+10891)
+...
+agent_pass=24/30 baseline_pass=17/30 pass_delta=+7 | quadrants: both_pass=16 agent_only=8 baseline_only=1 both_fail=5
+Comparison written to &lt;cwd&gt;/.nexuscli/evals/last-real-comparison.json
+</code></pre>
+<h3 id="no-key-no-run"><a class="toclink" href="#no-key-no-run">No key, no run</a></h3>
+<p>The credential and provider are validated <strong>before</strong> any scenario starts, so
+a missing key can never produce a partial run or a silent skip. Without an
+API key the command exits <code>1</code> with an actionable message naming the levers:
+<code>NEXUSCLI_API_KEY</code> (or the provider's variable such as <code>DEEPSEEK_API_KEY</code> /
+<code>GLM_API_KEY</code>), or <code>llm.api_key</code> in <code>~/.nexuscli/config.json</code> / the project's
+<code>.nexuscli/config.json</code>. An unknown provider without a <code>base_url</code> fails the
+same way. Two built-in real scenarios ship in <code>examples/evals/real/</code>:
+<code>01_readonly_converge.json</code> (count the workspace root's entries within a
+turn budget, write attempts forbidden) and <code>02_repo_question_answer.json</code>
+(read <code>pyproject.toml</code>, name the project, judge-scored against a rubric) —
+run them from a checkout with <code>uv run nexuscli eval run --real</code> and expect a
+small, visible token bill in the report.</p>
+<h3 id="evaluation-suite-examplesevalssuite"><a class="toclink" href="#evaluation-suite-examplesevalssuite">Evaluation suite (<code>examples/evals/suite</code>)</a></h3>
+<p>The two scenarios above are wiring smoke. The evaluation suite is the real
+track's actual measurement instrument: a <strong>self-built vertical dataset</strong> for
+the workload this CLI exists for — repository operations and code
+comprehension inside a terminal/CLI agent. It is a fixed grid of
+<strong>5 categories × 3 difficulties × 2 scenarios = 30 scenarios</strong>
+(<code>codebase-qa</code>, <code>repo-facts</code>, <code>diagnosis</code>, <code>skill-compliance</code>,
+<code>extraction</code> × <code>short</code> / <code>medium</code> / <code>long</code>), and every prompt is written in
+Chinese — the language the CLI's target users operate in.</p>
+<p>Layout: the 30 scenario files sit <strong>flat</strong> in the suite directory (one JSON
+per scenario; the file-name prefix encodes category and difficulty, e.g.
+<code>cqa-sh-…</code>, <code>dgn-lg-…</code>), the frozen question data lives under <code>fixtures/</code>
+(one subdirectory per category), and the dataset's catalog is
+<code>meta/manifest.json</code>. <code>tests/test_eval_suite.py</code> mechanically pins this
+shape (12 checks: manifest↔file alignment, grid fullness, difficulty→
+<code>max_turns</code> mapping, answer-anchor leak guard, Chinese prompts, assertion
+mirroring).</p>
+<p><strong>Layout constraint — keep the manifest inside <code>meta/</code>.</strong> Both directory
+loaders glob <code>*.json</code> <strong>non-recursively</strong>, so the manifest is only safe in
+a subdirectory. <code>examples/evals/</code> is the hermetic track's built-in scenario
+directory (resolved by <code>builtin_eval_dir()</code> in
+<code>src/nexuscli/eval/loader.py</code>), so <code>eval list</code> / <code>eval run</code> load every
+top-level <code>*.json</code> as a hermetic scenario: a manifest at either top level
+gets loaded as a scenario and fails loudly (observed with <code>eval list</code> on a
+top-level manifest: <code>unknown scenario key(s) ['categories', 'language',
+'scenarios']</code> — <code>EvalSchemaError</code>, exit 1), and the suite directory itself
+goes through <code>load_real_eval_scenarios</code>, which would swallow a top-level
+manifest the same way. <code>suite/meta/</code>, like <code>suite/fixtures/</code>, is outside
+both globs.</p>
+<p>The manifest records one entry per scenario — the dataset's paper trail:</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>scenario name, 1:1 with the flat JSON file stems</td>
+</tr>
+<tr>
+<td><code>category</code></td>
+<td>one of the five categories, matching the file-name prefix</td>
+</tr>
+<tr>
+<td><code>difficulty</code></td>
+<td><code>short</code> / <code>medium</code> / <code>long</code>; also the <code>max_turns</code> budget (3 / 5 / 8)</td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td>one-sentence statement of what the scenario asks</td>
+</tr>
+<tr>
+<td><code>source_rationale</code></td>
+<td>why the scenario made the cut — the selection criteria kept on record</td>
+</tr>
+<tr>
+<td><code>anchor_type</code></td>
+<td>what the expected answer is anchored in: <code>fixture</code> (frozen data file), <code>repo-stable</code> (a fact read-verified in this repository) or <code>judge</code> (open-ended, rubric-scored)</td>
+</tr>
+<tr>
+<td><code>assertions</code></td>
+<td>the scenario's assertion summary (<code>forbidden</code>, <code>has_judge</code>, <code>max_turns</code>, <code>required_tools</code>, <code>final_contains</code>, <code>judge_threshold</code>), mirrored from the scenario file</td>
+</tr>
+<tr>
+<td><code>calibration</code></td>
+<td>backfilled after calibrated runs: <code>status</code>, <code>tokens</code>, <code>turns</code> (plus a <code>note</code> for observations deliberately kept)</td>
+</tr>
+</tbody>
+</table>
+<p>Run the whole suite as a directory target:</p>
+<pre><code class="language-bash">nexuscli eval run --real --file examples/evals/suite
+</code></pre>
+<p>Calibration convention: a <strong>FAIL is a normal component of the difficulty
+distribution</strong> — a suite designed to probe difficulty must keep the misses
+that are genuinely hard. Triage therefore only separates two cases: a
+<strong>scenario defect</strong> (wrong anchor, or an answer that cannot be derived from
+the declared anchor — fix the scenario and recalibrate) versus <strong>genuine
+difficulty</strong> (keep the scenario as designed and record the observation via
+<code>calibration.note</code>).</p>
+<h3 id="stability-baseline---repeat-k"><a class="toclink" href="#stability-baseline---repeat-k">Stability baseline (<code>--repeat k</code>)</a></h3>
+<p>The suite's stability baseline is one command:</p>
+<pre><code class="language-bash">nexuscli eval run --real --file examples/evals/suite --repeat 3
+</code></pre>
+<p><code>--repeat k</code> reruns every scenario k times serially, and the pass^k verdict
+credits a scenario only when <strong>all</strong> k runs passed (see
+<a href="#passk-real-cost-and-the-report">pass^k, real cost, and the report</a>) — the
+aggregation exists precisely because single shots swing. Measured on the real
+gateway (3 × 30 = 90 runs): single-shot passes of the same suite have landed
+anywhere in <strong>19–24 / 30</strong> across three samples (calibration 24/30, ablation
+agent arm 19/30), while pass^3 stabilizes at <strong>20/30</strong> (<code>all_pass_rate</code>
+0.6667) — compare nightly runs against the 20, not against any single-shot
+figure.</p>
+<p>Per-scenario outcomes fall into three classes, and the suite's
+<code>meta/manifest.json</code> records each scenario's outcome in its <code>stability</code>
+field:</p>
+<ul>
+<li><strong>rock-pass (20 scenarios, 3/3)</strong> — passes every repeat; deterministic
+  under sampling.</li>
+<li><strong>rock-fail (5 scenarios, 0/3)</strong> — <code>cqa-lg-memory-recall-signal-chain</code>,
+  <code>cqa-lg-load-skill-layered-chain</code>, <code>rfa-md-01-todo-census</code>,
+  <code>ext-lg-inventory-outdoor-threewh</code>,
+  <code>ext-lg-inventory-kitchen-available</code>. All five are <strong>guard-compliance
+  signals, not quality regressions</strong>: the model attempts a <code>bash</code> call, the
+  track's read-only guard denies it, and the answer cannot be produced
+  without the blocked surface — the deny chain working as designed is what
+  these scenarios observe.</li>
+<li><strong>sway (5 scenarios, 1–2/3)</strong> — <code>cqa-md-vision-capability-tristate</code>
+  (1/3), <code>rfa-sh-02-license</code> (1/3), <code>skc-sh-02-rule-demo-conflict</code> (2/3),
+  <code>skc-lg-01-incident-dispatch</code> (2/3), <code>skc-lg-02-freeze-abort</code> (2/3).
+  These five are what a nightly run should watch first: a rock decaying
+  into sway, or a sway scenario dropping to 0/3, is the earliest stability
+  signal.</li>
+</ul>
+<p>One known noise source is by design: an unparsable or empty judge reply
+scores 0.0 <strong>fail-closed</strong> (see <a href="#llm-as-judge">LLM-as-judge</a>) — in the
+baseline measurement <code>skc-sh-02-rule-demo-conflict</code>'s third run failed
+exactly this way (the judge returned an empty string on a gateway hiccup),
+so that FAIL is the judging semantics working, not an agent regression.</p>
+<p>Cost: <code>--repeat 3</code> bills roughly <strong>3× a full-suite run</strong> — on the order of
+<strong>2M tokens</strong> per measurement (judge calls included).</p>
 <h2 id="scope-and-honest-boundaries"><a class="toclink" href="#scope-and-honest-boundaries">Scope and honest boundaries</a></h2>
-<p>Scripted evals cover <strong>orchestration and tool-chain regression</strong>: the react
-loop, tool sequencing, permission gating, convergence within a turn budget,
-and the shape of the final answer. They do <strong>not</strong> measure real LLM quality —
-the "model" is a fixed script, so prompt sensitivity, reasoning quality,
-hallucination behavior, and cost/latency are all out of scope. Use this
-harness to guard the wiring you control; evaluate real model behavior
-separately.</p><div class="pager"><a href="cron.html" class="prev"><span class="dir">← 上一篇</span><span class="name">⏰ 定时任务（cron）</span></a><a href="spec-skill.html" class="next"><span class="dir">下一篇 →</span><span class="name">📐 Spec 任务包工作流（spec 技能详解）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/eval.md" target="_blank" rel="noopener">docs/eval.md</a> 构建生成 · 源文件与站点内容同步</p>
+<p>The two tracks split the question "how is the agent doing?" by what can be
+deterministic.</p>
+<p><strong>Hermetic track — guard the wiring you control.</strong> Scripted evals cover three
+kinds of wiring regression: <strong>orchestration and tool-chain behavior</strong> (the
+react loop, tool sequencing, permission gating, convergence within a turn
+budget, the shape of the final answer), <strong>user-adversarial behavior</strong> (a
+scripted user keeps a conversation going — e.g. insisting on a refund —
+while the assertions watch every round for policy compliance), and
+<strong>memory-recall quality</strong> (multi-signal ranking over seeded rows, the
+standing regression gate for the recall chain). The "model" is a fixed
+script, so this track never measures prompt sensitivity, reasoning quality,
+hallucination behavior or latency — and its <code>turns</code> / <code>total_tool_calls</code>
+cost metrics are deterministic step counts of the wiring, not model cost.
+It stays the CI gate.</p>
+<p><strong>Real-model track — look at quality, stability and cost.</strong> The <code>--real</code>
+track runs the configured provider/model on the real builtin tools —
+read-only by default, with the one per-scenario <code>sandbox_write</code> opt-in
+opening a confined write sandbox and its quality gate — and reports what a
+script cannot stand in for: real token cost with cache/reasoning splits,
+pass^k stability across repeats, and open-ended answer quality via the
+rubric-scored judge. It is nightly/manual evidence, not a gate: real
+billing and provider variance make a hard exit-code gate wrong here, and
+the report is meant to be read, not diffed.</p>
+<p>Still deliberately out of scope for both tracks: latency measurement, judge
+inter-model consistency (one rubric + one threshold pins one judge's
+behavior; agreement between different judge models is not asserted),
+per-round assertions (trajectory assertions see one cumulative run, memory
+assertions one final ranking), an assertion DSL or expression language,
+tier weights, and cost budget circuit-breakers (hermetic cost only warns;
+real cost is reported, never budgeted). The real track additionally does no
+regression diffing (each report stands alone), runs repeats serially rather
+than concurrently, and does not retry failed runs.</p>
+<h3 id="round-boundaries"><a class="toclink" href="#round-boundaries">Round boundaries</a></h3>
+<p>What each round added — the first two rounds all hermetic (scripted fake
+LLM or seeded temp-DB memory, stub tools, no network, no real tokens); the
+third is the deliberate exception:</p>
+<ul>
+<li><strong>eval-harness-p1</strong> — three trajectory assertions, <code>required_tools</code> /
+  <code>max_tool_calls</code> / <code>max_total_tool_calls</code>, plus the built-in loop-guard
+  scenario <code>04_repeat_call_loop_guard.json</code>; the optional <code>difficulty</code> tier
+  (<code>short</code> / <code>medium</code> / <code>long</code>) with the per-tier <code>difficulty</code> summary block
+  and CLI line; the deterministic cost metrics <code>turns</code> and
+  <code>total_tool_calls</code> on every entry, diffed against the previous report into
+  <code>cost.change</code> / <code>cost.warnings</code> and the three <code>cost_*</code> summary counts.</li>
+<li><strong>add-eval-scenario-types</strong> — the multi-round user simulation (<code>user_turns</code></li>
+<li><code>max_rounds</code>: a scripted user continues the same agent session; the
+  assertions judge the cumulative run) with the built-in
+  <code>05_refund_policy_multiturn.json</code> (refund policy: look the order up first,
+  never call the direct refund tool) and <code>06_dinner_booking_clarify.json</code>
+  (clarification) scenarios; and the memory-recall track (<code>memory_eval</code>:
+  seeded temp-DB recall with target-in-top-K plus no-distractor-ahead
+  assertions) with the built-in <code>07_memory_recall_entity_noise.json</code> (entity
+  anchor against same-word noise) and <code>08_memory_recall_temporal_future.json</code>
+  (a future plan outranking same-topic past events) scenarios.</li>
+<li><strong>add-real-model-eval-track</strong> — the real-model track (<code>eval run --real</code>
+  / <code>--repeat</code>): its own minimal scenario schema (hermetic-only keys
+  rejected as track conflicts, file named in every error), the curated
+  read-only builtin subset with computed deny rules + fail-closed approval
+  (<code>-p</code> semantics) + pinned audit, real usage/cost collection from the
+  stream (judge calls included), the LLM-as-judge (same client factory,
+  per-scenario <code>judge.model</code> override, fail-closed <code>SCORE:</code> parsing,
+  injectable fake judge), pass^k plus per-scenario cost aggregation in the
+  independent <code>last-real-report.json</code>, and the built-in real scenarios
+  <code>01_readonly_converge.json</code> / <code>02_repo_question_answer.json</code>.</li>
+</ul>
+<p>What the harness still deliberately does <strong>not</strong> do:</p>
+<ul>
+<li><strong>no real LLM on the hermetic track</strong> — every hermetic scenario is
+  scripted or seeded; the hermetic track still never calls a real LLM, and
+  its baseline (<code>last-report.json</code>) is never touched by a <code>--real</code> run.
+  Real-model evaluation lives on the explicit <code>--real</code> track above, which
+  is nightly/manual and never a CI gate;</li>
+<li><strong>no license change</strong> — the harness ships under the repository's existing
+  license, unchanged.</li>
+</ul>
+<p>Also left out on purpose: an assertion DSL or expression language, assertions
+over tool <em>arguments</em> or over tool <em>inputs</em> on the memory track, user-persona
+modeling (the user script is plain data, not a policy), per-round assertions
+(the trajectory assertions see one cumulative run, the memory assertions one
+final ranking), tier weights, and cost budget thresholds (cost only warns,
+it never judges). The runner's main loop and the <code>last-report.json</code> file name
+are unchanged, and a previous report without the newer fields (<code>rounds</code>)
+still works as a baseline.</p><div class="pager"><a href="cron.html" class="prev"><span class="dir">← 上一篇</span><span class="name">⏰ 定时任务（cron）</span></a><a href="spec-skill.html" class="next"><span class="dir">下一篇 →</span><span class="name">📐 Spec 任务包工作流（spec 技能详解）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/eval.md" target="_blank" rel="noopener">docs/eval.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>

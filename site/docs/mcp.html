@@ -80,15 +80,19 @@
 </code></pre>
 <p>把 NexusCLI 自身作为 MCP server 暴露：</p>
 <pre><code class="language-bash">uv run nexuscli mcp serve --transport stdio
-uv run nexuscli mcp serve --transport http --port 3000
+NEXUSCLI_MCP_API_KEY=&lt;your-key&gt; uv run nexuscli mcp serve --transport http --port 3000
 </code></pre>
-<p>HTTP smoke：</p>
+<p>HTTP 传输要求配置 <code>NEXUSCLI_MCP_API_KEY</code>：未配置时服务器拒绝启动，请求缺 key 或
+错 key 一律 401（<code>Authorization: Bearer &lt;key&gt;</code> 或 <code>x-api-key: &lt;key&gt;</code> 头）。stdio
+传输不经网络、无此要求。</p>
+<p>HTTP smoke（带 key）：</p>
 <pre><code class="language-bash">curl -sS -X POST http://127.0.0.1:3000 \
   -H 'content-type: application/json' \
+  -H 'authorization: Bearer &lt;your-key&gt;' \
   -d '{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;tools/list&quot;,&quot;params&quot;:{}}'
 </code></pre>
 <blockquote>
-<p>⚠️ <strong>部署边界</strong>：作为 MCP server 运行时，NexusCLI 会在协议层强制关闭人工审批（<code>hitl_mode = "never"</code>），否则无法应答远端 <code>tools/call</code> 请求。这意味着接入该 server 的任何客户端都获得了<strong>无需审批的完整工具能力（包括执行命令、读写文件）</strong>。只把 server 暴露给可信客户端；HTTP 传输默认只绑定 localhost，不要手动开放到公网。 本项目按 AGPL-3.0-only 授权：把 MCP server（或其修改版）作为网络服务提供时，依 AGPLv3 §13 须向交互用户提供对应源码（自托管随仓库分发即满足）。</p>
+<p>⚠️ <strong>部署边界</strong>：作为 MCP server 运行时，NexusCLI 会在协议层强制关闭人工审批（<code>hitl_mode = "never"</code>），否则无法应答远端 <code>tools/call</code> 请求。这意味着接入该 server 的任何客户端都获得了<strong>无需审批的完整工具能力（包括执行命令、读写文件）</strong>。<code>tools/call</code> 走与其他入口相同的 ToolExecutor 门序（审计日志、hooks、permission 规则、写域守卫均生效），且 HTTP 传输必须配置 <code>NEXUSCLI_MCP_API_KEY</code> 凭证门（缺/错 key 一律 401）。只把 server 与 key 暴露给可信客户端；HTTP 传输默认只绑定 localhost，不要手动开放到公网。 本项目按 AGPL-3.0-only 授权：把 MCP server（或其修改版）作为网络服务提供时，依 AGPLv3 §13 须向交互用户提供对应源码（自托管随仓库分发即满足）。</p>
 </blockquote>
 <p>Chrome DevTools MCP 会把浏览器页面和 DevTools 状态暴露给 Agent。不要随意把包含个人账号、敏感数据或生产后台的 Chrome 会话授权给 Agent。</p>
 <h2 id="工具级过滤allowed_tools--blocked_tools"><a class="toclink" href="#工具级过滤allowed_tools--blocked_tools">工具级过滤（allowed_tools / blocked_tools）</a></h2>
