@@ -213,7 +213,7 @@
   - depends-on: task_0007
   - boundary: `site/build.py`、`README.en.md`、`docs/en/quickstart.md`（可再加 1–2 篇）、`tests/test_docs_contract.py`。
   - 行为：`site/build.py` 生成 `search-index.json`（标题/路径/正文摘要），站点加搜索框与结果列表；英文入口 `README.en.md` 链接中文 README 与英文 quickstart，不要求全文翻译；docs contract 测试断言索引文件存在、搜索 UI 引用、英文入口链接可达。
-  - verify: `uv run python site/build.py && uv run pytest -q tests/test_docs_contract.py`
+  - verify: `uv run --with markdown,pygments python site/build.py && uv run pytest -q tests/test_docs_contract.py`
 
 ---
 
