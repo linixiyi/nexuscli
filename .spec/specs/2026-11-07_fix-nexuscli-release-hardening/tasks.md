@@ -215,6 +215,46 @@
   - 行为：`site/build.py` 生成 `search-index.json`（标题/路径/正文摘要），站点加搜索框与结果列表；英文入口 `README.en.md` 链接中文 README 与英文 quickstart，不要求全文翻译；docs contract 测试断言索引文件存在、搜索 UI 引用、英文入口链接可达。
   - verify: `uv run --with markdown,pygments python site/build.py && uv run pytest -q tests/test_docs_contract.py`
 
+
+## 阶段 D：真实运行反馈与体验优化
+
+- [ ] 0034 修复 `--mode plan` 假完成
+  - depends-on: task_0012, task_0013
+  - boundary: `src/nexuscli/agent/plan_execute.py`、`src/nexuscli/agent/query.py`、`src/nexuscli/entrypoints/cli.py`、新增 `tests/test_plan_readonly.py`。
+  - 行为：当 `config.policy.plan_mode` 为真时，planner 不得把写文件/改文件/跑会写盘命令的任务排进可执行计划；若 worker 仍被 plan 只读闸拒绝，任务状态必须是 `blocked`（带拒绝原因），不得标 `COMPLETED`；最终摘要不得声称成功，进程退出码非 0。`--yes` 只影响审批，不绕过 plan 只读闸。测试用 fake query/worker 返回被拒结果，断言状态、摘要、退出码；再跑现有 plan 测试防回归。
+  - verify: `uv run pytest -q tests/test_plan_readonly.py tests/test_plan.py`
+
+- [ ] 0035 workbench dist 从仓库/包根解析
+  - depends-on: task_0004
+  - boundary: `src/nexuscli/runtime/api.py`、`src/nexuscli/entrypoints/cli.py`、新增 `tests/test_workbench_dist.py`、`tests/test_runtime_static.py`。
+  - 行为：`_workbench_dist_root()` 按 env `NEXUSCLI_WORKBENCH_DIST` → 仓库根 `frontend/dist` → 包内 `nexuscli/frontend/dist` → 旧 `cwd/frontend/dist` 顺序解析；每步检查 `index.html` 是否存在。空态页列出已尝试路径与修复指引，不再只说“未构建”。`--cwd` 只决定任务目录，不决定 dist 根。测试用临时目录与 monkeypatch 覆盖四种顺序、缺失 index、空态文案。
+  - verify: `uv run pytest -q tests/test_workbench_dist.py tests/test_runtime_static.py`
+
+- [ ] 0036 headless 被拦截时可机读
+  - depends-on: task_0002
+  - boundary: `src/nexuscli/entrypoints/cli.py`、`src/nexuscli/agent/agent.py`、`src/nexuscli/agent/results.py`、新增 `tests/test_headless_status.py`、`docs/permissions.md`。
+  - 行为：`-p --json` 增加 `status: "ok" | "blocked" | "failed"` 与可选 `blocked_reason`；审批拒绝/plan 只读拦截记为 `blocked`，异常记为 `failed`。默认退出码保持 0 兼容；新增 `--fail-on-blocked`，在 blocked/failed 时 exit 2。非 JSON 模式在 stderr 打印一行状态。测试用 fake agent 覆盖 ok/blocked/failed、默认/开关退出码、JSON 字段。
+  - verify: `uv run pytest -q tests/test_headless_status.py`
+
+- [ ] 0037 未知模型价格显式 unknown
+  - depends-on: task_0001
+  - boundary: `src/nexuscli/llm/pricing.py`、`src/nexuscli/agent/agent.py`、`src/nexuscli/entrypoints/cli.py`、`docs/config.md`、新增 `tests/test_cost_unknown.py`。
+  - 行为：模型不在内置价格表且用户未配置 `llm.prices` 时，`--json` 的 `cost` 为 `null`，并给 `cost_note: "unknown model price; configure llm.prices"`；`session_usage.cost_usd`/`cost_cny` 为 `null`，不再伪造 0.0；已知模型行为不变。文档给出 `llm.prices` 配置示例。测试覆盖未知/已知/用户配置三种情况。
+  - verify: `uv run pytest -q tests/test_cost_unknown.py`
+
+- [ ] 0038 固定 prompt/tool 开销可诊断
+  - depends-on: task_0001
+  - boundary: `src/nexuscli/agent/agent.py`、`src/nexuscli/tools/registry.py`、`src/nexuscli/config.py`、`src/nexuscli/entrypoints/cli.py`、`docs/config.md`、新增 `tests/test_prompt_budget.py`。
+  - 行为：Agent 在每次请求前记录 `system_chars`、`tools_chars`、`history_chars`、`tool_count`，`--json` 的 `usage.prompt_breakdown` 输出这些字段与 `estimated_tokens`（ceil(chars/4)）；`doctor --token-budget` 打印当前配置的基线。新增 `agent.prompt_profile: "full" | "lean"`（默认 full），lean 只保留核心工具 schema（read_file/write_file/edit_file/bash/list_dir/grep/glob/update_plan），并在 breakdown 中反映减少量；不改变默认行为。测试用 fake LLM 断言字段、总数、lean 模式 `tool_count` 与 `tools_chars` 下降。
+  - verify: `uv run pytest -q tests/test_prompt_budget.py`
+
+- [ ] 0039 明确 `--mode plan` 的只读语义
+  - depends-on: task_0034, task_0007
+  - boundary: `src/nexuscli/entrypoints/cli.py`、`README.md`、`docs/plan-execute.md`、`docs/permissions.md`、`tests/test_docs_contract.py`。
+  - 行为：CLI help 写明 `--mode plan` 是只读规划、不会执行写入、`--yes` 在该模式无效；检测到 `--mode plan --yes` 时打印一条 warning。README 与两份 docs 区分三种机制：`--mode plan`（只读）、`/plan`（交互式 plan-execute）、Shift+Tab（REPL 只读态）。docs contract 测试断言关键词与链接存在。
+  - verify: `uv run pytest -q tests/test_docs_contract.py`
+
+
 ---
 
 **当前进度**：由脚本计算，无需手动维护

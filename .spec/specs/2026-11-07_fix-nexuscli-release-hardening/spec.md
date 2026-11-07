@@ -9,7 +9,7 @@
 - **核心价值**：每个改动都有明确边界、依赖顺序和机器可执行的验收命令；失败时能定位到单个任务，而不是“整包重来”。
 - **Literal ask**: 「把这些要改的都写成包，我要在 zcode 里面用其他 ai来修。」（m00459）；「不要强调时间什么的，比如第一周第二周什么的」（m00534）。
 - **Stated purpose**: 把调研结论转成可执行任务包，交给 zcode 中的其他 AI 修复。
-- **Inferred outcome**: zcode 代理按阶段 A → B → C 执行后，NexusCLI 的 CI 恢复绿色，三个 P0 被关闭，wheel/sdist 可发布，执行路径与质量门禁统一，平台能力有可选实现；confidence: high; evidence: m00459 的范围列举 + `docs/research/2026-11-07_nexuscli-deep-research.md` 的 P0/P1/P2 清单。
+- **Inferred outcome**: zcode 代理按阶段 A → B → C → D 执行后，NexusCLI 的 CI 恢复绿色，三个 P0 被关闭，wheel/sdist 可发布，执行路径与质量门禁统一，平台能力有可选实现；confidence: high; evidence: m00459 的范围列举 + `docs/research/2026-11-07_nexuscli-deep-research.md` 的 P0/P1/P2 清单。
 - **Constraints and exclusions**: 一个 spec 包、一个分支；不写日历时间；不修改与本包无关的源码；每个任务必须有 boundary 与 verify；不能把“未执行的发布/截图/仓库设置”写成已完成；真实模型评测、PyPI 凭据、GitHub 管理员设置由 owner 手动完成。
 - **Trade-off preference**: maintainability + security，其次 delivery speed；不为赶进度合并任务或跳过验证。
 
@@ -29,6 +29,13 @@
 - `runtime/api.py:1518-1522` 的 `_workbench_dist_root()` 只认 `NEXUSCLI_WORKBENCH_DIST` 或 `cwd/frontend/dist`，不认包内路径；因此只把 dist 塞进 wheel 仍会在安装后显示空态。
 - README 384 行 / 28KB，只有 badges 与 `docs/architecture.png`，没有 demo GIF；`README.md:303` 留有 `TODO(截图)`；docs 21 篇，site 无搜索；无 CONTRIBUTING/SECURITY/issue 模板。
 - 现有相关测试：`tests/test_slash_commands.py`、`tests/test_mcp.py`、`tests/test_mcp_filter.py`、`tests/test_agent_turns.py`、`tests/test_plan.py`、`tests/test_multi_agent.py`、`tests/test_plan_checkpoint.py`、`tests/test_permissions.py`、`tests/test_mcp_server_protocol.py`、`tests/test_runtime_approvals.py`、`tests/test_runtime_sse.py`、`tests/test_runtime_static.py`、`frontend/e2e/workbench.spec.ts`。
+- 真实运行（2026-11-08，用户级 `~/.nexuscli/config.json`：`openai-compatible` / `cbcn/glm-5.3-flash` / `http://localhost:20128/v1`，key 已配置但未写入仓库）：`-p "2+2"` 返回正确，单轮 5,415 input / 12 output tokens，`--json` 的 `cost` 为 `{}`，`session_usage` 的 `cost_usd`/`cost_cny` 为 0.0（该模型不在内置价格表）。
+- 真实运行：`-p` + `--yes` 在临时仓库把 `calc.py` 的 `a - b` 改成 `a + b`，`pytest` 1 passed；ReAct 路径可正常读写。
+- 真实运行：`--mode team --worker-mode react --yes` 在临时仓库生成 `mathx.py` 与 `test_mathx.py`，3 个 step 全部 COMPLETED，`pytest` 11 passed；team 路径可正常读写。
+- 真实运行：`--mode plan --yes` 在临时仓库规划出 4 个写文件/跑测试任务，3 个并行批次；所有 worker 都返回「当前处于 plan mode（只读模式），无法写文件」，最终摘要仍把 4 个任务标为 COMPLETED，目录里没有 `hello.py`/`test_hello.py`，进程 exit 0。根因线索：`src/nexuscli/entrypoints/cli.py:242-248` 在 `--mode plan` 时把 `config.policy.plan_mode` 置为 True，`src/nexuscli/tools/executor.py:171` 的 plan 只读闸会拒绝写工具；plan worker 的拒绝文本没有被状态机识别为 blocked。
+- 真实运行：`serve --workbench --cwd /tmp/nexuscli-realrun/task3` 返回 200，但页面是「NexusCLI 工作台 UI 未构建」空态；同一命令 `--cwd` 指向仓库根目录时能返回带 `/assets/index-*.js` 的构建产物。根因线索：`src/nexuscli/runtime/api.py:1518-1522` 只从 `self.cwd/frontend/dist` 找 dist，`--cwd` 是任务工作目录，不等于仓库/包根。
+- 真实运行：`-p` 无 `--yes` 请求写文件时，`write_file` 与 `bash` 都被 fail-closed 拒绝，但进程 exit 0；`--json` 只有 `text`/`usage`，没有 `status`/`blocked` 字段，自动化无法区分「完成」与「被审批拦截」。
+- 真实运行：交互式 TUI 可启动，footer 显示 `1 AGENTS.md file · 0 MCP servers · 43 skills · 27 tools · cbcn/glm-5.3-flash · 0% · ~/nexuscli · Default`；`/quit` 正常退出，无崩溃。
 
 ### 2.2 关键假设
 
@@ -41,10 +48,13 @@
 - A7 | Google Gemini 与本地 Ollama/llama.cpp 的接口可按 OpenAI-compatible 或原生 HTTP 测试 | external | 当前 provider 无 Google/Ollama 预设 | UNVERIFIED | if false: provider 任务保留适配器与 fake server 测试，真实联调转 manual。
 - A8 | 把 MCP 工具统一改为不可信只读是可接受的安全取舍 | product | P0-2 的 readOnlyHint 可被 server 谎报 | UNVERIFIED | if false: 增加显式本地 `trusted_readonly` 配置，但默认仍不可信。
 - A9 | 修完 lint 后，CI 其余 job（mypy/pytest/frontend）可通过 | system | 本地 pytest 通过；mypy 未在最新 HEAD 复跑；frontend job 未跑 e2e | UNVERIFIED | if false: 在对应任务中追加修复，不把 lint 绿当成 CI 全绿。
+- A10 | `--mode plan` 的只读闸是有意设计；真实运行中的「全部 COMPLETED 但什么都没写」是状态机缺陷，不是 plan 模式本意 | product | `src/nexuscli/entrypoints/cli.py:242-248` 注释明确把 `--mode plan` 与 REPL 只读态对齐；真实运行 4 个任务全部空转却标 COMPLETED | CONFIRMED | if false: task_0034 改为移除 plan gate，而不是把空转标 blocked。
+- A11 | workbench 的 dist 应从仓库/包根解析，不应依赖 `--cwd`（任务工作目录） | product | 真实运行 `--cwd /tmp/...` 空态、`--cwd` 仓库根正常；`runtime/api.py:1518-1522` 只查 `self.cwd/frontend/dist` | CONFIRMED | if false: task_0035 只改空态文案，不改变解析顺序。
+- A12 | 未知模型的价格应显示 `unknown`/`null` 并给出配置指引，不应显示 0.0 或空对象 | product | 真实运行 `cost` 为 `{}`、`session_usage` 为 0.0；`llm/pricing.py` 只有内置模型价格表 | CONFIRMED | if false: task_0037 只加文档，不改 JSON 契约。
 
 ### 2.3 待确认问题
 
-- [x] 采用一个包还是三个包？→ 结论：一个包，内部按阶段 A/B/C 分节；三段共享 CI、打包、agent loop 和 workbench 文件，拆包会互相抢分支与写域。
+- [x] 采用一个包还是三个包？→ 结论：一个包，内部按阶段 A/B/C/D 分节；四段共享 CI、打包、agent loop 和 workbench 文件，拆包会互相抢分支与写域。
 - [x] 包内是否使用日历时间？→ 结论：不使用；只用阶段和 depends-on 表达顺序。
 - [x] PyPI trusted publisher 由谁配置、是否已有 `pypi` environment？→ 结论：由 owner 配置 `pypi` environment 与 trusted publisher；未配置前 task_0006 保持 manual，不由 AI 代填。
 - [x] Linux 沙箱默认后端选 bubblewrap 还是 Landlock？→ 结论：探测顺序 bubblewrap → Landlock；两者都不可用时返回 typed `OperationUnsupported`，不静默退回 none。
@@ -53,7 +63,10 @@
 
 ### 2.4 可选解释与取舍
 
-- 当前选择：一个包、三阶段、33 个任务；每个任务只改一个可验证边界。→ 理由：zcode 执行者需要低歧义、可中断、可回滚的粒度；一个包避免跨分支合并冲突。
+- 当前选择：一个包、四阶段、39 个任务；每个任务只改一个可验证边界。→ 理由：zcode 执行者需要低歧义、可中断、可回滚的粒度；一个包避免跨分支合并冲突；阶段 D 来自真实运行反馈，追加在 A/B/C 之后，不改变原任务编号。
+- 当前选择：headless 被审批拦截时保持默认 exit 0，新增 `--fail-on-blocked` 与 JSON `status`，而不是直接改默认退出码。→ 理由：既有脚本可能把 exit 0 当作「对话完成」；先提供可机读状态与显式开关，避免破坏兼容。
+- 当前选择：未知模型价格返回 `null` + `cost_note`，不再伪造 0.0。→ 理由：0.0 会被成本报表当成真实零成本；未知应显式未知，并提示配置 `llm.prices`。
+- 当前选择：`--mode plan` 保持只读，但 planner 不得把写任务排进计划；若 worker 仍被拦截，任务状态必须是 `blocked`，最终摘要与退出码不得报成功。→ 理由：保留只读保证，同时消除「假完成」。
 - 当前选择：P0-1 的项目级注入默认要求审批，用户级注入可自动批准但仍走审计与环境清洗。→ 理由：项目目录来自被克隆的仓库，属于不可信输入；用户级命令是用户自己安装的，保留便利性。
 - 当前选择：MCP 工具不再信任 `readOnlyHint`，统一 `is_read_only=False`、`requires_approval=True`。→ 理由：annotation 由 server 自报，不能作为本地安全边界；牺牲 plan 模式下 MCP 只读工具的便利性，换取不可绕过。
 - 当前选择：wheel 内置 workbench dist，同时保留 `NEXUSCLI_WORKBENCH_DIST` 覆盖。→ 理由：`uv tool install` / `pip install` 后 workbench 必须开箱可用；外部覆盖仍用于开发。
@@ -77,6 +90,7 @@
 - 发布链：修 `site/build.py` 的 lint/format；关闭 P0-1/P0-2；wheel 内置 workbench、sdist 排除 `node_modules`/`.spec`；tag 触发 PyPI release workflow；版本升到 0.2.1；README 安装路径、社区文件、demo 资产；main 必需检查。
 - 执行路径：把 LoopGuard、provider 超限重试、F12 截断保护、`max_turns` 撞顶提示下沉到共享循环；修 plan history、team history 竞争、plan journal、deny/skip 审计、MCP server config、prefix 词边界、`-p` frontmatter；workbench 补 approve_run/approve_auto、SSE 审批、可配 timeout、Playwright e2e；coverage/mypy/pty/hermetic eval 门禁。
 - 平台能力：可选 OS 沙箱（抽象 + macOS seatbelt + Linux bubblewrap/Landlock）；会话树；结构化压缩与文件台账；插件包格式（用户级/命名空间/工具）；Google Gemini 原生 provider；Ollama/llama.cpp 本地 provider；文档站搜索与英文入口。
+- 真实运行反馈（阶段 D）：`--mode plan` 的空转任务不得标 COMPLETED；workbench dist 从仓库/包根解析而不是 `--cwd`；headless 被审批拦截时 `--json` 带 `status` 并支持 `--fail-on-blocked`；未知模型成本显示 `unknown`/`null` 而不是 0.0；固定 prompt/tool 开销可诊断；`--mode plan` 的帮助/文档明确「只读，不执行写入」。
 
 ### 3.2 扩展功能
 
@@ -97,17 +111,17 @@
 
 ## 4. 最小实现路径
 
-- 最简单可行方案：按阶段 A → B → C 顺序执行；A 先让 CI 变绿并关闭两个可直接利用的 P0，再修打包与发布；B 用共享循环和质量门禁锁住回归；C 在稳定基线上加可选平台能力。
+- 最简单可行方案：按阶段 A → B → C → D 顺序执行；A 先让 CI 变绿并关闭两个可直接利用的 P0，再修打包与发布；B 用共享循环和质量门禁锁住回归；C 在稳定基线上加可选平台能力。
 - 暂不引入：真实模型 eval、K8s 沙箱、远程插件市场、OAuth provider、Windows 沙箱。
 - 不做的抽象/配置化：不为单一实现者引入通用 sandbox 框架；不做 event-sourcing 重写；不做 provider 插件协议；不为每个新能力加一套独立配置系统。
 
 ### 4.1 方案阶梯
 
-- B0 | literal ask | 一个包、33 个任务、阶段 A/B/C 全做；每个任务独立 boundary + verify。适合 zcode 顺序执行，覆盖用户列出的全部范围。
+- B0 | literal ask | 一个包、39 个任务、阶段 A/B/C/D 全做；每个任务独立 boundary + verify。适合 zcode 顺序执行，覆盖用户列出的全部范围。
 - B1 | minimal change | 只做阶段 A + B 的发布/安全/质量门禁，C 的平台能力留到后续包。交付更快，但不满足用户“OS 沙箱/会话树/结构化压缩/插件/provider 深度”的范围。
-- B2 | recommended alternative | 一个包、阶段 A+B 先交付，C 作为同包后续阶段；发布不被平台能力阻塞。适合先拿发布/安全/质量门禁收益，但用户列出的平台范围会延后。
+- B2 | recommended alternative | 一个包、阶段 A+B 先交付，C+D 作为同包后续阶段；发布不被平台能力阻塞。适合先拿发布/安全/质量门禁收益，但用户列出的平台范围会延后。
 
-Recommendation: B0 because 用户明确要求把“要改的都写成包”，且 A/B/C 的依赖顺序强于并行收益。Flips if A2 is FALSIFIED（执行环境不能跑 uv/npm，机器 verify 不可用）或 owner 明确要求三个分支并行。
+Recommendation: B0 because 用户明确要求把“要改的都写成包”，且 A/B/C/D 的依赖顺序强于并行收益。Flips if A2 is FALSIFIED（执行环境不能跑 uv/npm，机器 verify 不可用）或 owner 明确要求三个分支并行。
 
 ## 5. 技术决策
 
@@ -176,6 +190,12 @@ Recommendation: B0 because 用户明确要求把“要改的都写成包”，�
 - [ ] Google Gemini 原生 provider 可按统一接口构建并通过 fake server 测试 -> verify: task_0031
 - [ ] Ollama/llama.cpp 本地 provider 可配置并走 OpenAI-compatible 适配 -> verify: task_0032
 - [ ] 文档站有搜索索引，README 有英文入口，示例可运行 -> verify: task_0033
+- [ ] `--mode plan` 不再把只读空转任务标为 COMPLETED；写任务被拦截时任务状态为 blocked，最终摘要与退出码不报成功 -> verify: task_0034
+- [ ] `serve --workbench --cwd <仓库外目录>` 仍能解析仓库/包内 `frontend/dist` 并返回构建产物；空态页给出解析过的路径与修复指引 -> verify: task_0035
+- [ ] headless 被审批拦截时 `--json` 含 `status: blocked` 与原因；加 `--fail-on-blocked` 后退出码为 2 -> verify: task_0036
+- [ ] 未知模型价格返回 `cost: null` + `cost_note`，不再用 0.0 冒充真实成本 -> verify: task_0037
+- [ ] 简单问答的固定 prompt/tool 开销可诊断；默认与 lean 模式的估算 token 有测试，lean 模式减少非核心工具 schema -> verify: task_0038
+- [ ] `--mode plan` 的 CLI help/README/docs 明确「只读、不执行写入」，`--yes` 在该模式无效并有提示 -> verify: task_0039
 
 ## 7. 风险与约束
 
