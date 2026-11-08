@@ -83,6 +83,14 @@ function ReportPanel({
           <span>执行模式</span>
         </div>
       </div>
+      {/* 门禁拒绝入报告（2026-11-08 评审残留修复 0002）：gate_denial 事件由
+          runtime 线程折叠白名单放行、state.ts 保留，这里展示被拒原因——否则
+          team run 被门禁拒绝时报告区与「已完成」徽标并列，拒绝痕迹不可见。 */}
+      {report.denialReason !== null && (
+        <p className="report-note" data-testid="gate-denial-note">
+          本次运行有 {report.denials} 次门禁拒绝：{report.denialReason}
+        </p>
+      )}
       <div className="report-actions">
         <button
           className="primary"

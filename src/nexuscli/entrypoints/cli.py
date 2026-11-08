@@ -1091,19 +1091,31 @@ async def _plan_result_from_events(events) -> tuple[QueryResult, bool, dict[str,
     )
 
 
-async def _team_result_from_events(events) -> tuple[QueryResult, str | None]:
-    """Fold a team-mode event stream into (QueryResult, gate_denial).
+async def _team_result_from_events(
+    events,
+) -> tuple[QueryResult, str | None, bool, dict[str, str]]:
+    """Fold a team-mode event stream into (result, gate_denial, plan_failed, blocked_tasks).
 
     Mirrors ``QueryEngine._complete_from_events`` (agent/query_engine.py is
-    outside this change's boundary) with one addition: the ``gate_denial``
-    event the orchestrator emits when a worker's tool call was refused by a
-    permission/approval gate. The worker's raw is_error tool_result events
-    never leave the SubAgent fold, so classifying them here the way react's
-    ``_ask_streaming`` tee does would see nothing; the orchestrator classifies
-    with the same :func:`gate_denial_reason` table and forwards the denial,
-    and this fold just picks it up so ``-p --mode team`` reports
-    ``status: "blocked"`` with the denial text instead of a silent success
-    (Task 0036).
+    outside this change's boundary) with two additions:
+
+    - the ``gate_denial`` event the orchestrator emits when a worker's tool
+      call was refused by a permission/approval gate. The worker's raw
+      is_error tool_result events never leave the SubAgent fold, so
+      classifying them here the way react's ``_ask_streaming`` tee does would
+      see nothing; the orchestrator classifies with the same
+      :func:`gate_denial_reason` table and forwards the denial (Task 0036);
+    - the ``plan_failed`` event the orchestrator forwards when a
+      ``--worker-mode plan`` worker's nested plan ended blocked or failed
+      (Task 0001). The nested plan's own plan_failed event is consumed
+      inside ``SubAgent._execute_plan``, so the orchestrator carries the
+      task-id -> rejection-reason map out and this fold picks it up so the
+      team run reports ``status: "blocked"`` with the rejection reasons
+      instead of a silent ``ok``. The flag stays separate from the map: a
+      nested plan that stalled without gate rejections forwards an empty map
+      and must still report blocked. Unlike plan mode's ``plan_failed``, the
+      team failure keeps the default exit code 0 (only ``--fail-on-blocked``
+      upgrades it) — same contract as the react gate denial.
     """
     text = ""
     tokens = 0
@@ -1111,6 +1123,8 @@ async def _team_result_from_events(events) -> tuple[QueryResult, str | None]:
     usage = Usage()
     cost = {}
     gate_denial: str | None = None
+    plan_failed = False
+    plan_blocked_tasks: dict[str, str] = {}
     async for event in events:
         event_type = event.get("type")
         if event_type == "text_delta":
@@ -1123,6 +1137,14 @@ async def _team_result_from_events(events) -> tuple[QueryResult, str | None]:
             print(f"[warning] {event.get('message')}", file=sys.stderr)
         elif event_type == "gate_denial":
             gate_denial = str(event.get("reason") or "") or None
+        elif event_type == "plan_failed":
+            # Task 0001: same shape the orchestrator forwards from the nested
+            # plan worker — the blocked_tasks map feeds blocked_reason below.
+            plan_failed = True
+            plan_blocked_tasks = {
+                str(task_id): str(reason)
+                for task_id, reason in (event.get("blocked_tasks") or {}).items()
+            }
         elif event_type == "done":
             tokens += int(event.get("total_tokens") or 0)
             turns += int(event.get("total_turns") or 0)
@@ -1131,6 +1153,8 @@ async def _team_result_from_events(events) -> tuple[QueryResult, str | None]:
     return (
         QueryResult(text=text, total_tokens=tokens, turns=turns, usage=usage, cost=cost),
         gate_denial,
+        plan_failed,
+        plan_blocked_tasks,
     )
 
 
@@ -1212,8 +1236,14 @@ async def _run_prompt(
     # a failure below; react runs through _ask_streaming's tee, and team folds
     # its own stream for the same reason (Task 0036): the orchestrator's
     # gate_denial event — a worker's approval/permission refusal — must reach
-    # the status decision below instead of passing as ok.
+    # the status decision below instead of passing as ok. Task 0001 adds the
+    # orchestrator's forwarded plan_failed event from a --worker-mode plan
+    # worker's nested plan to the same treatment.
     plan_failed = False
+    # Task 0001: the team fold's plan_failed stays separate from plan mode's
+    # — a blocked team plan worker reports status "blocked" but keeps the
+    # default exit code 0, so it must not reach the exit-1 branch below.
+    team_plan_failed = False
     blocked_tasks: dict[str, str] = {}
     gate_denial: str | None = None
     failure: Exception | None = None
@@ -1222,7 +1252,7 @@ async def _run_prompt(
         if mode == "plan":
             result, plan_failed, blocked_tasks = await _plan_result_from_events(engine.plan(prompt))
         elif mode == "team":
-            result, gate_denial = await _team_result_from_events(
+            result, gate_denial, team_plan_failed, blocked_tasks = await _team_result_from_events(
                 engine.team(prompt, worker_mode=worker_mode)
             )
         else:
@@ -1242,7 +1272,10 @@ async def _run_prompt(
     if failure is not None:
         status = "failed"
         blocked_reason: str | None = None
-    elif plan_failed or gate_denial is not None:
+    elif plan_failed or team_plan_failed or gate_denial is not None or blocked_tasks:
+        # blocked_tasks non-empty means a plan run the gate stopped (plan
+        # mode) or a team plan worker whose nested plan forwarded
+        # plan_failed (Task 0001); _plan_blocked_reason formats both.
         status = "blocked"
         blocked_reason = gate_denial or _plan_blocked_reason(blocked_tasks)
     else:

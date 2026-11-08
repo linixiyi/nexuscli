@@ -36,22 +36,30 @@ export type ThreadReport = {
   turns: number;
   tools: number;
   approvals: number;
+  /** 门禁拒绝次数（gate_denial 事件计数，2026-11-08 评审残留修复 0002）。 */
+  denials: number;
+  /** 最近一次门禁拒绝的原因（denials > 0 时非 null；展示用）。 */
+  denialReason: string | null;
 };
 
-/** 运行报告派生：最后完成的 turn 为「本轮结论」，工具/审批计数全量统计。 */
+/** 运行报告派生：最后完成的 turn 为「本轮结论」，工具/审批/门禁拒绝计数全量统计。 */
 export function deriveReport(events: WorkbenchEvent[]): ThreadReport | null {
   let report: ThreadReport | null = null;
   for (const event of events) {
     if (event.kind === "turn.started") {
-      report = report ?? { text: "", tokens: 0, mode: event.mode, turns: 0, tools: 0, approvals: 0 };
+      report = report ?? { text: "", tokens: 0, mode: event.mode, turns: 0, tools: 0, approvals: 0, denials: 0, denialReason: null };
       report.turns += 1;
       report.mode = event.mode;
     } else if (event.kind === "turn.completed") {
-      report = report ?? { text: "", tokens: 0, mode: "react", turns: 1, tools: 0, approvals: 0 };
+      report = report ?? { text: "", tokens: 0, mode: "react", turns: 1, tools: 0, approvals: 0, denials: 0, denialReason: null };
       report.text = event.text;
       report.tokens = event.totalTokens;
+    } else if (event.kind === "gate_denial") {
+      report = report ?? { text: "", tokens: 0, mode: "react", turns: 1, tools: 0, approvals: 0, denials: 0, denialReason: null };
+      report.denials += 1;
+      report.denialReason = event.reason;
     } else if (event.kind === "approval_resolved") {
-      report = report ?? { text: "", tokens: 0, mode: "react", turns: 1, tools: 0, approvals: 0 };
+      report = report ?? { text: "", tokens: 0, mode: "react", turns: 1, tools: 0, approvals: 0, denials: 0, denialReason: null };
       report.approvals += 1;
     }
   }

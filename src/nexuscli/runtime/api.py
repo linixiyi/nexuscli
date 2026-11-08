@@ -778,7 +778,12 @@ class RuntimeApiServer:
             if event_type == "text_delta":
                 text += str(event.get("text") or "")
                 self._append_event(thread_id, "message.delta", {"text": event.get("text") or ""})
-            elif event_type in {"tool_call", "tool_result", "error", "done"}:
+            # gate_denial 由 team orchestrator 在 done 前 yield（orchestrator.py
+            # _run 里唯一机器可见的 worker 门禁拒绝痕迹，cli.py 的
+            # _team_result_from_events 以同一事件名消费）——白名单放行进线程
+            # 事件流（_append_event 按既有规则盖 per-thread 单调 seq），workbench
+            # 据此在运行报告展示被拒原因。
+            elif event_type in {"tool_call", "tool_result", "gate_denial", "error", "done"}:
                 self._append_event(thread_id, event_type, _jsonable(event))
                 if event_type == "error":
                     raise event["error"]

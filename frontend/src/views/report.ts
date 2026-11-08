@@ -128,6 +128,8 @@ export function exportThreadReportMarkdown(
     "",
     `- 工具调用：${report.tools} 次${toolNames.length > 0 ? `（${toolNames.join("、")}）` : ""}`,
     `- 人工决定：${report.approvals} 次`,
+    // 门禁拒绝随报告导出（0002）：与 Inspector 报告面板的展示同源（deriveReport）。
+    `- 门禁拒绝：${report.denials} 次${report.denialReason !== null ? `（${report.denialReason}）` : ""}`,
     `- 累计 tokens：${report.tokens}`,
     "",
     "---",

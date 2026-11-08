@@ -179,6 +179,75 @@ def test_subagent_can_delegate_its_task_to_plan_execute(tmp_path, monkeypatch, i
     assert result.turns == 3
 
 
+def test_subagent_plan_worker_forwards_nested_plan_failed(tmp_path, monkeypatch, isolated_home):
+    """A nested plan_failed event rides the AgentMessage out of the fold (0001).
+
+    The nested PlanExecuteAgent's own plan_failed event is consumed inside
+    SubAgent._execute_plan, so the task-id -> rejection-reason map has to be
+    captured there — mirroring _execute_worker's gate_denial capture — for
+    the orchestrator to forward it onto the outer stream.
+    """
+    config = load_config(project_root=tmp_path)
+    registry = ToolRegistry()
+    worker = SubAgent(
+        name="worker-plan",
+        role=AgentRole.WORKER,
+        llm_client=FakeTeamClient(),
+        tool_registry=registry,
+        config=config,
+        cwd=str(tmp_path),
+    )
+
+    async def failed_plan_run(self, message):  # noqa: ARG001
+        yield {"type": "text_delta", "text": "计划未完成：1 个任务被 plan 只读闸拒绝。\n\n"}
+        yield {"type": "plan_failed", "plan_id": "plan_1", "blocked_tasks": {"task_1": "拒绝原因"}}
+        yield {
+            "type": "done",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "total_tokens": 15,
+            "total_turns": 3,
+        }
+
+    monkeypatch.setattr("nexuscli.agent.plan_execute.PlanExecuteAgent.run", failed_plan_run)
+
+    result = asyncio.run(worker.execute(AgentMessage.task("test", "complex task"), mode="plan"))
+
+    assert result.type == AgentMessageType.RESULT
+    assert result.plan_blocked == {"task_1": "拒绝原因"}
+
+
+def test_run_step_propagates_worker_plan_blocked(tmp_path, isolated_home):
+    """The orchestrator carries the plan worker's blocked map for run() to forward."""
+    orchestrator = _orchestrator(tmp_path, FakeTeamClient())
+    steps = [ExecutionStep("step_1", "implement", "ANALYSIS", [])]
+
+    class Worker:
+        async def execute(self, task, context, *, mode):  # noqa: ARG002
+            return AgentMessage.result(
+                "worker",
+                AgentRole.WORKER,
+                "nested plan did not complete",
+                plan_blocked={"task_1": "拒绝原因"},
+            )
+
+    class Reviewer:
+        async def review(self, original_task, execution_result):  # noqa: ARG002
+            _ = original_task, execution_result
+            return AgentMessage.result(
+                "reviewer",
+                AgentRole.REVIEWER,
+                '{"approved": true, "summary": "ok", "issues": []}',
+            )
+
+        def clear_history(self):
+            return None
+
+    asyncio.run(orchestrator._run_step(steps[0], steps, {}, Worker(), Reviewer()))
+
+    assert orchestrator.plan_blocked == {"task_1": "拒绝原因"}
+    assert steps[0].status == StepStatus.COMPLETED
+
+
 def test_subagent_plan_depth_is_bounded(tmp_path, isolated_home):
     worker = SubAgent(
         name="worker-plan",
