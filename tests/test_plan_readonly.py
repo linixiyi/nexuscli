@@ -205,6 +205,20 @@ def _plan_failed_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [event for event in events if event.get("type") == "plan_failed"]
 
 
+def test_plan_mode_directive_whitelists_readonly_tools_and_bans_command_tasks():
+    """The directive names the six whitelisted read-only tools and the banned
+    task kinds: bash/execute_command (even read-only-looking commands) and
+    pytest/npm/uv run/install/build/disk-writing tasks."""
+    for tool_name in ("read_file", "glob", "grep", "search_code", "vfs_ls", "vfs_read"):
+        assert tool_name in _PLAN_MODE_PLANNING_DIRECTIVE
+    assert "bash" in _PLAN_MODE_PLANNING_DIRECTIVE
+    assert "execute_command" in _PLAN_MODE_PLANNING_DIRECTIVE
+    for keyword in ("pytest", "npm", "uv run", "安装", "构建", "写盘"):
+        assert keyword in _PLAN_MODE_PLANNING_DIRECTIVE
+    # 反诱惑措辞：点名 wc -l 反例——数行数诉求必须改排 read_file 自行计数。
+    assert "wc -l" in _PLAN_MODE_PLANNING_DIRECTIVE
+
+
 def test_plan_mode_planner_receives_readonly_directive(tmp_path, isolated_home):
     """Clause 1: in plan mode the planner's user turn carries the directive."""
     client = _RecordingPlanClient()

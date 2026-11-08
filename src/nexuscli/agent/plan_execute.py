@@ -33,10 +33,17 @@ PLAN_MODE_REJECTION_SNIPPET = "is not allowed in plan mode"
 # work that still slips into a plan is stopped by the executor's read-only
 # gate and reported as blocked, never COMPLETED.
 _PLAN_MODE_PLANNING_DIRECTIVE = (
-    "注意：当前处于 plan 只读模式。执行计划只能包含只读任务"
-    "（读文件、分析、验证，以及静态只读的命令）；"
-    "不得安排写文件、改文件或会写盘的命令任务——"
-    "执行阶段这类操作会被只读闸拒绝，请把写入动作留给用户切回默认模式后执行。"
+    "注意：当前处于 plan 只读模式。计划任务只允许调用这六个只读工具："
+    "read_file、glob、grep、search_code、vfs_ls、vfs_read；"
+    "禁止安排 bash、execute_command 任务——即使命令看起来只读也不行；"
+    "禁止安排 pytest、npm、uv run、安装依赖、构建、写盘类任务。"
+    "执行计划只能包含读文件、检索、分析类任务——"
+    "执行阶段任何写入或命令操作都会被只读闸拒绝，"
+    "请把写入动作留给用户切回默认模式后执行。"
+    "统计、查询类诉求一律用只读工具实现，不得排成命令任务："
+    "统计行数或文件大小用 read_file 读后自行计数，列目录用 glob 或 vfs_ls，搜索文本用 grep；"
+    "例如「统计某文件总行数」= read_file 读取该文件后由你自己数，不得用 wc -l；"
+    "任何 bash/execute_command 调用都会被只读闸拒绝并导致任务 blocked。"
 )
 
 # Footer of the plan-mode failure summary: the read-only gate's own hint,

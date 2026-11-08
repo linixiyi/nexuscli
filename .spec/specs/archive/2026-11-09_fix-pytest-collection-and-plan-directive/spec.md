@@ -80,7 +80,9 @@ Recommendation: B0 because 两个前提均已复现确认且 boundary 清晰，�
 <!-- spec:correction-log -->
 ### 5.5 修正日志
 
-- none.
+| round | approach | result | new information |
+| --- | --- | --- | --- |
+| 1 | 主会话真实冒烟（本地网关 glm-5.3-flash，--mode plan --yes）显示首批仍有 bash 任务（「统计行数」诱惑 wc -l）被只读闸拦下；在 directive 追加反诱惑示例（统计/查询类诉求一律用只读工具，含 wc -l 反例），test_plan_readonly.py 补 `wc -l` 反例断言，scoped 50 passed | 二次冒烟：task_1 改用 read_file 自行计数完成（计划侧 bash 消失）；task_2 计划 glob 但 worker 执行中途被 __pycache__ 噪声诱导改调 bash，被只读闸拦下——status blocked、exit 1、无 COMPLETED | 新输出：worker 执行侧会在结果噪声（__pycache__ 淹没 glob 输出）诱惑下偏离计划改调 bash——worker 提示不在 directive boundary 内，挂账为后续包候选（worker plan-mode 提示加固 / glob 噪声过滤）；安全不变量（blocked、exit 非 0、不标 COMPLETED）两次冒烟均成立 |
 
 <!-- spec:deviation-log -->
 ### 5.6 偏离日志
@@ -89,8 +91,8 @@ Recommendation: B0 because 两个前提均已复现确认且 boundary 清晰，�
 
 ## 6. 成功标准与验证方式
 
-- [ ] `uv run pytest -q`、`uv run python -m pytest -q`、`uv run pytest -q tests/test_runtime_reads.py` 全部通过，未改 6 个测试文件的 import -> verify: task_0001
-- [ ] plan 指令含六工具白名单并明示禁止 bash/execute_command 与 pytest/npm/uv run/安装/构建/写盘；docs/plan-execute.md 与 README 同步；test_plan_readonly 断言通过 -> verify: task_0002
+- [x] `uv run pytest -q`、`uv run python -m pytest -q`、`uv run pytest -q tests/test_runtime_reads.py` 全部通过，未改 6 个测试文件的 import -> verify: task_0001
+- [x] plan 指令含六工具白名单并明示禁止 bash/execute_command 与 pytest/npm/uv run/安装/构建/写盘；docs/plan-execute.md 与 README 同步；test_plan_readonly 断言通过 -> verify: task_0002
 
 ## 7. 风险与约束
 

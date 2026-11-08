@@ -23,7 +23,7 @@
 
 | 机制 | 入口 | 语义 |
 |---|---|---|
-| 只读规划 | `nexuscli --mode plan -p "..."` | 单次模式跑 Plan-and-Execute：只读闸门全程开启，不会执行任何写入；`--yes` 在该模式无效（启动时打印 warning 并忽略），计划被只读闸门拦下按失败收场（exit 1），也没有 `--resume` 续跑入口 |
+| 只读规划 | `nexuscli --mode plan -p "..."` | 单次模式跑 Plan-and-Execute：只读闸门全程开启，不会执行任何写入；规划指令按白名单收紧——计划任务只允许 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具，禁止安排 bash/execute_command 任务（即使命令看似只读），也禁止安排 pytest、npm、uv run、安装依赖、构建、写盘类任务；`--yes` 在该模式无效（启动时打印 warning 并忽略），计划被只读闸门拦下按失败收场（exit 1），也没有 `--resume` 续跑入口 |
 | 交互式 Plan-and-Execute | REPL `/plan <task>`（`/plan --resume <plan_id>` 续跑） | 与 `--mode plan` 同一只读闸门口径，但在交互会话里流式执行，支持本文所述的图级 checkpoint、协作式中断与续跑 |
 | REPL 只读态 | 交互模式 `Shift+Tab` 切到 `plan (read-only)` | 会话权限模式：把整个 REPL 会话（含普通对话）置于只读闸门下，不产出计划 DAG；审阅方案后切回 Default 再落地执行 |
 
