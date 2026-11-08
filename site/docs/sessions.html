@@ -9,6 +9,33 @@
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/sessions.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
+  <style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>
   <script>
     (function () {
       try {
@@ -28,6 +55,11 @@
         <a href="../index.html#docs">文档</a>
         <a href="../tutorial.html">教程</a>
       </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
+      </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
       <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
@@ -40,6 +72,7 @@
 <ul>
 <li><a href="#快照">快照</a></li>
 <li><a href="#会话持久化">会话持久化</a></li>
+<li><a href="#会话树">会话树</a></li>
 <li><a href="#恢复的-usage-续算">恢复的 usage 续算</a></li>
 </ul>
 </div>
@@ -77,7 +110,21 @@ uv run nexuscli --resume &lt;id&gt;       # 按会话 id（或 id 前缀）恢�
 /resume 2                           # 按序号切换，后续对话继续追加到该会话
 /resume &lt;id-前缀&gt;
 /fork [title]                       # 分叉当前会话为新会话并切换过去（原会话不变）
+/tree [id]                          # 输出当前会话的父子/分支树（可传 id 锚定其他会话）
 </code></pre>
+<h2 id="会话树"><a class="toclink" href="#会话树">会话树</a></h2>
+<p>会话元信息行（JSONL 首行）带有可选的 <code>parent_id</code> / <code>branch</code> / <code>created_at</code> 字段：</p>
+<ul>
+<li><code>created_at</code>：会话创建时刻（Unix 秒）。</li>
+<li><code>parent_id</code>：本会话分叉自哪个父会话；<code>""</code> 或缺省表示根会话。旧会话没有该字段时照常可读，默认视为根；旧版只写了 <code>forked_from</code> 的分叉会话在树里仍回退挂到其来源会话之下。</li>
+<li><code>branch</code>：fork 时记录的分支名。<code>/fork</code> 缺省按父会话下已有的 <code>fork-N</code> 自动编号（<code>fork-1</code>、<code>fork-2</code>…），也可以显式指定。</li>
+</ul>
+<p><code>/tree</code> 以当前会话为锚点：向上补全父链到根，向下展开所有分支子树，当前节点带 <code>(current)</code> 标记，兄弟分支用 <code>├─</code> / <code>└─</code> 连接：</p>
+<pre><code class="language-text">* 20261108-101010-a1b2c3  fix the login bug
+  ├─ 20261108-101512-d4e5f6  (branch: fork-1)  my fork
+  └─ 20261108-103045-b7c8d9  (branch: fork-2)  another angle  (current)
+</code></pre>
+<p>树只展开与锚点会话连通的部分，无关会话不出现；未落盘的会话（只打开没对话）显示为带提示的单独根节点。</p>
 <p>单次模式也支持恢复：<code>uv run nexuscli -p "继续刚才的任务" -c</code> 会把历史会话注入 react 模式（plan/team 单次模式不支持注入历史）。</p>
 <h2 id="恢复的-usage-续算"><a class="toclink" href="#恢复的-usage-续算">恢复的 usage 续算</a></h2>
 <p>每个完成的普通回合都会把一条 <code>type: usage</code> 记录追加进会话 JSONL（model/provider、input/output/total/cache hit/miss、成本估算），恢复时把这些记录求和为历史基线，<code>/usage</code> 的 <code>historical_total</code> 即「基线 + 本进程累计」，两者之和等于该转录的 usage 台账。<code>/clear</code> 与 <code>/fork</code> 切换到新转录时会同步清零基线与本进程累计（fork 的转录只拷贝消息、不拷贝 usage 行，所以基线从零开始）；历史收缩重写转录时 usage 行会保留，不丢账。单次 <code>-p</code> 模式不写转录，其 <code>--json</code> 的 <code>session_usage</code> 是「恢复基线 + 本次运行」的提示性口径，不会持久化。</p><div class="pager"><a href="workbench.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🖥️ 工作台（Workbench）</span></a><a href="plan-execute.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧭 Plan-and-Execute 检查点与续跑</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/sessions.md" target="_blank" rel="noopener">docs/sessions.md</a> 构建生成 · 源文件与站点内容同步</p>
@@ -87,6 +134,113 @@ uv run nexuscli --resume &lt;id&gt;       # 按会话 id（或 id 前缀）恢�
   <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
 </footer><script src="../site.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "../";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {

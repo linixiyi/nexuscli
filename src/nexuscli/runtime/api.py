@@ -230,6 +230,7 @@ class RuntimeApiServer:
         port: int = 8080,
         workers: int = 2,
         workbench: bool = False,
+        approval_timeout_seconds: float | None = None,
     ):
         self.cwd = str(Path(cwd).resolve())
         self.config = config
@@ -237,6 +238,21 @@ class RuntimeApiServer:
         self.port = port
         self.workbench = workbench
         self.approval_bridge = ApprovalBridge()
+        # 0021 审批超时可配：显式参数优先，其次 NEXUSCLI_APPROVAL_TIMEOUT_SECONDS，
+        # 两者都缺省时保持 None（运行期动态读 approvals.APPROVAL_TIMEOUT_SECONDS
+        # 模块常量，见 _approval_timeout——既有测试经 monkeypatch 该常量注入短超时）。
+        if approval_timeout_seconds is None:
+            raw = os.environ.get("NEXUSCLI_APPROVAL_TIMEOUT_SECONDS", "").strip()
+            if raw:
+                approval_timeout_seconds = float(raw)
+        if approval_timeout_seconds is not None and approval_timeout_seconds <= 0:
+            raise ValueError("approval_timeout_seconds must be positive")
+        self.approval_timeout_seconds = approval_timeout_seconds
+        # 0021 run-scope 授权表（approve_run 的「本次 run 内放行」）：scope_id（线程/
+        # 任务）→ 本 run 内已放行的工具名。仅内存，随进程消亡；每次 run 开始
+        # （_run_turn/_run_task）清空对应 scope，授权不外溢到下一个 run。
+        self._run_scope_grants: dict[str, set[str]] = {}
+        self._run_scope_guard = threading.Lock()
         # F14 工作台会话：一次性口令 + HttpOnly cookie + csrf（kitagent 模型）
         self.web_session = WebSession()
         # A6 会话权限模式（Ported from kitagent (MIT, zed123214/kitagent)
@@ -276,13 +292,21 @@ class RuntimeApiServer:
         self._task_events_guard = threading.Lock()
         # A10 审批收口台账（仅内存，进程生命周期）：approval_resolved SSE 帧的
         # 数据源。登记点是 api.py 内全部收口调用点（decide 端点 / recheck_pending
-        # / expire / cancel_pending）——即 kitagent session.approve/_decide 里
-        # projection.put 的同位收口位置。例外：F6 同步桥回调内的 300s 超时收口
-        # 发生在 approvals.py 内部（callback 闭包），api.py 看不到，SSE 侧对该
-        # 路径以 record_status 兜底（decision/resolved_by 置空，见
-        # _emit_approval_frames）。
+        # / expire / cancel_pending / 0021 超时看护）——即 kitagent
+        # session.approve/_decide 里 projection.put 的同位收口位置。例外：配置的
+        # 审批超时大于模块常量（缺省 300s）时，F6 同步桥回调内的超时收口仍发生
+        # 在 approvals.py 内部（callback 闭包），api.py 看不到，SSE 侧对该路径以
+        # record_status 兜底（decision/resolved_by 置空，见 _emit_approval_frames）。
         self._approval_resolutions: list[dict[str, Any]] = []
         self._approval_resolutions_guard = threading.Lock()
+        # approval_resolved 落 events 表的支撑态（仅内存）：判重集保证同一收口一行
+        # 不双落（快照对比每条 SSE 连接独立运行，同一收口会被并发发现）；scope 映射
+        # 由挂起侧 diff 登记（approval_id → 线程 id），让 _record_approval_resolution
+        # 在**收口调用点**（与连接生命周期无关）即可落库——若等连接自己的 diff 轮询
+        # 发现卡消失，客户端重连/断开可能与 0.1s 轮询竞速，收口行会整条丢失。
+        self._approval_resolved_persisted: set[str] = set()
+        self._approval_scope_by_id: dict[str, str] = {}
+        self._approval_resolved_persisted_guard = threading.Lock()
         self._ensure_schema()
 
     def serve_forever(self) -> None:
@@ -364,6 +388,13 @@ class RuntimeApiServer:
                 daemon=True,
             )
             thread.start()
+        # 0021 审批超时看护：统一收口面（含 F6 同步桥路径），见 _approval_expiry_loop。
+        sweeper = threading.Thread(
+            target=self._approval_expiry_loop,
+            name="nexuscli-approval-sweeper",
+            daemon=True,
+        )
+        sweeper.start()
 
     def _handle(self, request: BaseHTTPRequestHandler) -> None:
         # A2 捕获位复位：同一连接线程串行处理多个请求，清掉上一请求的残留。
@@ -544,8 +575,12 @@ class RuntimeApiServer:
             ):
                 approval_id = path[len("/v1/approvals/") : -len("/decision")]
                 decision = str(body.get("decision") or "")
-                if decision not in ("approve", "deny"):
-                    _send_json(request, 400, {"error": "decision must be approve or deny"})
+                if decision not in ("approve", "deny", "approve_run", "approve_auto"):
+                    _send_json(
+                        request,
+                        400,
+                        {"error": "decision must be approve, deny, approve_run or approve_auto"},
+                    )
                     return
                 origin = request.headers.get("origin")
                 if origin is not None and not is_loopback_origin(origin):
@@ -555,8 +590,24 @@ class RuntimeApiServer:
                 # web/session.py:183-232）：pending 落定；同动词重复决策幂等重放
                 # 首次结果；异动词翻转 / expired / unknown 拒绝变更；参数截断禁
                 # allow。类型化错误 → 状态码映射见各异常。
+                # 0021 扩展动词（词表与 REPL approval_keys.py 一致）：
+                # - approve_run：本次 run 内放行——卡按 approve 收口 + 工具入
+                #   run-scope 授权表，回调包装层把结果翻译回 "approve_run"；
+                # - approve_auto：会话切到 auto（full access）+ 即时重判挂起卡。
+                # applied 是等待方实际收到的 ToolDecision，入收口台账（SSE 帧
+                # 与响应 echo 的 decision=请求动词，台账记应用结果）。
                 try:
-                    resolved = self.approval_bridge.decide(approval_id, decision)  # type: ignore[arg-type]
+                    if decision == "approve_run":
+                        resolved_by, status, applied = self._decide_approve_run(approval_id)
+                    elif decision == "approve_auto":
+                        resolved_by, status, applied = self._decide_approve_auto(approval_id)
+                    else:
+                        resolved = self.approval_bridge.decide(approval_id, decision)  # type: ignore[arg-type]
+                        resolved_by, status, applied = (
+                            resolved.resolved_by,
+                            resolved.status,
+                            decision,
+                        )
                 except UnknownApprovalError:
                     _send_json(request, 404, {"error": f"approval not found: {approval_id}"})
                 except ApprovalConflictError:
@@ -577,6 +628,13 @@ class RuntimeApiServer:
                             "max_bytes": APPROVAL_INPUT_MAX_BYTES,
                         },
                     )
+                except RevisionConflict as exc:
+                    # approve_auto 与并发 PATCH permissions 的乐观锁冲突（0021）。
+                    _send_json(
+                        request,
+                        409,
+                        {"error": str(exc), "current_revision": exc.current_revision},
+                    )
                 else:
                     # A9 恢复触发：挂起任务的 worker 正等在这张卡的 event 上，
                     # decide() 的 event.set() 即恢复信号——决策端点在此立即返回，
@@ -586,18 +644,16 @@ class RuntimeApiServer:
                     payload: dict[str, Any] = {
                         "ok": True,
                         "id": approval_id,
-                        "resolved_by": resolved.resolved_by,
+                        "resolved_by": resolved_by,
                         "decision": decision,
-                        "status": resolved.status,
+                        "status": status,
                     }
                     if suspension is not None:
                         payload["suspended_task_id"] = suspension["task_id"]
                         payload["checkpoint_id"] = suspension["checkpoint_id"]
                     # A10：先记后发——对 HTTP 响应作出反应的客户端（如重连 SSE）
                     # 一定能看到这条收口台账（approval_resolved 帧的数据源）。
-                    self._record_approval_resolution(
-                        approval_id, decision, resolved.resolved_by, resolved.status
-                    )
+                    self._record_approval_resolution(approval_id, applied, resolved_by, status)
                     _send_json(request, 200, payload)
             elif method == "GET" and path == "/v1/workbench/permissions":
                 # A6 会话权限读面（kitagent session.get_permissions rpc 同位，
@@ -698,6 +754,7 @@ class RuntimeApiServer:
     ) -> dict[str, Any]:
         self._ensure_llm_key()
         mode = _validate_mode(mode)
+        self._clear_run_scope(thread_id)  # 0021：approve_run 只覆盖本次 run
         self._append_event(thread_id, "turn.started", {"message": message, "mode": mode})
         registry, _manager = await build_tool_registry(config=self.config, cwd=self.cwd)
         engine = QueryEngine(
@@ -708,7 +765,7 @@ class RuntimeApiServer:
             tool_registry=registry,
             config=self.config,
             cwd=self.cwd,
-            approval_callback=self.approval_bridge.callback_for(
+            approval_callback=self._approval_callback_for(
                 thread_id=thread_id, permissions=self.session_permissions
             ),
         )
@@ -799,6 +856,7 @@ class RuntimeApiServer:
         self._ensure_llm_key()
         if self.task_manager.is_canceled(task.id):
             raise TaskCanceledError(task.id)
+        self._clear_run_scope(task.id)  # 0021：approve_run 只覆盖本次 run
         if task.mode == "react":
             # A9 挂起即 checkpoint：react 任务的审批从「回调阻塞等待」改为登记后
             # 立即中断 + 回合 checkpoint + 决策后恢复（_run_task_react）。
@@ -814,7 +872,7 @@ class RuntimeApiServer:
             tool_registry=registry,
             config=self.config,
             cwd=self.cwd,
-            approval_callback=self.approval_bridge.callback_for(
+            approval_callback=self._approval_callback_for(
                 task_id=task.id, permissions=self.session_permissions
             ),
         )
@@ -842,6 +900,166 @@ class RuntimeApiServer:
         revision = snapshot.get("revision") if isinstance(snapshot, dict) else None
         return revision if isinstance(revision, int) else None
 
+    # ------------------------------------------------------------------
+    # 0021 审批扩展：run-scope 授权、approve_run/approve_auto 决策、可配超时
+    # ------------------------------------------------------------------
+
+    def _approval_timeout(self) -> float:
+        """审批超时单一取值口径：显式构造参数（含 env 回落）优先，否则动态读
+        approvals.APPROVAL_TIMEOUT_SECONDS 模块常量——既有测试经 monkeypatch 该
+        常量注入短超时（test_approval_async），动态读取保持该注入缝不变。"""
+
+        if self.approval_timeout_seconds is not None:
+            return self.approval_timeout_seconds
+        return float(approvals_module.APPROVAL_TIMEOUT_SECONDS)
+
+    def _approval_expiry_loop(self) -> None:
+        """0021 审批超时看护线程：按配置周期扫描登记表，过期卡 fail-closed 收口。
+
+        覆盖同步桥路径（F6 回调在 approvals.py 闭包内等待，api.py 无法改其内联
+        超时）：看护层经 bridge.expire() 原子收口并唤醒等待者（回调返回 deny）。
+        expire 与 decide / 挂起路径 worker 自超时竞争时只有一方成功，台账只记
+        成功方（各收口点均以 expire/decide 的返回为准），不会双记。
+        """
+
+        while not self._stop.wait(0.5):
+            with suppress(Exception):
+                self._expire_stale_approvals()
+
+    def _expire_stale_approvals(self) -> None:
+        timeout_seconds = self._approval_timeout()
+        now = time.time()
+        for card in self.approval_bridge.list_pending():
+            if card.get("status") != "pending":
+                continue  # submitting：决策在途，不抢收口（A5 中间态）
+            try:
+                created = datetime.fromisoformat(str(card.get("created_at")))
+            except ValueError:
+                continue
+            if now - created.timestamp() < timeout_seconds:
+                continue
+            if self.approval_bridge.expire(str(card["id"])):
+                self._record_approval_resolution(str(card["id"]), None, "timeout", "expired")
+
+    def _grant_run_scope(self, scope_id: str, tool_name: str) -> None:
+        with self._run_scope_guard:
+            self._run_scope_grants.setdefault(scope_id, set()).add(tool_name)
+
+    def _revoke_run_scope(self, scope_id: str, tool_name: str) -> None:
+        with self._run_scope_guard:
+            self._run_scope_grants.get(scope_id, set()).discard(tool_name)
+
+    def _clear_run_scope(self, scope_id: str) -> None:
+        """run 开始（_run_turn/_run_task）清空该 scope 的授权：approve_run 只覆盖
+        「本次 run」，不外溢到同线程的下一个 turn / 同任务的重试 run。"""
+
+        with self._run_scope_guard:
+            self._run_scope_grants.pop(scope_id, None)
+
+    def _run_scope_allows(self, scope_id: str, tool_name: str) -> bool:
+        with self._run_scope_guard:
+            return tool_name in self._run_scope_grants.get(scope_id, set())
+
+    def _approval_callback_for(
+        self,
+        *,
+        thread_id: str | None = None,
+        task_id: str | None = None,
+        permissions: Any | None = None,
+        suspend: bool = False,
+    ) -> Any:
+        """审批回调接线（bridge.callback_for 的 run-scope 翻译包装，0021）。
+
+        - 门序零变化：会话权限预判、持久决策查找、登记等待全部仍在桥内回调里；
+          本包装只在桥返回 approve 且该工具已在 run-scope 授权表时翻译为
+          "approve_run"（决策端点 approve_run 在 decide 前登记授权）。执行器据此
+          把工具记入 context.run_scope_approved，本 run 内的后续调用走执行器
+          自己的 run_scope_bypass 免提示——ask 规则 / hook ask 的否决权在执行器
+          内不变（executor._run_scope_bypass 的既有守卫）。
+        - 不做前置短路：执行器只在门链评估完、确需人点头时才调回调；包装层若
+          凭授权表抢答，会让 ask 拦截失效（AGENTS.md 审批语义）。授权表只翻译
+          「人类已对本次调用点过头」的决策结果。
+        - suspend 模式（A9）：桥回调对登记卡抛 ApprovalSuspension
+          （BaseException），本包装不捕获、原样穿透；恢复重放路径的持久
+          approve 决策同样可被翻译为 approve_run。
+        """
+
+        inner = self.approval_bridge.callback_for(
+            thread_id=thread_id, task_id=task_id, permissions=permissions, suspend=suspend
+        )
+        scope_id = thread_id if thread_id is not None else (task_id or "")
+
+        def callback(request: dict[str, Any]) -> str:
+            decision = inner(request)
+            if decision == "approve" and self._run_scope_allows(
+                scope_id, str(request.get("tool_name") or "")
+            ):
+                return "approve_run"
+            return decision
+
+        return callback
+
+    def _decide_approve_run(self, approval_id: str) -> tuple[str | None, str, str]:
+        """approve_run（REPL "r" 的 Web 同位）：本次 run 内放行。
+
+        卡按 approve 收口（桥的 DecisionVerb 仅 approve/deny，approvals.py 不在
+        本任务 boundary），同时把该工具记入 run-scope 授权表；回调包装层把收口
+        结果翻译回 "approve_run"，等待方据此在执行器内记 run scope。decide 失败
+        （未知 id / 已收口 / 参数截断禁 allow）时回滚授权——决策成功才放行。
+        返回 (resolved_by, status, applied_decision)。
+        """
+
+        card = next(
+            (
+                item
+                for item in self.approval_bridge.list_pending()
+                if str(item["id"]) == approval_id
+            ),
+            None,
+        )
+        granted: tuple[str, str] | None = None
+        if card is not None:
+            tool_name = str(card.get("tool_name") or "")
+            scope_id = str(card.get("scope_id") or "")
+            if tool_name and scope_id:
+                self._grant_run_scope(scope_id, tool_name)
+                granted = (scope_id, tool_name)
+        try:
+            resolved = self.approval_bridge.decide(approval_id, "approve")
+        except Exception:
+            if granted is not None:
+                self._revoke_run_scope(*granted)
+            raise
+        return resolved.resolved_by, resolved.status, "approve_run"
+
+    def _decide_approve_auto(self, approval_id: str) -> tuple[str | None, str, str]:
+        """approve_auto（REPL "a" 的 Web 同位）：会话切到 auto（full access）+
+        即时重判挂起审批（A6 recheck_pending 同款）。
+
+        等待中的卡按新模式收口（resolved_by=session_permissions），等待方立即
+        唤醒——「自动允许当前等待及后续的工具调用」。注意 A6 configure 的换模式
+        语义：切到 auto 会清空单项撤销集（「换模式即全新起点」），因此重判对本
+        会话内所有挂起卡放行。目标卡不在挂起表时先于 configure 报 404（不区分
+        从未存在与已收口，与 approve/deny 口径一致），避免对陈旧卡白切会话模式。
+        configure 与并发 PATCH 的乐观锁冲突以 RevisionConflict 上抛（端点层 409）。
+        返回 (resolved_by, status, applied_decision)——applied 是重判的实际结果，
+        台账记应用结果而非请求动词。
+        """
+
+        pending_ids = {str(item["id"]) for item in self.approval_bridge.list_pending()}
+        if approval_id not in pending_ids:
+            if self.approval_bridge.record_status(approval_id) is None:
+                raise UnknownApprovalError(approval_id)
+            raise ApprovalConflictError(approval_id)
+        snapshot = self.session_permissions.snapshot()
+        self.session_permissions.configure(expected_revision=int(snapshot["revision"]), mode="auto")
+        rechecked = self.approval_bridge.recheck_pending(self.session_permissions)
+        settled = next((item for item in rechecked if str(item["id"]) == approval_id), None)
+        if settled is None:
+            # 预检与重判之间被并发收口（decide/超时/取消）：非 pending 拒绝变更。
+            raise ApprovalConflictError(approval_id)
+        return settled["resolved_by"], "resolved", str(settled["decision"])
+
     async def _run_task_react(self, task: TaskRecord) -> str:
         """A9 react 任务：审批请求 → 登记即挂起（checkpoint 落盘）→ 等决策 → 恢复。
 
@@ -868,7 +1086,7 @@ class RuntimeApiServer:
         try:
             registry, _manager = await build_tool_registry(config=self.config, cwd=self.cwd)
             system_prompt = self._react_system_prompt(registry, llm_client)
-            callback = self.approval_bridge.callback_for(
+            callback = self._approval_callback_for(
                 task_id=task.id, permissions=self.session_permissions, suspend=True
             )
             agent = Agent(
@@ -956,14 +1174,16 @@ class RuntimeApiServer:
         """同步等待决策收口（worker 线程内，事件循环在此空闲）。
 
         - decide/recheck_pending/expire 都以 event.set 唤醒；唤醒后决策位即现状。
-        - 300s 无决策 → expired（沿用 F6 fail-closed 口径）→ 按 deny 收口。
+        - 超时（_approval_timeout，0021 起可配，缺省沿用 300s）无决策 → expired
+          （F6 fail-closed 口径）→ 按 deny 收口；expire 已被并发收口（看护线程/
+          decide 先到）时不再重复记台账。
         - 任务取消：撤销未决卡并抛 TaskCanceledError（cancel() 拥有终态）。
         - 心跳保活：_worker_loop 的心跳线程在 _run_task 返回前一直运行，挂起等待
           期间租约不失效（F6 验证过的机制，零改动复用）。
         """
 
         approval = suspension.approval
-        deadline = time.monotonic() + approvals_module.APPROVAL_TIMEOUT_SECONDS
+        deadline = time.monotonic() + self._approval_timeout()
         while True:
             if self.task_manager.is_canceled(task.id):
                 self.approval_bridge.cancel_pending(approval.id)
@@ -973,8 +1193,8 @@ class RuntimeApiServer:
                 raise TaskCanceledError(task.id)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self.approval_bridge.expire(approval.id)
-                self._record_approval_resolution(approval.id, None, "timeout", "expired")
+                if self.approval_bridge.expire(approval.id):
+                    self._record_approval_resolution(approval.id, None, "timeout", "expired")
                 return "deny", approval
             if approval.event.wait(timeout=min(0.5, remaining)):
                 return approval.decision or "deny", approval
@@ -1271,18 +1491,24 @@ class RuntimeApiServer:
            是内存登记表非 events 行。选轮询对比：approvals.py 不在本 lane 文件
            白名单内，桥里没有可挂的 Condition；从 api.py 外包裹桥方法（含私有
            _register）侵入性强且脆。挂起侧按 SSE_APPROVAL_POLL_SECONDS (0.1s)
-           轮询 list_pending() 快照 diff——新卡 → approval_suspended 帧；已见卡
-           从快照消失 → approval_resolved 帧。解决侧帧数据取自收口台账
-           （_approval_resolutions：api.py 内全部收口点登记，登记点即 kitagent
-           session.approve/_decide 里 projection.put 的同位位置；登记后
-           _event_cond.notify 即时唤醒，解决帧延迟近似 0）；台账无记录的路径
-           （F6 同步桥回调内的 300s 超时收口，approvals.py 闭包内发生）以
-           record_status 兜底，decision/resolved_by 置空。0.1s 轮询对人类尺度的
-           审批卡不可感知。帧只覆盖本线程 scope（scope_type=thread 且
-           scope_id=本线程）——流是 per-thread 投影，任务卡走 /v1/approvals 与
-           任务事件面。快照间隔内登记又收口的卡不产生帧（无人来得及看见），
-           消费方须容忍 resolved 无前置 suspended。审批/resync 帧不写 id: 行
-           （非 events 表行，不得推进客户端重放游标）。
+           轮询 list_pending() 快照 diff——新卡 → approval_suspended 帧（并登记
+           approval_id → 本线程的 scope 反查映射）；已见卡从快照消失 →
+           approval_resolved 落 events 表（2026-11-08 复审修复：原为连接内裸帧，
+           无 seq 无 id 行，live 段合帧引发的前端 SequenceGap 重建会把它抹掉，
+           且新连接 seen 集为空不重发——人工决定计数恒 0）。落库主路径在
+           _record_approval_resolution（api.py 内全部收口点同步调用：decide 端点
+           / recheck_pending / expire / cancel_pending / 0021 超时看护，登记点即
+           kitagent session.approve/_decide 里 projection.put 的同位位置）——
+           收口与连接生命周期解耦；台账无记录的路径（F6 同步桥回调内的 300s
+           超时收口，approvals.py 闭包内发生）由本 diff 以 record_status 兜底
+           落库，decision/resolved_by 置空。落库经 _persist_approval_resolved
+           判重，一行不双落；append notify 后各等待者经常规事件循环取行。
+           0.1s 轮询对人类尺度的审批卡不可感知。帧只覆盖本线程 scope
+           （scope_type=thread 且 scope_id=本线程）——流是 per-thread 投影，任务卡
+           走 /v1/approvals 与任务事件面。快照间隔内登记又收口的卡不产生帧
+           （无人来得及看见），消费方须容忍 resolved 无前置 suspended。
+           suspended/resync 帧不写 id: 行（非 events 表行，不得推进客户端重放
+           游标）；resolved 已落库，带 id+seq。
         2. token 合帧（50ms）：live 段连续 message.delta 行并入缓冲，窗口到期
            （或体量超 SSE_DELTA_MAX_CHARS）合并为单帧推送，data.text 拼接，id:
            取段末行 id（重放游标不回退）；非 delta 行到达即先冲刷缓冲再直通，
@@ -1418,9 +1644,11 @@ class RuntimeApiServer:
     def _emit_approval_frames(
         self, request: BaseHTTPRequestHandler, thread_id: str, seen: set[str]
     ) -> bool:
-        """A10 机制 1 的单次快照对比：新挂起卡 → approval_suspended 帧；已见卡
-        从快照消失 → approval_resolved 帧（数据优先取收口台账，无台账的收口
-        路径以 record_status 兜底）。返回是否写出过帧。"""
+        """A10 机制 1 的单次快照对比：新挂起卡 → approval_suspended 裸帧（登记表
+        是内存态、不落库），同时登记收口落库所需的 scope 反查映射；已见卡从快照
+        消失 → approval_resolved 落 events 表（api.py 收口路径已在
+        _record_approval_resolution 同步落库，此处为 F6 闭包收口的兜底；判重集
+        幂等，一行不双落）。返回是否写出过帧。"""
 
         cards = [
             card
@@ -1432,6 +1660,10 @@ class RuntimeApiServer:
             if card["id"] in seen:
                 continue
             seen.add(card["id"])
+            # 登记收口落库所需的 scope 反查映射（见 _record_approval_resolution）：
+            # 收口点不持卡对象，靠挂起侧先见到卡时记下 approval_id → 本线程。
+            with self._approval_resolved_persisted_guard:
+                self._approval_scope_by_id.setdefault(card["id"], thread_id)
             data = json.dumps(
                 {
                     "approval_id": card["id"],
@@ -1468,11 +1700,26 @@ class RuntimeApiServer:
                     "resolved_by": None,
                     "status": self.approval_bridge.record_status(approval_id),
                 }
-            frame = _sse_frame("approval_resolved", json.dumps(payload, ensure_ascii=False))
-            request.wfile.write(frame.encode("utf-8"))
-            request.wfile.flush()
-            wrote = True
+            # 2026-11-08 复审修复：approval_resolved 落 events 表（带 id+seq），不再
+            # 发连接内裸帧——裸帧会被 live 段合帧引发的前端 SequenceGap 重建（回放
+            # 源 = events 表）抹掉，且新连接 seen 集为空、已收口的卡不会重发。
+            # api.py 收口路径已在 _record_approval_resolution 同步落库；此处是兜底
+            # （F6 闭包内收口 api.py 不可见）与补漏路径，判重集保证幂等。
+            self._persist_approval_resolved(thread_id, approval_id, payload)
         return wrote
+
+    def _persist_approval_resolved(
+        self, thread_id: str, approval_id: str, payload: dict[str, Any]
+    ) -> None:
+        """approval_resolved 幂等落库：快照对比每条连接独立运行，同一收口会被
+        多条连接并发发现，判重集保证 events 表一行不双落（双落 = 回放侧计数
+        翻倍）。append 通知 _event_cond，等待者经常规事件循环取到该行。"""
+
+        with self._approval_resolved_persisted_guard:
+            if approval_id in self._approval_resolved_persisted:
+                return
+            self._approval_resolved_persisted.add(approval_id)
+        self._append_event(thread_id, "approval_resolved", payload)
 
     def _record_approval_resolution(
         self,
@@ -1481,7 +1728,13 @@ class RuntimeApiServer:
         resolved_by: str | None,
         status: str,
     ) -> None:
-        """A10：审批收口入台账并唤醒 SSE 等待者（数据源契约见 __init__ 注释）。"""
+        """A10：审批收口入台账并唤醒 SSE 等待者（数据源契约见 __init__ 注释）。
+
+        2026-11-08 复审修复：api.py 内收口点在此**同步落库** approval_resolved
+        （scope 由挂起侧 diff 登记的映射反查；判重集幂等）——收口与连接生命周期
+        解耦，客户端重连/断开不再可能吞掉收口行。线程 scope 之外的收口（任务卡）
+        无映射，不落线程事件面（任务事件面另有观测口径）。
+        """
 
         with self._approval_resolutions_guard:
             self._approval_resolutions.append(
@@ -1491,6 +1744,20 @@ class RuntimeApiServer:
                     "resolved_by": resolved_by,
                     "status": status,
                 }
+            )
+        with self._approval_resolved_persisted_guard:
+            scope_id = self._approval_scope_by_id.get(approval_id)
+        if scope_id is not None:
+            self._persist_approval_resolved(
+                scope_id,
+                approval_id,
+                {
+                    "id": approval_id,
+                    "approval_id": approval_id,
+                    "decision": decision,
+                    "resolved_by": resolved_by,
+                    "status": status,
+                },
             )
         with self._event_cond:
             self._event_cond.notify_all()
@@ -1515,14 +1782,37 @@ class RuntimeApiServer:
             ).fetchall()
         return [(int(row[0]), str(row[1]), str(row[2])) for row in rows]
 
-    def _workbench_dist_root(self) -> Path:
+    def _workbench_dist_candidates(self) -> list[Path]:
+        """dist 根候选，按优先级：env → 仓库根 → 包内 → 旧 cwd 回落。
+
+        task_0035：`--cwd` 只决定任务目录，不再决定 dist 根——dist 根锚定
+        安装形态：env 显式指定 > 源码检出的仓库根 frontend/dist > wheel 的
+        包内 nexuscli/frontend/dist > 旧 cwd/frontend/dist（兼容旧布局的
+        最后兜底）。每步都要求 index.html 在位（含 env 指定值），缺失即
+        落到下一级，`_serve_static` 对全落空回退空态页。
+        """
+        candidates: list[Path] = []
         override = os.environ.get("NEXUSCLI_WORKBENCH_DIST")
         if override:
-            return Path(override)
-        return Path(self.cwd) / "frontend" / "dist"
+            candidates.append(Path(override))
+        candidates.append(_repo_workbench_dist())
+        candidates.append(_packaged_workbench_dist())
+        candidates.append(Path(self.cwd) / "frontend" / "dist")
+        return candidates
+
+    def _workbench_dist_root(self, candidates: list[Path] | None = None) -> Path:
+        if candidates is None:
+            candidates = self._workbench_dist_candidates()
+        for candidate in candidates:
+            if (candidate / "index.html").is_file():
+                return candidate
+        # 全部落空：返回最后一个候选（旧 cwd 回落），_serve_static 对缺失
+        # index.html 的根回退到空态页。
+        return candidates[-1]
 
     def _serve_static(self, request: BaseHTTPRequestHandler, path: str) -> None:
-        dist_root = self._workbench_dist_root()
+        candidates = self._workbench_dist_candidates()
+        dist_root = self._workbench_dist_root(candidates)
         index = dist_root / "index.html"
         # raw 与 decode 后的路径段里出现 ".." 一律 404：normpath 会把 /a/../../x
         # 折叠成根内路径，让攻击请求落入 SPA 回退而非显式拒绝。
@@ -1554,8 +1844,14 @@ class RuntimeApiServer:
                 _send_bytes(request, 404, b"not found", "text/plain; charset=utf-8")
                 return
         if target is None:
-            # dist 缺失（F2 交付时 F3 未落地 / wheel 检出形态）：空态页 + 构建指引
-            _send_bytes(request, 200, _EMPTY_STATE_HTML.encode("utf-8"), "text/html; charset=utf-8")
+            # dist 全落空（源码检出未构建 / wheel 检出形态）：空态页列出已
+            # 尝试候选路径与修复指引（task_0035），不再只说"未构建"。
+            _send_bytes(
+                request,
+                200,
+                _empty_state_html(candidates).encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
             return
         _send_file(request, target)
 
@@ -1710,13 +2006,44 @@ def _send_file(request: BaseHTTPRequestHandler, path: Path) -> None:
     _send_bytes(request, 200, body, _content_type_for(path.name))
 
 
-_EMPTY_STATE_HTML = """<!doctype html>
+def _repo_workbench_dist() -> Path:
+    """源码检出形态的仓库根工作台产物：``<repo>/frontend/dist``。
+
+    api.py 位于 ``<repo>/src/nexuscli/runtime/``，仓库根在 parents[3]；
+    wheel 安装形态该目录不存在（dist 在包内，见 ``_packaged_workbench_dist``），
+    由 ``_workbench_dist_root`` 的 index.html 检查自然跳过。
+    """
+    return Path(__file__).resolve().parents[3] / "frontend" / "dist"
+
+
+def _packaged_workbench_dist() -> Path:
+    """wheel 内随包发行的工作台静态根：``nexuscli/frontend/dist``。
+
+    由 pyproject 的 ``[tool.hatch.build.targets.wheel.force-include]`` 在打包时
+    注入；源码检出形态下该目录不存在（dist 在仓库根 ``frontend/dist``），
+    调用方需自行处理 ``index.html`` 缺失的情况（见 ``_serve_static``）。
+    """
+    return Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+def _empty_state_html(tried: list[Path]) -> str:
+    """dist 全落空时的空态页：列出已尝试候选路径与修复指引（task_0035）。"""
+    items = "".join(f"<li><code>{item}</code></li>" for item in tried)
+    return f"""<!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><title>NexusCLI Workbench</title></head>
 <body>
 <h1>NexusCLI 工作台 UI 未构建</h1>
-<p>当前部署不包含已构建的前端产物（frontend/dist）。</p>
-<p>构建指引：<code>cd frontend &amp;&amp; npm run build</code>（Node.js 20.19+）。</p>
+<p>当前部署不包含已构建的前端产物（frontend/dist，且必须含 index.html）。</p>
+<p>已尝试的候选路径（按优先级，全部落空）：</p>
+<ul>
+{items}
+</ul>
+<p>修复指引（任选其一）：</p>
+<ul>
+<li>源码检出：<code>cd frontend &amp;&amp; npm run build</code>（Node.js 20.19+）。</li>
+<li>指定现成产物：设置环境变量 <code>NEXUSCLI_WORKBENCH_DIST=/path/to/dist</code> 后重启。</li>
+</ul>
 <p><code>/v1/*</code> Runtime API 不受影响，照常可用。</p>
 </body>
 </html>

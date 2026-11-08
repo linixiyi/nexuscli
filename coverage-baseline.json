@@ -1,0 +1,8 @@
+{
+  "percent": 88.70042558440757,
+  "python": "3.11.16",
+  "python_pin": "3.11",
+  "platform": "darwin-arm64",
+  "command": "uv run python scripts/check_coverage.py --write-baseline",
+  "pytest_command": "uv run --python 3.11 --extra dev --frozen python -m pytest --cov=nexuscli --cov-report=json:.nexuscli/coverage.json"
+}

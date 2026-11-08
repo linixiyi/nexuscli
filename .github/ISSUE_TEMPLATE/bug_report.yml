@@ -1,0 +1,61 @@
+name: 缺陷报告
+description: NexusCLI 行为不符合预期、报错或断言失败时使用
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告缺陷。提交前请先确认：
+
+        - 已在最新版本上复现（`nexuscli --version`）；
+        - 搜索过现有 issue，确认没有重复；
+        - **安全漏洞不要走公开 issue**，请按 [SECURITY.md](../../SECURITY.md) 的渠道私有报告。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 实际现象与期望行为的对比；贴终端输出时保留原始文本，不要只贴截图。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 从最小命令开始，能稳定复现的最短路径最好，例如 `uv run nexuscli -p "..."`。
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: NexusCLI 版本
+      description: "`nexuscli --version` 的输出"
+      placeholder: "0.2.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安装方式
+      options:
+        - uv tool install
+        - pip / pipx
+        - 源码（uv sync）
+        - 不确定
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 操作系统、Python 版本、使用方式（REPL / `-p` 模式 / workbench / MCP），以及是否接入自定义 provider。
+      placeholder: "macOS 15, Python 3.12, REPL, DeepSeek 官方直连"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志与审计摘录
+      description: "`.nexuscli/audit.jsonl` 相关行或 `--json` 输出。贴出前先删掉 API key 与会话敏感内容。"

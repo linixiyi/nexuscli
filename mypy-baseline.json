@@ -1,0 +1,11 @@
+{
+  "errors": 7,
+  "ignored_modules": 30,
+  "ignored_lines": 6,
+  "mypy": "2.4.1",
+  "mypy_pin": "2.4.1",
+  "python": "3.11.16",
+  "python_pin": "3.11",
+  "command": "uv run python scripts/check_mypy_ratchet.py --write-baseline",
+  "mypy_command": "uv run --python 3.11 --frozen --with mypy==2.4.1 mypy src/nexuscli --cache-dir=.nexuscli/mypy_cache"
+}

@@ -7,6 +7,7 @@ from typing import Any
 
 from nexuscli.memory import TEMPORAL_KIND_ORDER, MemoryManager
 from nexuscli.policy import CommandGuard, FSScopeGuard, evaluate_permissions, sanitize_environment
+from nexuscli.policy.os_sandbox import OperationUnsupported, wrap_command
 from nexuscli.rag import CodeIndex, format_hit_stats
 from nexuscli.skill import SkillRegistry, SkillStateStore
 from nexuscli.snapshot import SnapshotService
@@ -757,6 +758,23 @@ async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
     blocked = await _reject_outside_write_scope(command, context)
     if blocked is not None:
         return blocked
+    # Task 0026 wiring: the production sandbox config rides the run's config
+    # (context.config.sandbox). Wrapped after the guards — they must analyze
+    # the caller's original command, never the wrapped string — and before
+    # both spawn paths, so background tasks and foreground processes are
+    # confined alike. Fail-closed: a backend this host cannot deliver raises
+    # OperationUnsupported and the command never spawns unconfined; the
+    # default backend "none" returns the command unchanged.
+    try:
+        command = wrap_command(
+            command,
+            backend=context.config.sandbox.backend,
+            cwd=context.cwd,
+            writable_paths=tuple(context.config.sandbox.writable_paths),
+            allow_network=context.config.sandbox.allow_network,
+        )
+    except OperationUnsupported as exc:
+        return ToolResult(f"Command rejected. {exc}", is_error=True)
     child_env = _child_environment(context)
     if bool(payload.get("run_in_background")):
         # Background mode: spawn and hand back the task id at once — the

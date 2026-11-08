@@ -8,7 +8,9 @@ import signal
 import time
 from dataclasses import dataclass
 
-from nexuscli.policy import CommandGuard
+from nexuscli.config import SandboxConfig
+from nexuscli.policy import CommandGuard, sanitize_environment
+from nexuscli.policy.os_sandbox import SandboxRequest, resolve_backend
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -270,6 +272,7 @@ class CommandExecutionOptions:
     env: dict[str, str] | None = None
     max_output_chars: int = MAX_OUTPUT_CHARS
     suppress_shell: bool = False  # When true, use Popen with list-form instead of shell
+    sanitize_env: bool = False  # When true, build the child env via sanitize_environment
 
 
 class CommandExecutor:
@@ -279,6 +282,14 @@ class CommandExecutor:
 
         executor = CommandExecutor(command_guard=CommandGuard())
         result = await executor.execute("ls -la", cwd="/workspace")
+
+    Optional OS sandboxing: pass *sandbox* (a
+    :class:`nexuscli.config.SandboxConfig`) and every spawned command is
+    wrapped through the configured backend
+    (:mod:`nexuscli.policy.os_sandbox`). Resolution is fail-closed at
+    construction — a backend that cannot run on this host raises
+    :class:`nexuscli.policy.os_sandbox.OperationUnsupported` here, before
+    any command is ever spawned unconfined.
     """
 
     def __init__(
@@ -286,10 +297,13 @@ class CommandExecutor:
         command_guard: CommandGuard | None = None,
         default_timeout: float = 60.0,
         default_max_output: int = MAX_OUTPUT_CHARS,
+        sandbox: SandboxConfig | None = None,
     ) -> None:
         self.command_guard = command_guard or CommandGuard()
         self.default_timeout = default_timeout
         self.default_max_output = default_max_output
+        self._sandbox_config = sandbox
+        self._sandbox = resolve_backend(sandbox.backend) if sandbox is not None else None
 
     # ------------------------------------------------------------------
     # Public API
@@ -303,6 +317,7 @@ class CommandExecutor:
         timeout: float | None = None,
         env: dict[str, str] | None = None,
         max_output_chars: int | None = None,
+        sanitize_env: bool = False,
     ) -> CommandResult:
         """Execute *command* via a shell subprocess.
 
@@ -318,11 +333,25 @@ class CommandExecutor:
             Extra or override environment variables.
         max_output_chars:
             Maximum characters kept from combined stdout+stderr.
+        sanitize_env:
+            When True the child environment is built by
+            :func:`nexuscli.policy.sanitize_environment` — secret-shaped and
+            NEXUSCLI_* variables are dropped, *env* is applied as trusted
+            overrides — instead of the historical full ``os.environ`` merge.
+            Callers that hand the command string to an untrusted reader
+            (the model can read command output) must set this.
 
         Raises
         ------
         CommandPolicyError
             If the command is blocked by the command guard policy.
+
+        Notes
+        -----
+        When the executor was constructed with a ``sandbox`` config whose
+        backend is enabled, the command is additionally wrapped by that
+        backend (see :meth:`_apply_sandbox`) at spawn time — after the
+        validation above, so the guard analyzes the original string.
         """
         self._validate(command)
 
@@ -332,10 +361,10 @@ class CommandExecutor:
             max_output_chars if max_output_chars is not None else self.default_max_output
         )
 
-        merged_env = self._build_env(env)
+        merged_env = self._build_env(env, sanitize=sanitize_env)
 
         return await self._run_subprocess(
-            command=command,
+            command=self._apply_sandbox(command, resolved_cwd),
             cwd=resolved_cwd,
             timeout=resolved_timeout,
             env=merged_env,
@@ -351,11 +380,38 @@ class CommandExecutor:
             self.command_guard.validate(command)
 
     # ------------------------------------------------------------------
+    # OS sandbox
+    # ------------------------------------------------------------------
+
+    def _apply_sandbox(self, command: str, cwd: str) -> str:
+        """Confine *command* through the configured sandbox backend, if any.
+
+        Runs AFTER command-guard validation so guards always analyze the
+        caller's original command — the sandbox wraps the already-validated
+        string, never replaces what the policies saw. With no sandbox
+        configured (``sandbox.backend == "none"`` or no SandboxConfig) the
+        command is returned unchanged.
+        """
+        if self._sandbox is None:
+            return command
+        config = self._sandbox_config or SandboxConfig()
+        return self._sandbox.wrap(
+            command,
+            SandboxRequest(
+                cwd=cwd,
+                writable_paths=tuple(config.writable_paths),
+                allow_network=config.allow_network,
+            ),
+        )
+
+    # ------------------------------------------------------------------
     # Environment
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_env(overrides: dict[str, str] | None) -> dict[str, str]:
+    def _build_env(overrides: dict[str, str] | None, sanitize: bool = False) -> dict[str, str]:
+        if sanitize:
+            return sanitize_environment(overrides=overrides)
         env = os.environ.copy()
         if overrides:
             env.update(overrides)

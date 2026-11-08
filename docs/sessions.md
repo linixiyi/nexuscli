@@ -44,7 +44,26 @@ uv run nexuscli --resume <id>       # 按会话 id（或 id 前缀）恢复
 /resume 2                           # 按序号切换，后续对话继续追加到该会话
 /resume <id-前缀>
 /fork [title]                       # 分叉当前会话为新会话并切换过去（原会话不变）
+/tree [id]                          # 输出当前会话的父子/分支树（可传 id 锚定其他会话）
 ```
+
+## 会话树
+
+会话元信息行（JSONL 首行）带有可选的 `parent_id` / `branch` / `created_at` 字段：
+
+- `created_at`：会话创建时刻（Unix 秒）。
+- `parent_id`：本会话分叉自哪个父会话；`""` 或缺省表示根会话。旧会话没有该字段时照常可读，默认视为根；旧版只写了 `forked_from` 的分叉会话在树里仍回退挂到其来源会话之下。
+- `branch`：fork 时记录的分支名。`/fork` 缺省按父会话下已有的 `fork-N` 自动编号（`fork-1`、`fork-2`…），也可以显式指定。
+
+`/tree` 以当前会话为锚点：向上补全父链到根，向下展开所有分支子树，当前节点带 `(current)` 标记，兄弟分支用 `├─` / `└─` 连接：
+
+```text
+* 20261108-101010-a1b2c3  fix the login bug
+  ├─ 20261108-101512-d4e5f6  (branch: fork-1)  my fork
+  └─ 20261108-103045-b7c8d9  (branch: fork-2)  another angle  (current)
+```
+
+树只展开与锚点会话连通的部分，无关会话不出现；未落盘的会话（只打开没对话）显示为带提示的单独根节点。
 
 单次模式也支持恢复：`uv run nexuscli -p "继续刚才的任务" -c` 会把历史会话注入 react 模式（plan/team 单次模式不支持注入历史）。
 

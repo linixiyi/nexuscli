@@ -135,12 +135,37 @@ DEFAULT_MODEL_PROFILES: tuple[ModelProfile, ...] = (
         description="Agentic coding model with tool calling",
         api_key_env="ZAI_API_KEY",
     ),
+    ModelProfile(
+        id="gemini-3-pro",
+        name="Gemini 3 Pro",
+        provider="google",
+        model="gemini-3-pro",
+        base_url="https://generativelanguage.googleapis.com",
+        context_window=1_048_576,
+        description="Google flagship model for long-context coding tasks",
+        api_key_env="GEMINI_API_KEY",
+        # Tri-state capability field (not a name guess): the native Gemini
+        # client reads this via llm.vision when the profile is applied.
+        vision=True,
+    ),
+    ModelProfile(
+        id="gemini-3-flash",
+        name="Gemini 3 Flash",
+        provider="google",
+        model="gemini-3-flash",
+        base_url="https://generativelanguage.googleapis.com",
+        context_window=1_048_576,
+        description="Fast Google model for high-volume coding tasks",
+        api_key_env="GEMINI_API_KEY",
+        vision=True,
+    ),
 )
 
 
 PROVIDER_DEFAULTS: dict[str, tuple[str, str, int]] = {
     "deepseek": ("DeepSeek", "https://api.deepseek.com", 1_000_000),
     "glm": ("GLM / Zhipu", "https://open.bigmodel.cn/api/paas/v4", 200_000),
+    "google": ("Google Gemini", "https://generativelanguage.googleapis.com", 1_048_576),
     "openai-compatible": ("OpenAI-compatible", "https://api.openai.com/v1", 128_000),
 }
 
@@ -148,6 +173,7 @@ PROVIDER_API_KEY_ENVS: dict[str, tuple[str, ...]] = {
     "deepseek": ("DEEPSEEK_API_KEY",),
     "glm": ("ZAI_API_KEY", "GLM_API_KEY"),
     "zhipu": ("ZAI_API_KEY", "GLM_API_KEY"),
+    "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     "openai": ("OPENAI_API_KEY",),
     "openai-compatible": ("OPENAI_API_KEY",),
 }

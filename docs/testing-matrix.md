@@ -20,6 +20,8 @@
 > 2026-10-18 第二轮（`fix-audit-residual`）之后，表中带 【本轮】 的行是这一轮补的真实运行/机器验证；带 【已修】 的缺陷行是本轮修掉并复测过的。
 >
 > 2026-10-19 收口轮（`verify-zero-and-yellow`，两轮工作流 + 轮间修复）：带 【收口】 的行是这两轮补齐的 62 个表面（17 ⬜ + 45 🟡 对应行，含 /history 主线程补测）。证据明细在 `.spec/specs/2026-10-18_verify-zero-and-yellow/evidence/`；两轮共修复 13 个真实运行暴露的缺陷，全部带回归测试。
+>
+> 2026-11-08 发布加固轮（`2026-11-07_fix-nexuscli-release-hardening`，同步至 HEAD e8f3b74）：带 【发布加固】 的行是本轮把 pty / 并发 / 恢复 / workbench 四类证据落成机器验证的表面。pty 断言全部改为「自建 pty + 应答 `ESC[6n` CPR」的驱动（AGENTS.md 教训：裸 pty 不应答 CPR 会整屏错位，跑出来的"通过"是假结论）；这些 pty 用例在 Windows 上整体 skip（openpty/fcntl/termios 与 tty ISIG 按键投递均为 POSIX-only，skip 原因写在各测试的 skipif marker 里）；CLI 入口未构建（`.venv` 缺 `nexuscli`）时同样 skip 并注明。并发恢复断言见 `tests/test_concurrent_recovery.py`（plan/team 同事件循环并行 + journal 恢复：副作用恰好一次、历史不串线）。
 
 ---
 
@@ -45,14 +47,14 @@
 |---|---|---|---|---|---|
 | 2.1 | ReAct 循环 + 工具调用 | "帮我看看这个仓库用了什么依赖" | `test_agent_turns.py` | 真实网关多轮、工具返回事实正确 | ✅ |
 | 2.2 | thinking 流式展示 | 复杂任务时看模型在想什么 | `test_render.py` | 真实网关可见 `thinking…` 增量 | ✅ |
-| 2.3 | Plan-and-Execute（`--mode plan` / `/plan`） | 让它先规划再动手 | `test_plan.py`、`test_plan_checkpoint.py` | 实测 DAG 跑通，checkpoint 落盘 | ✅ |
+| 2.3 | Plan-and-Execute（`--mode plan` / `/plan`） | 让它先规划再动手 | `test_plan.py`、`test_plan_checkpoint.py`、`test_concurrent_recovery.py`【发布加固】 | 实测 DAG 跑通，checkpoint 落盘；并行批次 journal 去重见 2.10 | ✅ |
 | 2.4 | plan 只读闸门（`Shift+Tab` → plan） | 只读调研，确认方案再执行 | `test_plan_mode.py` | pty 实测写工具被硬拒、不写审计 | ✅ |
 | 2.5 | `--mode plan` 的只读语义 | 同上，但走单次模式 | `test_cli.py` | 本轮修复后实测写入被拒 | ✅ |
-| 2.6 | Multi-Agent team 模式 | "并行审计这几个模块" | `test_multi_agent.py` | 真实网关跑通，Phase 1/2 结构正确 | ✅ |
+| 2.6 | Multi-Agent team 模式 | "并行审计这几个模块" | `test_multi_agent.py`、`test_concurrent_recovery.py`【发布加固】 | 真实网关跑通，Phase 1/2 结构正确；与 plan 同事件循环并行跑通，worker 输入与历史互不串线 | ✅ |
 | 2.7 | 【收口】team 的 worker-mode=plan | worker 内部再走 plan | `test_lane_c_modes.py` | pty 实测 `--mode plan` 写工具被硬拒;修复 plan worker 从不置位 `plan_mode` 的缺陷;用户 pin 优先于 planner 步级 mode(round2 复验) | ✅ |
 | 2.8 | 【收口】工具循环检测 | 模型卡在同一个调用上要能止损 | `test_loop_detection.py` | 真实网关单回合 6 次同参 list_dir,nudge→abort 止损信息可读 | ✅ |
 | 2.9 | 【收口】provider 超限自动压缩重试 | 长会话撞 context 上限 | `test_overflow_retry.py` | 生产 react 循环+真实压缩器;provider 错误为 client 接缝注入(网关实测 600KB/1.4MB 均接受,无法自然触发,如实标注) | ✅ |
-| 2.10 | 【收口】中断后续跑（`/plan --resume`） | 计划跑到一半 Ctrl+C，第二天续 | `test_plan_checkpoint.py` | pty 实测 task_2 中断后续跑跳过 task_1;摘要「首批任务」指向未完成批次(round2 复验) | ✅ |
+| 2.10 | 【收口】中断后续跑（`/plan --resume`） | 计划跑到一半 Ctrl+C，第二天续 | `test_plan_checkpoint.py`、`test_concurrent_recovery.py`【发布加固】 | pty 实测 task_2 中断后续跑跳过 task_1;摘要「首批任务」指向未完成批次(round2 复验);并发批次崩溃后 resume 按 journal 复放（tool_use_id 与 hash 两路去重），副作用恰好一次、run_id 不漂移 | ✅ |
 
 ## 三、REPL 交互表面
 
@@ -61,8 +63,8 @@
 | 3.1 | 底部状态栏（模型 · effort · 上下文条 · cwd · 权限） | 随时知道自己在什么状态 | `test_render.py` | pty 实测 120/60/48 列三档 | ✅ |
 | 3.2 | `Shift+Tab` 三态循环 | 临时切 auto 放行、切 plan 只读 | `test_permission_mode.py` | pty 实测 Default→Auto→plan→Default | ✅ |
 | 3.3 | 【已修】窄终端下的状态栏（≤60 列） | 分屏或小窗口里用 | `test_render.py` | 48 列 pty 实测模式名保留：`cbcn/glm-5.3-flash  Default  ⇧Tab` | ✅ |
-| 3.4 | 回合中途 Ctrl+C | 发现方向错了立刻打断 | 无（上一轮补的 pty 验证） | pty 实测：修复前杀进程，修复后中止回合且 `/exit` 正常 | ✅ |
-| 3.5 | 【收口】空 prompt 上 Ctrl+C | 想清屏/退出 | `test_plain_exits.py` | pty 实测 exit=0;自动化同断言(POSIX skipif win32) | ✅ |
+| 3.4 | 【发布加固】回合中途 Ctrl+C | 发现方向错了立刻打断 | `test_pty_sigint.py` | pty 实测：修复前杀进程，修复后中止回合且 `/exit` 正常；自动化复验同一契约——自建 pty 应答 `ESC[6n` CPR 后真发 SIGINT，回合中止（"Interrupted — turn aborted."）、进程存活、`/exit` 退出码 0、无 `SystemExit(130)`/traceback（POSIX skipif win32） | ✅ |
+| 3.5 | 【收口】空 prompt 上 Ctrl+C | 想清屏/退出 | `test_plain_exits.py`、`test_pty_sigint.py`【发布加固】 | pty 实测 exit=0;自动化同断言(POSIX skipif win32)；发布加固轮在应答 CPR 的 pty 上复验 exit=0 且 ≠130 | ✅ |
 | 3.6 | 【收口】Ctrl+D 退出 | 惯用退出键 | `test_plain_exits.py` | pty 实测 exit=0;自动化同断言 | ✅ |
 | 3.7 | 【已修】斜杠命令 Tab 补全 | 打 `/sk` 按 Tab 补成 `/skill` | `test_slash_completion.py` | pty 实测 `/sk<Tab>` → `/skill` | ✅ |
 | 3.8 | 【已修】placeholder 文案 | 照着提示敲图片路径 | `test_repl.py` | pty 实测 `Type your message or @image:path/to/file` | ✅ |
@@ -210,6 +212,7 @@
 | 11.7 | `eval list/run` | 改坏了看回归 | `test_eval.py` | 实测 3/3 通过 | ✅ |
 | 11.8 | 【已修】eval 在 wheel 形态 | `pip install` 后跑 eval | `test_eval.py` | 内置场景随包分发 | ✅ |
 | 11.9 | 【收口】SDK `create_default_engine` | 在 Python 里调 | `test_lane_e_mcp_sdk.py` | 真实创建引擎并跑通一个 turn | ✅ |
+| 11.10 | 【发布加固】workbench 前端 dist 解析 | 打开 workbench 空态，要知道去哪找 dist | `test_workbench_dist.py`、`test_runtime_static.py` | `uv run pytest -q tests/test_workbench_dist.py tests/test_runtime_static.py` → 19 passed（HEAD e8f3b74 本机实跑）：env → 仓库根 → 包内 → 旧 cwd 四级顺序、缺 index.html 降级、空态页列出已尝试路径与修复指引；真人浏览器端到端未在本轮复跑 | 🟡 |
 
 ## 十二、扩展机制
 
@@ -251,9 +254,9 @@
 |---|---|---|
 | ✅ 已测 | 146 | 机器验证 + 真实运行都有 |
 | 🟠 仅真人 | 0 | —（2026-10-19 发布收口轮补齐九项断言） |
-| 🟡 仅机器 | 1 | 有断言，真实端到端被上游环境卡住（14.2 远程图片，CLI 契约 wire 级已证） |
+| 🟡 仅机器 | 2 | 有断言，暂无本轮真实运行记录（14.2 远程图片端到端被上游网关卡住；11.10 workbench dist 解析仅本机 pytest 实跑，浏览器走查待复） |
 | ⬜ 未测 | 0 | — |
-| **合计** | **147** | |
+| **合计** | **148** | |
 
 ### 收口轮（`verify-zero-and-yellow`，两轮工作流）补上的验证
 
@@ -264,7 +267,14 @@
 ### 仍然没测的
 
 1. **14.2 远程图片端到端**：上游网关当前拒收一切远程图片 URL（CLI 直传契约已由 wire dump 证实正确），待上游恢复复跑即可置绿。
-2. **低危接受项**：loop 止损文案单复数（"1 turns"）、/expert 中游子代理空产出仅在最终报告可见、弱模型对召回约束的遵守是概率性的（对抗问法下不保证）、站点 .brand-logo 渐变白字（WCAG logo 豁免）。
+2. **11.10 workbench dist 解析**：机器验证已到 HEAD（2026-11-08，19 passed），真人浏览器端到端走查未在本轮复跑；`frontend/e2e/workbench.spec.ts` 仍在，需要时由 playwright 出证据。
+3. **低危接受项**：loop 止损文案单复数（"1 turns"）、/expert 中游子代理空产出仅在最终报告可见、弱模型对召回约束的遵守是概率性的（对抗问法下不保证）、站点 .brand-logo 渐变白字（WCAG logo 豁免）。
+
+### 发布加固轮（2026-11-08，HEAD e8f3b74）补上的验证
+
+- **pty SIGINT（3.4/3.5）**：新增 `tests/test_pty_sigint.py`——自建 pty、逐条应答 `ESC[6n` CPR（AGENTS.md：裸 pty 不应答 CPR 会整屏错位）、子进程 `setsid`+`TIOCSCTTY` 认领控制终端后按 ISIG 真发 SIGINT。回合中断言「Interrupted — turn aborted. + 进程存活 + `/exit` exit 0 + 无 SystemExit(130)/traceback」；空 prompt 断言 exit 0。Windows skip（POSIX-only），CLI 入口缺失也 skip 并注明。
+- **plan/team 并发 + journal 恢复（2.3/2.6/2.10）**：新增 `tests/test_concurrent_recovery.py`——同事件循环、同 journal 单例下 plan 并行批次与 team 并行 worker 并发跑：四个副作用恰好一次、两侧历史与任务输入互不串线、journal 只落 plan 的 run_id（异 run_id 查无）；并行批次崩溃后 resume 沿 tool_use_id 复放、链式崩溃后 resume 沿 hash 复放，均恰好一次且与并发 team run 隔离。
+- **workbench（11.10）**：`test_workbench_dist.py` + `test_runtime_static.py` 19 passed 本机实跑入表（🟡，浏览器走查待复）。
 
 ---
 

@@ -9,6 +9,33 @@
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/testing-matrix.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
+  <style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>
   <script>
     (function () {
       try {
@@ -27,6 +54,11 @@
         <a href="../index.html#features">功能</a>
         <a href="../index.html#docs">文档</a>
         <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
       </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
@@ -56,6 +88,7 @@
 <li><a href="#十五汇总">十五、汇总</a><ul>
 <li><a href="#收口轮verify-zero-and-yellow两轮工作流补上的验证">收口轮（verify-zero-and-yellow，两轮工作流）补上的验证</a></li>
 <li><a href="#仍然没测的">仍然没测的</a></li>
+<li><a href="#发布加固轮2026-11-08head-e8f3b74补上的验证">发布加固轮（2026-11-08，HEAD e8f3b74）补上的验证</a></li>
 </ul>
 </li>
 <li><a href="#附怎么复现这张表">附：怎么复现这张表</a></li>
@@ -102,6 +135,7 @@
 <blockquote>
 <p>2026-10-18 第二轮（<code>fix-audit-residual</code>）之后，表中带 【本轮】 的行是这一轮补的真实运行/机器验证；带 【已修】 的缺陷行是本轮修掉并复测过的。</p>
 <p>2026-10-19 收口轮（<code>verify-zero-and-yellow</code>，两轮工作流 + 轮间修复）：带 【收口】 的行是这两轮补齐的 62 个表面（17 ⬜ + 45 🟡 对应行，含 /history 主线程补测）。证据明细在 <code>.spec/specs/2026-10-18_verify-zero-and-yellow/evidence/</code>；两轮共修复 13 个真实运行暴露的缺陷，全部带回归测试。</p>
+<p>2026-11-08 发布加固轮（<code>2026-11-07_fix-nexuscli-release-hardening</code>，同步至 HEAD e8f3b74）：带 【发布加固】 的行是本轮把 pty / 并发 / 恢复 / workbench 四类证据落成机器验证的表面。pty 断言全部改为「自建 pty + 应答 <code>ESC[6n</code> CPR」的驱动（AGENTS.md 教训：裸 pty 不应答 CPR 会整屏错位，跑出来的"通过"是假结论）；这些 pty 用例在 Windows 上整体 skip（openpty/fcntl/termios 与 tty ISIG 按键投递均为 POSIX-only，skip 原因写在各测试的 skipif marker 里）；CLI 入口未构建（<code>.venv</code> 缺 <code>nexuscli</code>）时同样 skip 并注明。并发恢复断言见 <code>tests/test_concurrent_recovery.py</code>（plan/team 同事件循环并行 + journal 恢复：副作用恰好一次、历史不串线）。</p>
 </blockquote>
 <hr>
 <h2 id="一启动与入口"><a class="toclink" href="#一启动与入口">一、启动与入口</a></h2>
@@ -240,8 +274,8 @@
 <td>2.3</td>
 <td>Plan-and-Execute（<code>--mode plan</code> / <code>/plan</code>）</td>
 <td>让它先规划再动手</td>
-<td><code>test_plan.py</code>、<code>test_plan_checkpoint.py</code></td>
-<td>实测 DAG 跑通，checkpoint 落盘</td>
+<td><code>test_plan.py</code>、<code>test_plan_checkpoint.py</code>、<code>test_concurrent_recovery.py</code>【发布加固】</td>
+<td>实测 DAG 跑通，checkpoint 落盘；并行批次 journal 去重见 2.10</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -264,8 +298,8 @@
 <td>2.6</td>
 <td>Multi-Agent team 模式</td>
 <td>"并行审计这几个模块"</td>
-<td><code>test_multi_agent.py</code></td>
-<td>真实网关跑通，Phase 1/2 结构正确</td>
+<td><code>test_multi_agent.py</code>、<code>test_concurrent_recovery.py</code>【发布加固】</td>
+<td>真实网关跑通，Phase 1/2 结构正确；与 plan 同事件循环并行跑通，worker 输入与历史互不串线</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -296,8 +330,8 @@
 <td>2.10</td>
 <td>【收口】中断后续跑（<code>/plan --resume</code>）</td>
 <td>计划跑到一半 Ctrl+C，第二天续</td>
-<td><code>test_plan_checkpoint.py</code></td>
-<td>pty 实测 task_2 中断后续跑跳过 task_1;摘要「首批任务」指向未完成批次(round2 复验)</td>
+<td><code>test_plan_checkpoint.py</code>、<code>test_concurrent_recovery.py</code>【发布加固】</td>
+<td>pty 实测 task_2 中断后续跑跳过 task_1;摘要「首批任务」指向未完成批次(round2 复验);并发批次崩溃后 resume 按 journal 复放（tool_use_id 与 hash 两路去重），副作用恰好一次、run_id 不漂移</td>
 <td>✅</td>
 </tr>
 </tbody>
@@ -341,18 +375,18 @@
 </tr>
 <tr>
 <td>3.4</td>
-<td>回合中途 Ctrl+C</td>
+<td>【发布加固】回合中途 Ctrl+C</td>
 <td>发现方向错了立刻打断</td>
-<td>无（上一轮补的 pty 验证）</td>
-<td>pty 实测：修复前杀进程，修复后中止回合且 <code>/exit</code> 正常</td>
+<td><code>test_pty_sigint.py</code></td>
+<td>pty 实测：修复前杀进程，修复后中止回合且 <code>/exit</code> 正常；自动化复验同一契约——自建 pty 应答 <code>ESC[6n</code> CPR 后真发 SIGINT，回合中止（"Interrupted — turn aborted."）、进程存活、<code>/exit</code> 退出码 0、无 <code>SystemExit(130)</code>/traceback（POSIX skipif win32）</td>
 <td>✅</td>
 </tr>
 <tr>
 <td>3.5</td>
 <td>【收口】空 prompt 上 Ctrl+C</td>
 <td>想清屏/退出</td>
-<td><code>test_plain_exits.py</code></td>
-<td>pty 实测 exit=0;自动化同断言(POSIX skipif win32)</td>
+<td><code>test_plain_exits.py</code>、<code>test_pty_sigint.py</code>【发布加固】</td>
+<td>pty 实测 exit=0;自动化同断言(POSIX skipif win32)；发布加固轮在应答 CPR 的 pty 上复验 exit=0 且 ≠130</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -1279,6 +1313,14 @@
 <td>真实创建引擎并跑通一个 turn</td>
 <td>✅</td>
 </tr>
+<tr>
+<td>11.10</td>
+<td>【发布加固】workbench 前端 dist 解析</td>
+<td>打开 workbench 空态，要知道去哪找 dist</td>
+<td><code>test_workbench_dist.py</code>、<code>test_runtime_static.py</code></td>
+<td><code>uv run pytest -q tests/test_workbench_dist.py tests/test_runtime_static.py</code> → 19 passed（HEAD e8f3b74 本机实跑）：env → 仓库根 → 包内 → 旧 cwd 四级顺序、缺 index.html 降级、空态页列出已尝试路径与修复指引；真人浏览器端到端未在本轮复跑</td>
+<td>🟡</td>
+</tr>
 </tbody>
 </table>
 <h2 id="十二扩展机制"><a class="toclink" href="#十二扩展机制">十二、扩展机制</a></h2>
@@ -1485,8 +1527,8 @@
 </tr>
 <tr>
 <td>🟡 仅机器</td>
-<td>1</td>
-<td>有断言，真实端到端被上游环境卡住（14.2 远程图片，CLI 契约 wire 级已证）</td>
+<td>2</td>
+<td>有断言，暂无本轮真实运行记录（14.2 远程图片端到端被上游网关卡住；11.10 workbench dist 解析仅本机 pytest 实跑，浏览器走查待复）</td>
 </tr>
 <tr>
 <td>⬜ 未测</td>
@@ -1495,7 +1537,7 @@
 </tr>
 <tr>
 <td><strong>合计</strong></td>
-<td><strong>147</strong></td>
+<td><strong>148</strong></td>
 <td></td>
 </tr>
 </tbody>
@@ -1509,8 +1551,15 @@
 <h3 id="仍然没测的"><a class="toclink" href="#仍然没测的">仍然没测的</a></h3>
 <ol>
 <li><strong>14.2 远程图片端到端</strong>：上游网关当前拒收一切远程图片 URL（CLI 直传契约已由 wire dump 证实正确），待上游恢复复跑即可置绿。</li>
+<li><strong>11.10 workbench dist 解析</strong>：机器验证已到 HEAD（2026-11-08，19 passed），真人浏览器端到端走查未在本轮复跑；<code>frontend/e2e/workbench.spec.ts</code> 仍在，需要时由 playwright 出证据。</li>
 <li><strong>低危接受项</strong>：loop 止损文案单复数（"1 turns"）、/expert 中游子代理空产出仅在最终报告可见、弱模型对召回约束的遵守是概率性的（对抗问法下不保证）、站点 .brand-logo 渐变白字（WCAG logo 豁免）。</li>
 </ol>
+<h3 id="发布加固轮2026-11-08head-e8f3b74补上的验证"><a class="toclink" href="#发布加固轮2026-11-08head-e8f3b74补上的验证">发布加固轮（2026-11-08，HEAD e8f3b74）补上的验证</a></h3>
+<ul>
+<li><strong>pty SIGINT（3.4/3.5）</strong>：新增 <code>tests/test_pty_sigint.py</code>——自建 pty、逐条应答 <code>ESC[6n</code> CPR（AGENTS.md：裸 pty 不应答 CPR 会整屏错位）、子进程 <code>setsid</code>+<code>TIOCSCTTY</code> 认领控制终端后按 ISIG 真发 SIGINT。回合中断言「Interrupted — turn aborted. + 进程存活 + <code>/exit</code> exit 0 + 无 SystemExit(130)/traceback」；空 prompt 断言 exit 0。Windows skip（POSIX-only），CLI 入口缺失也 skip 并注明。</li>
+<li><strong>plan/team 并发 + journal 恢复（2.3/2.6/2.10）</strong>：新增 <code>tests/test_concurrent_recovery.py</code>——同事件循环、同 journal 单例下 plan 并行批次与 team 并行 worker 并发跑：四个副作用恰好一次、两侧历史与任务输入互不串线、journal 只落 plan 的 run_id（异 run_id 查无）；并行批次崩溃后 resume 沿 tool_use_id 复放、链式崩溃后 resume 沿 hash 复放，均恰好一次且与并发 team run 隔离。</li>
+<li><strong>workbench（11.10）</strong>：<code>test_workbench_dist.py</code> + <code>test_runtime_static.py</code> 19 passed 本机实跑入表（🟡，浏览器走查待复）。</li>
+</ul>
 <hr>
 <h2 id="附怎么复现这张表"><a class="toclink" href="#附怎么复现这张表">附：怎么复现这张表</a></h2>
 <pre><code class="language-bash"># 机器验证：全量
@@ -1532,6 +1581,113 @@ uv run nexuscli
   <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
 </footer><script src="../site.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "../";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {

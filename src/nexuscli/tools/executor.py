@@ -275,14 +275,15 @@ class ToolExecutor:
                 context.run_scope_approved.add(tool.name)
             if decision in {"deny", "skip"}:
                 approver = "hitl"
-                audit.record(
-                    tool_name=tool.name,
-                    input_data=data,
-                    outcome=decision,
-                    approver=approver,
-                    cwd=context.cwd,
-                    trace_id=trace_id,
-                )
+                if context.config.features.audit_log:
+                    audit.record(
+                        tool_name=tool.name,
+                        input_data=data,
+                        outcome=decision,
+                        approver=approver,
+                        cwd=context.cwd,
+                        trace_id=trace_id,
+                    )
                 return ToolResult(
                     tool_use_id=tool_call_id,
                     content=_denial_message(tool.name, decision, context),

@@ -47,6 +47,20 @@ def loop_abort_warning(turns: int, threshold: int) -> str:
     )
 
 
+def max_turns_warning(max_turns: int) -> str:
+    """User-facing warning for a run cut off by the ``max_turns`` budget.
+
+    Shared verbatim by the react loop (agent.py) and the standalone query
+    path (query.py) so both emit the same readable text instead of one
+    path silently truncating while the other warns.
+    """
+    return (
+        f"Reached the agent.max_turns limit ({max_turns}); the task "
+        "may be unfinished. Raise agent.max_turns in config.json to "
+        "continue longer."
+    )
+
+
 def tool_call_fingerprint(name: str, arguments: Any) -> str:
     """Stable fingerprint for one tool call: tool name + normalized arguments.
 

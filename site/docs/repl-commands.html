@@ -9,6 +9,33 @@
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/repl-commands.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
+  <style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>
   <script>
     (function () {
       try {
@@ -27,6 +54,11 @@
         <a href="../index.html#features">功能</a>
         <a href="../index.html#docs">文档</a>
         <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
       </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
@@ -153,6 +185,113 @@ checkpoint 每 react 轮写两次（执行前 in-flight / 轮末覆盖）；明�
   <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
 </footer><script src="../site.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "../";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {

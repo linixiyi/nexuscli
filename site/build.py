@@ -1,5 +1,6 @@
 # Local docs-site generator.
-# Renders docs/*.md + TUTORIAL.md into site/ HTML pages with a shared shell.
+# Renders docs/*.md + TUTORIAL.md into site/ HTML pages with a shared shell,
+# plus site/search-index.json for the shell's client-side search box.
 #
 # Canonical run command (the only supported one):
 #   uv run --with markdown,pygments python site/build.py
@@ -11,6 +12,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from pathlib import Path
 
@@ -26,7 +28,10 @@ REPO = "https://github.com/linixiyi/nexuscli"
 DOC_META = {
     "config": ("🔧", "配置优先级链、provider key、价格覆盖与循环/回合上限"),
     "cron": ("⏰", "离线任务注册表与外部调度器驱动方式"),
-    "eval": ("🧪", "双轨评测：hermetic 回归门禁 + 真模型轨道（消融、pass^k 稳定性、受控写域质量门）"),
+    "eval": (
+        "🧪",
+        "双轨评测：hermetic 回归门禁 + 真模型轨道（消融、pass^k 稳定性、受控写域质量门）",
+    ),
     "hooks": ("🪝", "七个生命周期事件的挂载方式与安全约束"),
     "mcp": ("🔌", "stdio / HTTP server 接入、工具过滤与自身暴露为 server"),
     "memory-context": ("🧠", "记忆三层、动态召回、压缩预算与 provider 超限重试"),
@@ -42,7 +47,10 @@ DOC_META = {
     "slash-commands": ("🪄", "markdown 提示词、frontmatter 与占位符注入"),
     "spec-skill": ("📐", "规范驱动开发技能的核心概念与质量门禁"),
     "subagents": ("🧩", "后台委派、自定义代理定义与文件邮箱"),
-    "tools": ("🧰", "内置工具补充口径：pdf/rg 差异、vfs 视图、BM25 检索（scope 目录限定）与图片输入"),
+    "tools": (
+        "🧰",
+        "内置工具补充口径：pdf/rg 差异、vfs 视图、BM25 检索（scope 目录限定）与图片输入",
+    ),
     "testing-matrix": ("🧭", "147 个用户表面的测试状态：测过什么、没测过什么"),
     "workflows": ("🔀", "JSON 步骤图 DAG、依赖批次并行与内置专家流程"),
 }
@@ -142,6 +150,70 @@ def first_h1(markdown_src: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# search index: title / path / plain-text summary per page
+# --------------------------------------------------------------------------
+
+SEARCH_SUMMARY_LEN = 180
+
+
+def plain_text(markdown_src: str) -> str:
+    """Markdown -> single-line plain text, for search summaries.
+
+    Drops fenced code / inline markup; keeps the prose so CJK and English
+    terms are both searchable. Not a full renderer — summary-grade fidelity.
+    """
+    text = re.sub(r"```.*?```", " ", markdown_src, flags=re.S)  # fenced code
+    text = re.sub(r"^\s*\|?\s*:?-{3,}[\s:|-]*\|?\s*$", " ", text, flags=re.M)  # table rules
+    text = re.sub(r"`([^`]*)`", r"\1", text)  # inline code
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)  # images
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # links -> link text
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.M)  # heading markers
+    text = re.sub(r"^\s*>+\s?", "", text, flags=re.M)  # blockquotes
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.M)  # list bullets
+    text = re.sub(r"^!!!.*$", "", text, flags=re.M)  # admonition directives
+    text = text.replace("|", " ")
+    text = re.sub(r"[*_]+", "", text)  # emphasis markers
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def page_summary(markdown_src: str) -> str:
+    """Body summary: drop the H1 (the title is indexed separately)."""
+    body = re.sub(r"^#\s+.+?$", "", markdown_src, count=1, flags=re.M)
+    return plain_text(body)[:SEARCH_SUMMARY_LEN]
+
+
+def build_search_index() -> None:
+    """Emit site/search-index.json consumed by the shell's client-side search.
+
+    Paths are site-root-relative (``docs/config.html``); the inlined search
+    script prefixes them with the page's ``rel`` prefix at runtime.
+    """
+    entries = []
+    for name in PAGER_ORDER:
+        src = (ROOT / "docs" / f"{name}.md").read_text(encoding="utf-8")
+        entries.append(
+            {
+                "title": first_h1(src) or name,
+                "path": f"docs/{name}.html",
+                "summary": page_summary(src),
+            }
+        )
+    tutorial_src = (ROOT / "TUTORIAL.md").read_text(encoding="utf-8")
+    entries.append(
+        {
+            "title": first_h1(tutorial_src) or "运行教程",
+            "path": "tutorial.html",
+            "summary": page_summary(tutorial_src),
+        }
+    )
+    (SITE / "search-index.json").write_text(
+        json.dumps(entries, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+    )
+    print(f"  search-index.json  <-  {len(entries)} pages")
+
+
+# --------------------------------------------------------------------------
 # link rewriting: repo-relative .md links -> site pages / GitHub
 # --------------------------------------------------------------------------
 
@@ -175,6 +247,150 @@ def rewrite_links(html_str: str, in_docs_dir: bool) -> str:
 # --------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# client-side search over search-index.json
+# --------------------------------------------------------------------------
+# style.css / site.js are hand-maintained outside this script, so the search
+# box ships as inline <style>/<script> emitted by the shell below. __REL__ in
+# SEARCH_JS is replaced per page with the root-relative prefix ("../" on doc
+# pages, "" at the site root) so index paths resolve from any depth.
+
+
+SEARCH_STYLE = """<style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>"""
+
+SEARCH_JS = """(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "__REL__";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+"""
+
+
 def nav_html(rel: str) -> str:
     return f"""<nav class="nav">
     <div class="nav-inner">
@@ -183,6 +399,11 @@ def nav_html(rel: str) -> str:
         <a href="{rel}index.html#features">功能</a>
         <a href="{rel}index.html#docs">文档</a>
         <a href="{rel}tutorial.html">教程</a>
+      </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
       </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="{REPO}" target="_blank" rel="noopener">★ GitHub</a>
@@ -193,6 +414,7 @@ def nav_html(rel: str) -> str:
 
 def shell(*, title: str, url: str, body: str, rel: str, desc: str = "") -> str:
     desc_tag = f'\n  <meta name="description" content="{html.escape(desc)}">' if desc else ""
+    search_js = SEARCH_JS.replace("__REL__", rel)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>
@@ -203,6 +425,7 @@ def shell(*, title: str, url: str, body: str, rel: str, desc: str = "") -> str:
   <meta property="og:url" content="{url}">
   <link rel="icon" href="{FAVICON}">
   <link rel="stylesheet" href="{rel}style.css">
+  {SEARCH_STYLE}
   {THEME_HEAD}
 </head>
 <body>
@@ -212,6 +435,9 @@ def shell(*, title: str, url: str, body: str, rel: str, desc: str = "") -> str:
   <p>NexusCLI · <a href="{REPO}" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="{rel}index.html">← 返回首页</a></p>
 </footer><script src="{rel}site.js"></script>
+<script>
+{search_js}
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {{
@@ -371,6 +597,8 @@ def main() -> None:
         build_doc_page(name)
     print("building tutorial page:")
     build_tutorial_page()
+    print("building search index:")
+    build_search_index()
     print("done.")
 
 

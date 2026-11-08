@@ -6,10 +6,13 @@ file body is a prompt template; an optional YAML-ish frontmatter may set a
 ``description``, ``mode``, ``allowed-tools``, or ``argument-hint``.
 ``$ARGUMENTS`` in the body receives whatever the user typed after the command
 name, ``$1..$9`` receive the first nine positional arguments, and
-``!`cmd` `` fragments are replaced with the command's stdout (dangerous
-commands are refused by the command guard). When no placeholder is present,
-arguments are appended to the prompt. The expanded prompt is sent to the agent
-as a normal message.
+``!`cmd` `` fragments are replaced with the command's stdout. Each fragment
+runs through the same ToolExecutor gate chain as every tool — CommandGuard
+refusal, permission rules, hooks, HITL approval, audit — and spawns with a
+sanitized child environment (project-scope commands require a human
+approval and fail closed without one; user-scope commands auto-execute).
+When no placeholder is present, arguments are appended to the prompt. The
+expanded prompt is sent to the agent as a normal message.
 
 The built-in ``/init`` command is not file-backed: :func:`build_init_prompt`
 expands ``/init [notes]`` (REPL branch and ``-p "/init"`` in cli.py) into a
@@ -20,15 +23,22 @@ custom command named ``init`` keeps priority over the built-in one.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from nexuscli.config import NexusCliConfig
 from nexuscli.plugins import load_plugins
-from nexuscli.policy.command_guard import CommandGuard, CommandPolicyError
+from nexuscli.policy import CommandGuard
+from nexuscli.policy.command_guard import CommandPolicyError
+from nexuscli.tools.base import Tool, ToolContext, ToolDecision, ToolResult, object_schema
 from nexuscli.tools.commands import CommandExecutor
+from nexuscli.tools.executor import ToolExecutor
+from nexuscli.tools.registry import ToolRegistry
 from nexuscli.workflow import WorkflowGraph, WorkflowStep
 
 ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"
@@ -43,24 +53,29 @@ _SHELL_INJECTION_PATTERN = re.compile(r"!`([^`]+)`")
 # ``$1`` .. ``$9`` positional argument placeholders.
 _POSITIONAL_PATTERN = re.compile(r"\$([1-9])")
 
-# Fallback executor for ``!`cmd` `` fragments when no config is supplied; its
-# CommandGuard refuses built-in destructive commands before anything is
-# spawned. Callers that have a config (the REPL) get a guard preloaded with
-# policy.command_blacklist via :func:`_injection_executor`.
-_INJECTION_EXECUTOR = CommandExecutor()
+# Internal tool name the ``!`cmd` `` fragments execute as (see
+# :func:`_slash_injection_tool`): one registry entry per expansion, never
+# exposed to the model's own tool list.
+SLASH_INJECTION_TOOL = "slash_injection"
+
+# Same contract as ToolContext.approval_callback: a sync or async callable
+# receiving the approval request dict and returning a ToolDecision.
+ApprovalCallback = Callable[[dict[str, Any]], Awaitable[ToolDecision] | ToolDecision]
 
 
-def _injection_executor(config: NexusCliConfig | None) -> CommandExecutor:
-    """Executor for ``!`cmd` `` fragments, honoring the configured blacklist.
+def _injection_guard(config: NexusCliConfig | None) -> CommandGuard:
+    """CommandGuard for ``!`cmd` `` fragments, honoring the configured blacklist.
 
     The bash tool validates every command against
     ``CommandGuard(config.policy.command_blacklist)``; command expansion must
     not be a side door around it, so the same blacklist applies here. The
-    built-in destructive-command patterns stay active either way.
+    built-in destructive-command patterns stay active either way. The guard
+    runs before the ToolExecutor gate chain: a dangerous command is refused
+    outright and never reaches approval or spawn.
     """
     if config is None:
-        return _INJECTION_EXECUTOR
-    return CommandExecutor(command_guard=CommandGuard(list(config.policy.command_blacklist)))
+        return CommandGuard()
+    return CommandGuard(list(config.policy.command_blacklist))
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +86,7 @@ class CustomCommand:
     source: str = "user"  # "user" or "project"
     path: Path | None = None
     mode: str = ""  # "react" | "plan" | "team"; empty = leave unchanged
+    raw_mode: str = ""  # raw frontmatter value; differs from `mode` only when illegal
     allowed_tools: tuple[str, ...] = ()  # empty = no filtering
     argument_hint: str = ""
 
@@ -111,6 +127,7 @@ def _parse_command_file(path: Path, source: str) -> CustomCommand | None:
         return None
     description = ""
     mode = ""
+    raw_mode = ""
     allowed_tools: tuple[str, ...] = ()
     argument_hint = ""
     body = text
@@ -125,6 +142,11 @@ def _parse_command_file(path: Path, source: str) -> CustomCommand | None:
                 if key == "description":
                     description = value
                 elif key == "mode":
+                    # The illegal value is kept in raw_mode so a consumer can
+                    # report it instead of silently losing the hint (see
+                    # :func:`ensure_usable_frontmatter`); `mode` itself stays
+                    # empty to mean "no usable hint".
+                    raw_mode = value
                     mode = value if value in _VALID_MODES else ""
                 elif key == "allowed-tools":
                     allowed_tools = _split_allowed_tools(value)
@@ -139,9 +161,36 @@ def _parse_command_file(path: Path, source: str) -> CustomCommand | None:
         source=source,
         path=path,
         mode=mode,
+        raw_mode=raw_mode,
         allowed_tools=allowed_tools,
         argument_hint=argument_hint,
     )
+
+
+class CommandFrontmatterError(ValueError):
+    """A custom command's frontmatter carries an unknown/illegal value."""
+
+
+def ensure_usable_frontmatter(command: CustomCommand) -> None:
+    """Reject frontmatter values that must not be silently ignored.
+
+    ``mode`` is an enum: anything outside ``react``/``plan``/``team`` is a
+    typo the caller must hear about instead of a run that quietly loses its
+    read-only gate. The parse layer keeps ``CustomCommand.mode`` empty for
+    illegal values and preserves the raw text in ``raw_mode`` exactly so this
+    check can tell "no mode set" from "mode set to garbage". ``allowed-tools``
+    carries free-form tool names, so there is nothing to validate here — the
+    consumer reports names that matched no tool in the built registry.
+
+    Consumers that must stay lenient (the interactive REPL, which only reads
+    ``CustomCommand.mode``) simply never call this.
+    """
+    if command.mode == "" and command.raw_mode:
+        source = str(command.path) if command.path is not None else command.name
+        raise CommandFrontmatterError(
+            f"Invalid frontmatter in custom command '{command.name}' ({source}): "
+            f"unknown mode '{command.raw_mode}' (expected one of: react, plan, team)"
+        )
 
 
 def load_slash_commands(cwd: str, home: Path | None = None) -> dict[str, CustomCommand]:
@@ -210,43 +259,146 @@ def _first_line(text: str) -> str:
     return ""
 
 
-async def _run_injection(command: str, executor: CommandExecutor) -> tuple[str, str | None]:
-    """Run one ``!`cmd` `` fragment through *executor*'s CommandGuard.
+def _slash_injection_tool(guard: CommandGuard, *, requires_approval: bool) -> Tool:
+    """Internal ``slash_injection`` tool adapter for ``!`cmd` `` fragments.
 
-    Returns ``(replacement, rejection)`` where *rejection* is ``None`` on
-    success or the reason the command was refused or failed. Every failure is
-    swallowed — one bad command must not break the whole expansion.
+    The fragment executes as this tool's single call so it crosses the exact
+    same ToolExecutor gate chain as every other tool — permission rules,
+    hooks, HITL approval, audit — instead of a private side door around them.
+    ``requires_approval`` carries the command-file scope: project commands
+    (repo-controlled files) need a human decision per injection, user
+    commands (the operator's own files) run automatically; both are audited
+    and both spawn with the sanitized child environment.
+
+    The handler maps the :class:`CommandResult` onto the marker contract of
+    :func:`_run_injection`: success returns the raw stdout, an attempted but
+    failed execution returns ``error_type="command_failed"`` with the reason
+    as content, and a gate rejection never reaches the handler at all.
+    """
+
+    async def _handler(payload: dict[str, Any], context: ToolContext) -> ToolResult:
+        command = str(payload["command"])
+        timeout = float(payload.get("timeout") or INJECTION_TIMEOUT_SECONDS)
+        executor = CommandExecutor(command_guard=guard)
+        try:
+            result = await executor.execute(
+                command,
+                timeout=timeout,
+                sanitize_env=bool(context.config.policy.env_sanitization),
+            )
+        except Exception as exc:  # noqa: BLE001 - the attempt started; any failure is "failed"
+            reason = _first_line(str(exc)) or exc.__class__.__name__
+            return ToolResult(content=reason, is_error=True, error_type="command_failed")
+        if result.timed_out:
+            return ToolResult(content="timed out", is_error=True, error_type="command_failed")
+        if result.exit_code != 0:
+            reason = _first_line(result.stderr) or f"exit code {result.exit_code}"
+            return ToolResult(content=reason, is_error=True, error_type="command_failed")
+        return ToolResult(content=result.stdout)
+
+    return Tool(
+        name=SLASH_INJECTION_TOOL,
+        description=(
+            "Run one !`cmd` shell injection from a custom slash command body "
+            "and return its stdout for prompt expansion."
+        ),
+        parameters=object_schema(
+            {
+                "command": {"type": "string", "description": "Shell command to run"},
+                "timeout": {"type": "number", "description": "Timeout in seconds"},
+            },
+            ["command"],
+        ),
+        required_keys=["command"],
+        handler=_handler,
+        is_read_only=False,
+        is_concurrency_safe=False,
+        danger_level="high",
+        requires_approval=requires_approval,
+    )
+
+
+def _injection_chain(
+    config: NexusCliConfig | None,
+    *,
+    requires_approval: bool,
+    approval_callback: ApprovalCallback | None,
+) -> tuple[CommandGuard, ToolExecutor, ToolContext]:
+    """Guard + ToolExecutor + ToolContext for one command expansion.
+
+    Everything the ``!`cmd` `` fragments need to cross the shared gate chain:
+    the :func:`_injection_guard` CommandGuard, a registry holding the
+    internal ``slash_injection`` adapter, and a ToolContext carrying the
+    caller's approval callback (``None`` = no human available; project-scope
+    injections fail closed on it, exactly like the executor's other gates).
+    """
+    guard = _injection_guard(config)
+    registry = ToolRegistry()
+    registry.register(_slash_injection_tool(guard, requires_approval=requires_approval))
+    context = ToolContext(
+        cwd=os.getcwd(),
+        config=config if config is not None else NexusCliConfig(),
+        approval_callback=approval_callback,
+    )
+    return guard, ToolExecutor(registry), context
+
+
+async def _run_injection(
+    command: str,
+    guard: CommandGuard,
+    executor: ToolExecutor,
+    context: ToolContext,
+) -> tuple[str, str | None]:
+    """Run one ``!`cmd` `` fragment through CommandGuard + the ToolExecutor gate chain.
+
+    Order mirrors the bash tool: the CommandGuard refuses destructive
+    commands outright (unchanged marker, nothing is spawned, no gate is
+    consulted), then the command executes as the internal ``slash_injection``
+    tool so permission rules, hooks, HITL approval and the audit log all
+    apply. Gate rejections (no approver, denied, plan mode) become
+    ``[refused: ...]`` markers and the command is never spawned; execution
+    failures keep the ``[failed: ...]`` marker. Returns ``(replacement,
+    rejection)`` where *rejection* is ``None`` on success or the reason the
+    command was refused or failed. Every failure is swallowed — one bad
+    command must not break the whole expansion.
     """
     try:
-        result = await executor.execute(
-            command=command,
-            timeout=INJECTION_TIMEOUT_SECONDS,
-        )
+        guard.validate(command)
     except CommandPolicyError:
         reason = "blocked by command guard"
         return f"[refused: {command} — {reason}]", reason
+    call = {
+        "id": "slash-injection",
+        "name": SLASH_INJECTION_TOOL,
+        "arguments": {"command": command, "timeout": INJECTION_TIMEOUT_SECONDS},
+    }
+    try:
+        result = (await executor.execute_all([call], context))[0]
     except Exception as exc:  # noqa: BLE001 - any failure becomes a marker
         reason = _first_line(str(exc)) or exc.__class__.__name__
         return f"[failed: {command} — {reason}]", reason
-    if result.timed_out:
-        reason = "timed out"
-    elif result.exit_code != 0:
-        reason = _first_line(result.stderr) or f"exit code {result.exit_code}"
-    else:
-        return result.stdout.rstrip("\r\n"), None
-    return f"[failed: {command} — {reason}]", reason
+    if not result.is_error:
+        return result.content.rstrip("\r\n"), None
+    reason = _first_line(result.content) or result.content.strip() or "unknown failure"
+    if result.error_type == "command_failed":
+        return f"[failed: {command} — {reason}]", reason
+    # Gate rejection (approval denied / no approver / plan mode / hook): the
+    # command was never spawned, so the refusal marker is the honest report.
+    return f"[refused: {command} — {reason}]", reason
 
 
 async def _expand_shell_injections(
     prompt: str,
-    executor: CommandExecutor,
+    guard: CommandGuard,
+    executor: ToolExecutor,
+    context: ToolContext,
 ) -> tuple[str, tuple[str, ...]]:
     """Replace every ``!`cmd` `` fragment; collect refused/failed markers."""
     rejections: list[str] = []
     pieces: list[str] = []
     cursor = 0
     for match in _SHELL_INJECTION_PATTERN.finditer(prompt):
-        replacement, rejection = await _run_injection(match.group(1), executor)
+        replacement, rejection = await _run_injection(match.group(1), guard, executor, context)
         if rejection is not None:
             rejections.append(replacement)
         pieces.append(prompt[cursor : match.start()])
@@ -268,19 +420,34 @@ async def expand_command(
     command: CustomCommand,
     args: str,
     config: NexusCliConfig | None = None,
+    approval_callback: ApprovalCallback | None = None,
 ) -> CommandExpansion:
     """Expand *command* into a :class:`CommandExpansion`.
 
-    Substitution order: ``!`cmd` `` fragments first, then ``$1..$9`` (filled
-    from :func:`split_positional_args`, 1-based, out-of-range becomes empty),
-    then ``$ARGUMENTS`` with the raw *args*. A body without any placeholder
-    gets *args* appended, mirroring :func:`expand_custom_command`. When
-    *config* is given, injected commands are validated against the configured
-    ``policy.command_blacklist`` just like the bash tool.
+    Substitution order: ``!`cmd` `` fragments first (executed through the
+    ToolExecutor gate chain — see :func:`_run_injection`), then ``$1..$9``
+    (filled from :func:`split_positional_args`, 1-based, out-of-range becomes
+    empty), then ``$ARGUMENTS`` with the raw *args*. A body without any
+    placeholder gets *args* appended, mirroring :func:`expand_custom_command`.
+
+    The command-file scope drives approval: a project command (``source ==
+    "project"``, a repo-controlled file) requires a human decision for every
+    injection and fails closed without *approval_callback*; a user command
+    (the operator's own file) auto-executes. Both are audited and both spawn
+    with the sanitized child environment. When *config* is given, injected
+    commands are validated against the configured ``policy.command_blacklist``
+    just like the bash tool.
     """
+    guard, executor, context = _injection_chain(
+        config,
+        requires_approval=command.source == "project",
+        approval_callback=approval_callback,
+    )
     prompt, rejected_injections = await _expand_shell_injections(
         command.body,
-        _injection_executor(config),
+        guard,
+        executor,
+        context,
     )
     has_placeholder = bool(_POSITIONAL_PATTERN.search(prompt)) or ARGUMENTS_PLACEHOLDER in prompt
     prompt = _fill_positional_args(prompt, split_positional_args(args))

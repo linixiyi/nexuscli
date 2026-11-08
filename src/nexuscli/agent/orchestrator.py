@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Any
 
 from nexuscli.agent.query import query
+from nexuscli.agent.results import gate_denial_reason
 from nexuscli.config import NexusCliConfig
 from nexuscli.hooks.runner import fire_event, has_hooks
 from nexuscli.llm.base import LlmClient, is_transient_api_error
@@ -56,6 +57,13 @@ class AgentMessage:
     type: AgentMessageType
     usage: Usage = field(default_factory=Usage)
     turns: int = 0
+    # Task 0036 (team blocked wiring): the first permission/approval gate
+    # denial the worker's tool call hit, classified by gate_denial_reason
+    # from the is_error tool_result the inner query() loop folded. The raw
+    # tool_result events never leave the SubAgent, so the orchestrator
+    # forwards this onto the outer stream as a gate_denial event — the only
+    # way a headless team run can report status "blocked".
+    gate_denial: str | None = None
 
     @classmethod
     def task(cls, from_agent: str, content: str) -> AgentMessage:
@@ -69,8 +77,11 @@ class AgentMessage:
         content: str,
         usage: Usage | None = None,
         turns: int = 0,
+        gate_denial: str | None = None,
     ) -> AgentMessage:
-        return cls(from_agent, role, content, AgentMessageType.RESULT, usage or Usage(), turns)
+        return cls(
+            from_agent, role, content, AgentMessageType.RESULT, usage or Usage(), turns, gate_denial
+        )
 
     @classmethod
     def error(
@@ -171,25 +182,44 @@ class SubAgent:
         for attempt in range(self.transient_retries):
             text = ""
             tool_results: list[str] = []
+            gate_denial: str | None = None
+            final_messages: list[Message] | None = None
             try:
                 async for event in query(
                     llm_client=self.llm_client,
                     tool_registry=self.tool_registry,
                     system_prompt=self._system_prompt(),
                     user_message=content,
+                    # ``self.history`` is this worker's own isolated copy: the
+                    # orchestrator seeds it with ``list(self.history)`` of the
+                    # session snapshot before dispatch. The event loop never
+                    # writes a shared list — the orchestrator folds each
+                    # worker's increment back in task-index order after the
+                    # batch completes.
                     history=self.history,
                     cwd=self.cwd,
                     config=self.config,
                     approval_callback=self.approval_callback,
                     skill_context_buffer=self.skill_context_buffer,
-                    max_turns=8,
+                    # Workers share the single agent.max_turns budget with the
+                    # react loop and plan task workers — no per-path magic number.
+                    max_turns=self.config.agent.max_turns,
                 ):
                     if event.get("type") == "text_delta":
                         text += str(event.get("text") or "")
                     elif event.get("type") == "tool_result":
-                        tool_results.append(str(event.get("result") or ""))
+                        tool_result_text = str(event.get("result") or "")
+                        tool_results.append(tool_result_text)
+                        # Task 0036: a fail-closed gate refusal is otherwise
+                        # invisible outside this fold (the model usually
+                        # answers in words, so the result text fallback never
+                        # fires). Classify here — the shared marker table in
+                        # agent/results.py — and let the orchestrator forward
+                        # it; ordinary execution errors classify to None.
+                        if event.get("is_error") and gate_denial is None:
+                            gate_denial = gate_denial_reason(tool_result_text)
                     elif event.get("type") == "done":
-                        self.history = list(event.get("messages") or [])
+                        final_messages = list(event.get("messages") or [])
                         usage = usage + Usage.from_mapping(event.get("usage") or {})
                         turns += int(event.get("total_turns") or 0)
                     elif event.get("type") == "error":
@@ -201,8 +231,10 @@ class SubAgent:
                 return AgentMessage.error(self.name, self.role, str(exc), usage, turns)
             except Exception as exc:  # noqa: BLE001
                 return AgentMessage.error(self.name, self.role, str(exc), usage, turns)
+            if final_messages is not None:
+                self.history = final_messages
             result = text.strip() or "\n".join(item for item in tool_results if item).strip()
-            return AgentMessage.result(self.name, self.role, result, usage, turns)
+            return AgentMessage.result(self.name, self.role, result, usage, turns, gate_denial)
         return AgentMessage.error(self.name, self.role, str(last_error), usage, turns)
 
     async def _execute_plan(self, content: str, *, plan_depth: int) -> AgentMessage:
@@ -243,7 +275,11 @@ class SubAgent:
                     raise event["error"]
         except Exception as exc:  # noqa: BLE001
             return AgentMessage.error(self.name, self.role, str(exc), usage, turns)
+        # Keep the seeded snapshot in front of the plan envelope so the
+        # orchestrator's increment slice (``history[len(base):]``) still
+        # carries this plan worker's own messages.
         self.history = [
+            *self.history,
             Message(role="user", content=content),
             Message(role="assistant", content=text),
         ]
@@ -348,6 +384,10 @@ class AgentOrchestrator:
         self.history: list[Message] = []
         self.total_usage = Usage()
         self.total_turns = 0
+        # Task 0036: the first worker gate denial of the run (see AgentMessage
+        # and SubAgent._execute_worker), emitted once as a gate_denial event
+        # before done so headless team runs can report status "blocked".
+        self.gate_denial: str | None = None
 
     async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
         # UserPromptSubmit hooks gate the prompt before any planning work: a
@@ -384,6 +424,7 @@ class AgentOrchestrator:
         final_text = ""
         self.total_usage = Usage()
         self.total_turns = 0
+        self.gate_denial = None
         try:
             yield {"type": "text_delta", "text": "Phase 1: planner\n\n"}
             steps = await self._plan_steps(message)
@@ -409,6 +450,12 @@ class AgentOrchestrator:
             if snapshot is not None:
                 with suppress(Exception):
                     snapshot.create("post-turn")
+        # Task 0036: the worker's raw tool_result events never leave the
+        # SubAgent fold, so this event is the run's only machine-visible trace
+        # of an approval/permission refusal. Yielded before done so folds that
+        # stop at done (fold_engine_result) still see it.
+        if self.gate_denial is not None:
+            yield {"type": "gate_denial", "reason": self.gate_denial}
         done: dict[str, Any] = {
             "type": "done",
             "total_turns": self.total_turns,
@@ -484,6 +531,12 @@ class AgentOrchestrator:
                 yield event_factory(
                     f"Parallel batch: {', '.join(step.id for step in executable)}\n\n"
                 )
+            # Every worker of one batch starts from the same pre-batch
+            # snapshot; their increments are folded back only after the whole
+            # batch has finished, in task-index order — completion order must
+            # not decide history order, and no worker ever writes the
+            # orchestrator's list from the event loop (last-writer-wins).
+            batch_increments: dict[str, list[Message]] = {}
             await asyncio.gather(
                 *(
                     self._run_step_with_worker_queue(
@@ -491,10 +544,13 @@ class AgentOrchestrator:
                         steps,
                         retry_count,
                         worker_queue,
+                        batch_increments,
                     )
                     for step in executable
                 )
             )
+            for step in executable:
+                self.history = [*self.history, *batch_increments.get(step.id, [])]
 
     async def _run_step_with_worker_queue(
         self,
@@ -502,11 +558,12 @@ class AgentOrchestrator:
         steps: list[ExecutionStep],
         retry_count: dict[str, int],
         worker_queue: asyncio.Queue[SubAgent],
+        increments: dict[str, list[Message]],
     ) -> None:
         worker = await worker_queue.get()
         try:
             reviewer = self._subagent(f"reviewer-{step.id}", AgentRole.REVIEWER)
-            await self._run_step(step, steps, retry_count, worker, reviewer)
+            await self._run_step(step, steps, retry_count, worker, reviewer, increments=increments)
         finally:
             worker.clear_history()
             worker_queue.put_nowait(worker)
@@ -518,53 +575,75 @@ class AgentOrchestrator:
         retry_count: dict[str, int],
         worker: SubAgent,
         reviewer: SubAgent,
+        *,
+        increments: dict[str, list[Message]] | None = None,
     ) -> None:
-        self._update_step(steps, step.id, step.started())
-        context = self.build_step_context(steps, step)
-        task_msg = AgentMessage.task("orchestrator", step.description)
-        result = await worker.execute(task_msg, context, mode=step.mode)
-        self.total_usage = self.total_usage + result.usage
-        self.total_turns += result.turns
-        if result.type == AgentMessageType.ERROR or not result.content.strip():
-            self._update_step(steps, step.id, step.with_failed(result.content or "empty result"))
-            return
+        # Concurrent workers must not share one history list: each starts from
+        # an independent copy of the orchestrator's snapshot, and only its
+        # increment (everything past that snapshot) is recorded for the batch
+        # loop to fold back in task-index order. Assigning ``self.history``
+        # from a worker's done event was a last-writer-wins race across
+        # parallel workers.
+        base = list(self.history)
+        worker.history = list(base)
+        record = increments if increments is not None else {}
+        try:
+            self._update_step(steps, step.id, step.started())
+            context = self.build_step_context(steps, step)
+            task_msg = AgentMessage.task("orchestrator", step.description)
+            result = await worker.execute(task_msg, context, mode=step.mode)
+            self.total_usage = self.total_usage + result.usage
+            self.total_turns += result.turns
+            if result.gate_denial and self.gate_denial is None:
+                self.gate_denial = result.gate_denial
+            if result.type == AgentMessageType.ERROR or not result.content.strip():
+                self._update_step(
+                    steps, step.id, step.with_failed(result.content or "empty result")
+                )
+                return
 
-        accepted_result = result.content
-        review = await self._review_with_repair(reviewer, step.description, accepted_result)
-        self.total_usage = self.total_usage + review.usage
-        self.total_turns += review.turns
-        reviewer.clear_history()
-        approved = self.parse_review_approval(review.content)
-        issues = self.parse_review_issues(review.content)
-        retries = retry_count.get(step.id, 0)
-        while not approved and retries < self.max_retries_per_step:
-            retries += 1
-            retry_count[step.id] = retries
-            retry_context = context + f"\n\nReviewer rejected the previous result:\n{issues}"
-            retry_result = await worker.execute(task_msg, retry_context, mode=step.mode)
-            self.total_usage = self.total_usage + retry_result.usage
-            self.total_turns += retry_result.turns
-            if retry_result.type == AgentMessageType.ERROR or not retry_result.content.strip():
-                issues = retry_result.content or "empty retry result"
-                continue
-            accepted_result = retry_result.content
-            retry_review = await self._review_with_repair(
-                reviewer, step.description, accepted_result
-            )
-            self.total_usage = self.total_usage + retry_review.usage
-            self.total_turns += retry_review.turns
+            accepted_result = result.content
+            review = await self._review_with_repair(reviewer, step.description, accepted_result)
+            self.total_usage = self.total_usage + review.usage
+            self.total_turns += review.turns
             reviewer.clear_history()
-            approved = self.parse_review_approval(retry_review.content)
-            issues = self.parse_review_issues(retry_review.content)
+            approved = self.parse_review_approval(review.content)
+            issues = self.parse_review_issues(review.content)
+            retries = retry_count.get(step.id, 0)
+            while not approved and retries < self.max_retries_per_step:
+                retries += 1
+                retry_count[step.id] = retries
+                retry_context = context + f"\n\nReviewer rejected the previous result:\n{issues}"
+                retry_result = await worker.execute(task_msg, retry_context, mode=step.mode)
+                self.total_usage = self.total_usage + retry_result.usage
+                self.total_turns += retry_result.turns
+                if retry_result.gate_denial and self.gate_denial is None:
+                    self.gate_denial = retry_result.gate_denial
+                if retry_result.type == AgentMessageType.ERROR or not retry_result.content.strip():
+                    issues = retry_result.content or "empty retry result"
+                    continue
+                accepted_result = retry_result.content
+                retry_review = await self._review_with_repair(
+                    reviewer, step.description, accepted_result
+                )
+                self.total_usage = self.total_usage + retry_review.usage
+                self.total_turns += retry_review.turns
+                reviewer.clear_history()
+                approved = self.parse_review_approval(retry_review.content)
+                issues = self.parse_review_issues(retry_review.content)
 
-        if not approved:
-            self._update_step(
-                steps,
-                step.id,
-                step.with_failed(f"review rejected after {retries} retries: {issues}"),
-            )
-            return
-        self._update_step(steps, step.id, step.with_result(accepted_result))
+            if not approved:
+                self._update_step(
+                    steps,
+                    step.id,
+                    step.with_failed(f"review rejected after {retries} retries: {issues}"),
+                )
+                return
+            self._update_step(steps, step.id, step.with_result(accepted_result))
+        finally:
+            history = getattr(worker, "history", None)
+            if isinstance(history, list):
+                record[step.id] = list(history[len(base) :])
 
     async def _review_with_repair(
         self,

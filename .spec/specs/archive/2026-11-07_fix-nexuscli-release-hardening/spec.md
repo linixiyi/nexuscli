@@ -148,54 +148,59 @@ Recommendation: B0 because 用户明确要求把“要改的都写成包”，�
 <!-- spec:correction-log -->
 ### 5.5 修正日志
 
-- none.
+| round | approach | result | new information |
+| --- | --- | --- | --- |
+| 1 | 五道并行评审（CI/文档/前端/脚本/安全）+ 每条发现独立复核：确认 2 个 high（权限复合命令绕过、REPL 注入回归）与 10 个 medium（SSE 审批帧死代码、headless 漏报写域拒绝、发布链未接产物守卫、twine 浮动版本、ci.yml 无 permissions 等），就地修复 | 12/12 确认项修复成功，scoped 回归全绿（运行 dwfrun-cacfb0a4） | 新输出：prefix/deny 规则必须先按 shell 操作符拆段再逐段匹配；前端 SSE 帧必须带递增 seq 否则被 applyEvent 丢弃；新证据见 tasks.md 各任务 evidence 行与评审看板 |
+| 2 | 收尾轮：3 条接线缺口（team 模式 blocked 识别、插件工具组件生产接线、sandbox.backend 生产接线）复核确认后按各自任务意图接线；7 条 low 备忘修复（Actions 全量 commit SHA pin 并新增扫描测试锁住）；终检门禁 5/5（全量 pytest+coverage、e2e、mypy 棘轮、ruff 双检） | 全量 pytest 0 failed、coverage 棘轮与 e2e、mypy 棘轮、ruff 双检全部 exit 0（运行 dwfrun-1b24d3de） | 新输出：新增守卫/审批门的拒绝文案必须同步 agent/results.py 的 GATE_DENIAL_MARKERS，否则 `-p --json` 对被拦截运行报 ok；新证据见收尾轮看板与各修复回归记录 |
 
 <!-- spec:deviation-log -->
 ### 5.6 偏离日志
 
-- none.
+| id | literal ask | actual | reason | reversibility | authority |
+| --- | --- | --- | --- | --- | --- |
+| D1 | task_0022 boundary 限 scripts/check_coverage.py、coverage-baseline.json、ci.yml、pyproject | 授权 task_0022 实现者修复 tests/test_agent_turns.py 与 tests/test_workbench_static.py 共 6 个跨任务缝隙失败（task_0038 新增 prompt_profile 字段、task_0035 改 dist 解析顺序叠加 worktree 存在 frontend/dist 所致，阻塞全量套件绿） | 全量套件绿是 evidence: runs 门禁与包验收前提；只把测试断言更新到当前意图契约，不放宽、不改产品代码 | reversible | checkpoint（运行中升级 dwfq-523db66d-1 由主会话按用户本轮执行授权裁决，细则在 tasks.md 0022 evidence） |
+| D2 | 评审/收尾轮修复按各任务 boundary 最小改动 | 跨任务接线缺口的最小修复落在生产调用点：M1 涉 orchestrator.py 与 agent/results.py（0036 boundary 外）、M2 涉 bootstrap.py（0030 boundary 外）、M3 涉 tools/builtins.py 等调用点（0026 boundary 外） | 接线缺口本身跨任务边界，不落生产调用点则用户路径不可达，任务意图落空 | reversible | checkpoint（收尾轮 workflow 经确认启动、修复范围含接线点授权，保持 fail-closed 默认不变） |
+| D3 | 包范围含 0006 发布 PyPI、0008 demo GIF/截图、0009 main 分支保护三项 owner 手动任务 | 三项连文带 boundary/verify 逐字移出本包，转入后续包 2026-11-08_add-publish-demo-protection；本包收敛为 36 项机器任务 | 三项均需 owner 凭据/管理员权限/本地录制，AI 不可代填；用户初始指令即预定 manual 任务跳过并标注，本轮明确指令 done+push | reversible | owner grant（用户明确指令本轮 done+push；三项原文在新包中保留，可随时移回） |
 
 ## 6. 成功标准与验证方式
 
-- [ ] `ruff check .` 与 `ruff format --check .` 在仓库根目录通过，CI lint job 不再因 `site/build.py` 失败 -> verify: task_0001
-- [ ] 项目级 slash `!` 注入必须经过审批/审计/环境清洗，无审批回调时 fail-closed；用户级注入保留自动批准但仍有审计 -> verify: task_0002
-- [ ] MCP 工具的 `readOnlyHint` 不再产生本地可信只读；所有 MCP 工具 `requires_approval=True`、`is_read_only=False` -> verify: task_0003
-- [ ] wheel 内含 `nexuscli/frontend/dist/index.html`，安装后 workbench 非空态；sdist 不含 `node_modules` 与 `.spec` -> verify: task_0004
-- [ ] `v0.2.1` tag 触发 release workflow，构建并校验 wheel/sdist；版本号在 `pyproject.toml` 与 `__init__.py` 一致 -> verify: task_0005
-- [ ] 0.2.1 已发布到 PyPI，干净环境 `pip install nexuscli==0.2.1` 后 `nexuscli --version` 正确 -> verify: task_0006
-- [ ] README 有 PyPI/uv/source 三种安装路径，社区文件齐全，docs contract 测试通过 -> verify: task_0007
-- [ ] README 首屏有 20 秒 demo GIF 与 workbench 截图，`TODO(截图)` 已移除 -> verify: task_0008
-- [ ] main 分支启用 PR + required checks，直接 push 被拒绝 -> verify: task_0009
-- [ ] `query()` 与 ReAct 共享 LoopGuard，`max_turns` 撞顶有可见提示 -> verify: task_0010
-- [ ] `query()` 与 ReAct 共享 provider 超限 compact/force_trim 重试与 F12 截断保护 -> verify: task_0011
-- [ ] plan/team worker 的 `max_turns` 从 config 读取，不再 hardcode 8/200 -> verify: task_0012
-- [ ] plan 每个任务收到会话历史，任务间不串线 -> verify: task_0013
-- [ ] team 并发 worker 使用隔离 history，合并顺序确定，无 last-writer-wins -> verify: task_0014
-- [ ] plan worker 传入 journal/run_id，恢复后不重复副作用 -> verify: task_0015
-- [ ] deny/skip 分支的审计受 `features.audit_log` 控制 -> verify: task_0016
-- [ ] MCP server 不再就地改写共享 config 的 `hitl_mode` -> verify: task_0017
-- [ ] `prefix:*` 规则按词边界匹配，`git diff:*` 不放行 `git difftool` -> verify: task_0018
-- [ ] `-p "/命令"` 消费 frontmatter 的 `mode`/`allowed_tools` -> verify: task_0019
-- [ ] Playwright e2e 在 CI frontend job 中可重复通过 -> verify: task_0020
-- [ ] workbench 支持 approve_run/approve_auto、SSE 审批事件、可配 timeout，并有 e2e 覆盖 -> verify: task_0021
-- [ ] coverage 有 baseline 与 ratchet，低于 baseline 时 CI 失败 -> verify: task_0022
-- [ ] mypy 有错误数 + ignore 模块/行数 ratchet，只减不增 -> verify: task_0023
-- [ ] pty SIGINT 与并发恢复有自动化测试，testing-matrix 更新到当前 HEAD -> verify: task_0024
-- [ ] hermetic eval 在 CI 中运行，任一场景失败即失败 -> verify: task_0025
-- [ ] OS 沙箱有可选抽象 + macOS seatbelt，默认关闭，请求不可用时 fail-closed -> verify: task_0026
-- [ ] Linux bubblewrap/Landlock 后端可探测、可测试，缺依赖时给出类型化错误 -> verify: task_0027
-- [ ] 会话树有 parent/branch 元数据与 `/tree` 查询，旧会话仍可读 -> verify: task_0028
-- [ ] 压缩摘要为结构化格式并维护文件台账，长会话可恢复关键上下文 -> verify: task_0029
-- [ ] 插件支持用户级目录、命名空间、工具组件，工具走同一 ToolExecutor 审批链 -> verify: task_0030
-- [ ] Google Gemini 原生 provider 可按统一接口构建并通过 fake server 测试 -> verify: task_0031
-- [ ] Ollama/llama.cpp 本地 provider 可配置并走 OpenAI-compatible 适配 -> verify: task_0032
-- [ ] 文档站有搜索索引，README 有英文入口，示例可运行 -> verify: task_0033
-- [ ] `--mode plan` 不再把只读空转任务标为 COMPLETED；写任务被拦截时任务状态为 blocked，最终摘要与退出码不报成功 -> verify: task_0034
-- [ ] `serve --workbench --cwd <仓库外目录>` 仍能解析仓库/包内 `frontend/dist` 并返回构建产物；空态页给出解析过的路径与修复指引 -> verify: task_0035
-- [ ] headless 被审批拦截时 `--json` 含 `status: blocked` 与原因；加 `--fail-on-blocked` 后退出码为 2 -> verify: task_0036
-- [ ] 未知模型价格返回 `cost: null` + `cost_note`，不再用 0.0 冒充真实成本 -> verify: task_0037
-- [ ] 简单问答的固定 prompt/tool 开销可诊断；默认与 lean 模式的估算 token 有测试，lean 模式减少非核心工具 schema -> verify: task_0038
-- [ ] `--mode plan` 的 CLI help/README/docs 明确「只读、不执行写入」，`--yes` 在该模式无效并有提示 -> verify: task_0039
+- [x] `ruff check .` 与 `ruff format --check .` 在仓库根目录通过，CI lint job 不再因 `site/build.py` 失败 -> verify: task-0001
+- [x] 项目级 slash `!` 注入必须经过审批/审计/环境清洗，无审批回调时 fail-closed；用户级注入保留自动批准但仍有审计 -> verify: task-0002
+- [x] MCP 工具的 `readOnlyHint` 不再产生本地可信只读；所有 MCP 工具 `requires_approval=True`、`is_read_only=False` -> verify: task-0003
+- [x] wheel 内含 `nexuscli/frontend/dist/index.html`，安装后 workbench 非空态；sdist 不含 `node_modules` 与 `.spec` -> verify: task-0004
+- [x] `v0.2.1` tag 触发 release workflow，构建并校验 wheel/sdist；版本号在 `pyproject.toml` 与 `__init__.py` 一致 -> verify: task-0005
+（0006/0008/0009 三项 owner 手动标准已随任务逐字转入后续包 2026-11-08_add-publish-demo-protection，见 5.6 D3）
+- [x] README 有 PyPI/uv/source 三种安装路径，社区文件齐全，docs contract 测试通过 -> verify: task-0007
+- [x] `query()` 与 ReAct 共享 LoopGuard，`max_turns` 撞顶有可见提示 -> verify: task-0010
+- [x] `query()` 与 ReAct 共享 provider 超限 compact/force_trim 重试与 F12 截断保护 -> verify: task-0011
+- [x] plan/team worker 的 `max_turns` 从 config 读取，不再 hardcode 8/200 -> verify: task-0012
+- [x] plan 每个任务收到会话历史，任务间不串线 -> verify: task-0013
+- [x] team 并发 worker 使用隔离 history，合并顺序确定，无 last-writer-wins -> verify: task-0014
+- [x] plan worker 传入 journal/run_id，恢复后不重复副作用 -> verify: task-0015
+- [x] deny/skip 分支的审计受 `features.audit_log` 控制 -> verify: task-0016
+- [x] MCP server 不再就地改写共享 config 的 `hitl_mode` -> verify: task-0017
+- [x] `prefix:*` 规则按词边界匹配，`git diff:*` 不放行 `git difftool` -> verify: task-0018
+- [x] `-p "/命令"` 消费 frontmatter 的 `mode`/`allowed_tools` -> verify: task-0019
+- [x] Playwright e2e 在 CI frontend job 中可重复通过 -> verify: task-0020
+- [x] workbench 支持 approve_run/approve_auto、SSE 审批事件、可配 timeout，并有 e2e 覆盖 -> verify: task-0021
+- [x] coverage 有 baseline 与 ratchet，低于 baseline 时 CI 失败 -> verify: task-0022
+- [x] mypy 有错误数 + ignore 模块/行数 ratchet，只减不增 -> verify: task-0023
+- [x] pty SIGINT 与并发恢复有自动化测试，testing-matrix 更新到当前 HEAD -> verify: task-0024
+- [x] hermetic eval 在 CI 中运行，任一场景失败即失败 -> verify: task-0025
+- [x] OS 沙箱有可选抽象 + macOS seatbelt，默认关闭，请求不可用时 fail-closed -> verify: task-0026
+- [x] Linux bubblewrap/Landlock 后端可探测、可测试，缺依赖时给出类型化错误 -> verify: task-0027
+- [x] 会话树有 parent/branch 元数据与 `/tree` 查询，旧会话仍可读 -> verify: task-0028
+- [x] 压缩摘要为结构化格式并维护文件台账，长会话可恢复关键上下文 -> verify: task-0029
+- [x] 插件支持用户级目录、命名空间、工具组件，工具走同一 ToolExecutor 审批链 -> verify: task-0030
+- [x] Google Gemini 原生 provider 可按统一接口构建并通过 fake server 测试 -> verify: task-0031
+- [x] Ollama/llama.cpp 本地 provider 可配置并走 OpenAI-compatible 适配 -> verify: task-0032
+- [x] 文档站有搜索索引，README 有英文入口，示例可运行 -> verify: task-0033
+- [x] `--mode plan` 不再把只读空转任务标为 COMPLETED；写任务被拦截时任务状态为 blocked，最终摘要与退出码不报成功 -> verify: task-0034
+- [x] `serve --workbench --cwd <仓库外目录>` 仍能解析仓库/包内 `frontend/dist` 并返回构建产物；空态页给出解析过的路径与修复指引 -> verify: task-0035
+- [x] headless 被审批拦截时 `--json` 含 `status: blocked` 与原因；加 `--fail-on-blocked` 后退出码为 2 -> verify: task-0036
+- [x] 未知模型价格返回 `cost: null` + `cost_note`，不再用 0.0 冒充真实成本 -> verify: task-0037
+- [x] 简单问答的固定 prompt/tool 开销可诊断；默认与 lean 模式的估算 token 有测试，lean 模式减少非核心工具 schema -> verify: task-0038
+- [x] `--mode plan` 的 CLI help/README/docs 明确「只读、不执行写入」，`--yes` 在该模式无效并有提示 -> verify: task-0039
 
 ## 7. 风险与约束
 

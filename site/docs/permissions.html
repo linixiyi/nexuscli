@@ -9,6 +9,33 @@
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/permissions.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
+  <style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>
   <script>
     (function () {
       try {
@@ -28,6 +55,11 @@
         <a href="../index.html#docs">文档</a>
         <a href="../tutorial.html">教程</a>
       </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
+      </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
       <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
@@ -38,11 +70,18 @@
     <div class="toc-title">目录</div>
     <div class="toc">
 <ul>
-<li><a href="#单次--p-模式下没有审批弹窗">单次 -p 模式下没有审批弹窗</a></li>
+<li><a href="#单次--p-模式下没有审批弹窗">单次 -p 模式下没有审批弹窗</a><ul>
+<li><a href="#headless-状态与退出码status----fail-on-blocked">headless 状态与退出码（status / --fail-on-blocked）</a></li>
+</ul>
+</li>
 <li><a href="#只读-bash-直通">只读 bash 直通</a></li>
 <li><a href="#审批弹窗的四个选项">审批弹窗的四个选项</a></li>
 <li><a href="#子进程环境清洗env_sanitization">子进程环境清洗（env_sanitization）</a></li>
-<li><a href="#会话权限模式default--auto--plan">会话权限模式（Default / Auto / plan）</a></li>
+<li><a href="#os-级沙箱sandboxbackend">OS 级沙箱（sandbox.backend）</a></li>
+<li><a href="#会话权限模式default--auto--plan">会话权限模式（Default / Auto / plan）</a><ul>
+<li><a href="#与---mode-planplan-的区别">与 --mode plan、/plan 的区别</a></li>
+</ul>
+</li>
 </ul>
 </div>
 
@@ -119,6 +158,37 @@ interactive REPL for approval prompts.
 <pre><code class="language-json">{ &quot;permissions&quot;: { &quot;allow&quot;: [&quot;bash&quot;, &quot;write_file&quot;] } }
 </code></pre>
 <p>这条边界和 <code>ask</code> 在 <code>hitl_mode: "never"</code> 下的处理是同一姿态：<strong>无人可问时按失败关闭，而不是静默放行</strong>。注意 <code>permissions.allow</code> 只是放行审批层，<code>path_guard</code> 仍在生效——工作区外的写入依旧会被 <code>path escapes workspace</code> 拒绝。</p>
+<h3 id="headless-状态与退出码status----fail-on-blocked"><a class="toclink" href="#headless-状态与退出码status----fail-on-blocked">headless 状态与退出码（<code>status</code> / <code>--fail-on-blocked</code>）</a></h3>
+<p><code>-p</code> 的每次 run 都以 <code>status</code> 收场，供脚本与 CI 机读（<code>nexuscli.agent.results.gate_denial_reason</code> 负责把执行器的拒绝文案归类）：</p>
+<table>
+<thead>
+<tr>
+<th>status</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ok</code></td>
+<td>正常完成；门拒绝过的调用不存在</td>
+</tr>
+<tr>
+<td><code>blocked</code></td>
+<td>审批拒绝 / 权限规则、hook 拦截 / plan 只读闸拦下任务——run 已结束但目标未达成，<code>blocked_reason</code> 带第一条拒绝原文</td>
+</tr>
+<tr>
+<td><code>failed</code></td>
+<td>run 中途抛异常</td>
+</tr>
+</tbody>
+</table>
+<p>读取方式：</p>
+<ul>
+<li><code>-p --json</code>：payload 增加 <code>status</code> 字段（<code>ok</code> 时没有 <code>blocked_reason</code>）；异常路径也照常吐一个 JSON 对象（<code>status: "failed"</code>，<code>error</code> 字段带异常文本，usage/cost 归零或 <code>null</code>）。</li>
+<li>非 JSON 模式：stderr 打印一行 <code>status: ok</code> / <code>status: blocked (&lt;拒绝原文&gt;)</code> / <code>status: failed (&lt;异常&gt;)</code>，stdout 仍保持纯回答文本。</li>
+<li>退出码默认<strong>保持兼容</strong>：<code>ok</code> 与 react 门拒绝（过去就静默通过）为 0，异常为 1，被 plan 只读闸拦下的计划按 0034 口径为 1；新增 <code>--fail-on-blocked</code> 后，<code>blocked</code> / <code>failed</code> 一律 exit 2（会覆盖上述 1），适合 CI 直接以退出码判失败。</li>
+</ul>
+<p>注意边界：<code>status: "blocked"</code> 是「run 结束了但有门拒绝」——模型收到拒绝后仍可能给出正常文本回答。<code>team</code> 模式下 worker 的原始 <code>tool_result</code> 不出 SubAgent 折叠层，由编排器把门拒绝（同一张 <code>gate_denial_reason</code> 标记表归类）以 <code>gate_denial</code> 事件转发到外层流，因此 <code>-p --mode team</code> 与 react 一样报 <code>blocked</code> 并带拒绝原文；react 门拒绝与 team 门拒绝的默认退出码同为 0（过去就静默通过），<code>--fail-on-blocked</code> 时为 2。</p>
 <h2 id="只读-bash-直通"><a class="toclink" href="#只读-bash-直通">只读 bash 直通</a></h2>
 <p><code>bash</code> / <code>execute_command</code> 的命令串会先做一次 argv 级只读静态判定。判定是保守的：只认单条简单命令（含 <code>;</code>、<code>|</code>、重定向、命令替换等元字符时一律视为不只读），并基于内置白名单——<code>ls</code>、<code>cat</code>、<code>grep</code>、<code>head</code> 等检查类命令，不带写动作参数的 <code>find</code>，只读子命令的 <code>git</code>（<code>status</code>、<code>log</code>、<code>diff</code>、<code>show</code> 等，<code>branch</code> / <code>tag</code> / <code>remote</code> / <code>config</code> 另有参数限制），以及 <code>python</code> / <code>node</code> / <code>npm</code> 的 <code>--version</code> / <code>--help</code> 式自述调用与 <code>uv</code> / <code>pip</code> 的列表类子命令；白名单之外的命令一律视为不只读，回落到正常审批链。</p>
 <p>判定为只读的命令在默认模式下免 HITL 审批直通执行，<code>plan</code> 态的只读闸门也按同一判定放行。直通不改变既有优先级：<code>deny</code> 命中照常拒绝，<code>ask</code> 命中照常追问，PreToolUse hook 的阻断与 ask 提示同样优先，<code>hitl_mode: "always"</code> 下仍会弹审批。直通不等于无痕：直通调用仍写审计日志，approver 记为 <code>readonly-rule</code>。</p>
@@ -193,6 +263,47 @@ interactive REPL for approval prompts.
 </tbody>
 </table>
 <p>OS 级沙箱（容器、受限令牌）是更大体量的外部依赖，同样挂账；在它落地之前，不要把宿主机上不可泄露的机密放在子进程可读取的环境里并放开 HITL。</p>
+<h2 id="os-级沙箱sandboxbackend"><a class="toclink" href="#os-级沙箱sandboxbackend">OS 级沙箱（sandbox.backend）</a></h2>
+<p><code>config.json</code> 的 <code>sandbox</code> 段为命令执行提供 OS 级围栏（实现：<code>src/nexuscli/policy/os_sandbox.py</code>，协议为 <code>SandboxBackend</code>——<code>available</code> / <code>probe</code> / <code>wrap</code> 三动词）：</p>
+<pre><code class="language-json">{
+  &quot;sandbox&quot;: {
+    &quot;backend&quot;: &quot;seatbelt&quot;,
+    &quot;writable_paths&quot;: [&quot;/opt/shared-data&quot;],
+    &quot;allow_network&quot;: false
+  }
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th><code>backend</code></th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code>（默认）</td>
+<td>不做 OS 级围栏，行为与没有该模块时完全一致（仅保留 env 清洗等既有护栏）</td>
+</tr>
+<tr>
+<td><code>seatbelt</code></td>
+<td>macOS 上用 <code>sandbox-exec -p</code> 包装命令：写域限制在命令 cwd、系统临时目录、<code>/dev/null</code> 与显式 <code>writable_paths</code> 之内；<code>allow_network: false</code>（默认）时整网拒绝，<code>true</code> 时仅放行出站（bind/入站仍拒绝）</td>
+</tr>
+<tr>
+<td><code>bubblewrap</code></td>
+<td>Linux 上用 <code>bwrap</code> 挂载命名空间包装命令：根文件系统只读绑定，另挂全新 <code>/dev</code>、<code>/proc</code> 与 <code>/dev/shm</code>，仅 cwd、系统临时目录与显式 <code>writable_paths</code> 可写；<code>allow_network: false</code>（默认）时 <code>--unshare-net</code> 整网拒绝（含 loopback），<code>true</code> 时完全放开（bind 也放行，粒度比 seatbelt 粗）。需要非特权的 user namespaces（或 setuid <code>bwrap</code>），容器里常见两者皆无——probe 会如实报错。安装提示：Debian/Ubuntu <code>apt install bubblewrap</code>、Fedora <code>dnf install bubblewrap</code>、Arch <code>pacman -S bubblewrap</code></td>
+</tr>
+<tr>
+<td><code>landlock</code></td>
+<td>Linux 上用内核 Landlock（实现：<code>src/nexuscli/policy/linux_sandbox.py</code>）包装命令：内置 helper 先对自身 <code>restrict_self</code> 再 exec 命令，写域与 seatbelt 相同（<code>/dev/null</code>、临时目录、cwd、显式 <code>writable_paths</code>），读保持开放；网络拒绝需要内核 ABI ≥ 4（Linux ≥ 6.7），仅覆盖 TCP（UDP 自 ABI 10 起），内核达不到时按 fail-closed 直接报错而非裸跑。ABI 探测是纯查询（<code>landlock_create_ruleset</code> 的 VERSION 标志），不会限制调用方本身；restrict 在一次性子进程里完成</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Linux 后端优先级</strong>：两个 Linux 后端<strong>优先 bubblewrap</strong>（覆盖更完整、网络粒度更明确），<code>nexuscli.policy.linux_sandbox.preferred_linux_backend</code> 返回本机可用的首选后端；任一后端不可用时，typed 错误信息会带上安装提示，并在对方可用时提示切换 <code>sandbox.backend</code>。</p>
+<p><strong>fail-closed 语义</strong>：请求了本机不可用的后端（非 macOS 请求 seatbelt、<code>sandbox-exec</code> 不在 PATH、probe 试运行失败；非 Linux 或 <code>bwrap</code> 缺失/不可用时请求 bubblewrap；非 Linux 或内核 Landlock ABI 不足时请求 landlock）或未知后端名时，抛类型化错误 <code>nexuscli.policy.os_sandbox.OperationUnsupported</code>，命令<strong>不执行</strong>——绝不会静默退回 <code>none</code> 继续裸跑。<code>CommandExecutor</code> 在构造时完成解析，坏配置在任何命令 spawn 之前就失败。</p>
+<p><code>writable_paths</code> 追加可写子域；cwd 与系统临时目录始终可写。<code>sandbox-exec</code> 已被 Apple 标记废弃但仍是官方策略机制；后端不可用会以 <code>OperationUnsupported</code> 显式报错，而不是产生一个坏掉的 spawn。bubblewrap 会丢弃本机不存在的可写路径（无物可写、也无法绑定）；landlock helper 对打不开的规则路径跳过并在 stderr 告警。</p>
+<p><strong>如实边界：这是「最小可用」围栏，不是硬安全边界。</strong> 文件读与 Mach lookup 保持开放（加载解释器、site-packages、launchd 服务必须能工作），所以恶意子进程仍能读走用户可读的一切、与 XPC 服务通信；围栏的目标是<strong>写域与网络</strong>。按最小可用原则枚举 mach 服务不可维护，profile 据此取舍。Linux 后端同理：环境变量、IPC、TTY ioctl、路径 UNIX socket 解析（Landlock <code>RESOLVE_UNIX</code>）等仍开放，landlock 的网络开关在 ABI 4–9 内核上不覆盖 UDP。</p>
+<p><strong>接入现状</strong>：<code>CommandExecutor</code>（<code>!</code> 注入执行器的执行引擎、库内嵌调用方）已支持——构造时传入 <code>sandbox</code> 配置即生效；模型面 <code>bash</code> 工具（含 <code>execute_command</code> 别名）已接线——从 <code>context.config.sandbox</code> 读取配置，在命令守卫之后、spawn 之前经 <code>wrap_command</code> 包装，<code>run_in_background</code> 后台任务与前台进程同路径生效，后端不可用时在 spawn 之前 fail-closed 报错（<code>Command rejected. ...</code>，命令不执行），默认 <code>backend="none"</code> 行为与接线前完全一致。仍未接的调用方：slash 命令注入的 <code>CommandExecutor</code> 构造未传 sandbox 配置（交互式用户直接执行的路径），属后续任务。</p>
 <h2 id="会话权限模式default--auto--plan"><a class="toclink" href="#会话权限模式default--auto--plan">会话权限模式（Default / Auto / plan）</a></h2>
 <p>交互模式下按 <code>Shift+Tab</code> 可在三种会话权限模式间循环切换（<code>Default → Auto (full access) → plan (read-only) → Default</code>）：</p>
 <ul>
@@ -207,13 +318,127 @@ interactive REPL for approval prompts.
 <li>只读工具（<code>read_file</code>、<code>grep</code>、<code>glob_files</code> 等）正常放行，其上的 deny 权限规则依然生效</li>
 <li>被拒绝的调用不产生审批决策、不写审计、不触发 Hooks</li>
 </ul>
-<p>典型用法：先切到 plan 态让 Agent 只读地调研并给出方案，审阅满意后再切回 Default 让它落地执行。</p><div class="pager"><a href="../index.html" class="prev"><span class="dir">← 返回</span><span class="name">站点首页</span></a><a href="hooks.html" class="next"><span class="dir">下一篇 →</span><span class="name">🪝 Hooks 生命周期钩子</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/permissions.md" target="_blank" rel="noopener">docs/permissions.md</a> 构建生成 · 源文件与站点内容同步</p>
+<p>典型用法：先切到 plan 态让 Agent 只读地调研并给出方案，审阅满意后再切回 Default 让它落地执行。</p>
+<h3 id="与---mode-planplan-的区别"><a class="toclink" href="#与---mode-planplan-的区别">与 <code>--mode plan</code>、<code>/plan</code> 的区别</a></h3>
+<p>Shift+Tab 的 <code>plan (read-only)</code> 是<strong>交互 REPL 的会话权限模式</strong>；另外两套名字带「plan」的机制语义不同，别混用：</p>
+<ul>
+<li><code>nexuscli --mode plan -p "..."</code>（单次模式）：Plan-and-Execute 代理做只读规划——只读闸门全程开启，不会执行任何写入；<code>--yes</code> 在该模式无效（打印 warning 并忽略），被闸门拦下的计划按失败收场（exit 1；<code>--fail-on-blocked</code> 时 exit 2，<code>--json</code> 的 <code>status</code> 为 <code>blocked</code>）。</li>
+<li>REPL <code>/plan &lt;task&gt;</code>（交互式 Plan-and-Execute）：与 <code>--mode plan</code> 同一只读闸门口径，在交互会话里流式执行，支持 checkpoint 与 <code>--resume</code> 续跑。</li>
+</ul>
+<p>两者的 checkpoint 与续跑口径见 <a href="plan-execute.html">plan-execute.md</a>。</p><div class="pager"><a href="../index.html" class="prev"><span class="dir">← 返回</span><span class="name">站点首页</span></a><a href="hooks.html" class="next"><span class="dir">下一篇 →</span><span class="name">🪝 Hooks 生命周期钩子</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/permissions.md" target="_blank" rel="noopener">docs/permissions.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>
   <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
 </footer><script src="../site.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "../";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {
