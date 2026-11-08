@@ -64,6 +64,13 @@ class AgentMessage:
     # forwards this onto the outer stream as a gate_denial event — the only
     # way a headless team run can report status "blocked".
     gate_denial: str | None = None
+    # Task 0001 (2026-11-08 review residuals): a ``--worker-mode plan``
+    # worker's nested PlanExecuteAgent folds blocked/failed tasks into its
+    # own plan_failed event (the per-run plan-mode config turns the event
+    # on). Like gate_denial, that event never leaves the SubAgent fold, so
+    # the task-id -> rejection-reason map rides on the AgentMessage and the
+    # orchestrator forwards it onto the outer stream as a plan_failed event.
+    plan_blocked: dict[str, str] | None = None
 
     @classmethod
     def task(cls, from_agent: str, content: str) -> AgentMessage:
@@ -78,9 +85,17 @@ class AgentMessage:
         usage: Usage | None = None,
         turns: int = 0,
         gate_denial: str | None = None,
+        plan_blocked: dict[str, str] | None = None,
     ) -> AgentMessage:
         return cls(
-            from_agent, role, content, AgentMessageType.RESULT, usage or Usage(), turns, gate_denial
+            from_agent,
+            role,
+            content,
+            AgentMessageType.RESULT,
+            usage or Usage(),
+            turns,
+            gate_denial,
+            plan_blocked,
         )
 
     @classmethod
@@ -264,10 +279,22 @@ class SubAgent:
         text = ""
         usage = Usage()
         turns = 0
+        # Task 0001: mirror _execute_worker's gate_denial capture. The nested
+        # run's plan-mode config makes PlanExecuteAgent fold blocked/failed
+        # tasks into a plan_failed event carrying the task-id ->
+        # rejection-reason map; the event never leaves this fold, so capture
+        # it here and let the orchestrator forward it. A clean plan leaves
+        # plan_blocked None and the worker result unchanged.
+        plan_blocked: dict[str, str] | None = None
         try:
             async for event in agent.run(content):
                 if event.get("type") == "text_delta":
                     text += str(event.get("text") or "")
+                elif event.get("type") == "plan_failed":
+                    plan_blocked = {
+                        str(task_id): str(reason)
+                        for task_id, reason in (event.get("blocked_tasks") or {}).items()
+                    }
                 elif event.get("type") == "done":
                     usage = usage + Usage.from_mapping(event.get("usage") or {})
                     turns += int(event.get("total_turns") or 0)
@@ -283,7 +310,9 @@ class SubAgent:
             Message(role="user", content=content),
             Message(role="assistant", content=text),
         ]
-        return AgentMessage.result(self.name, self.role, text.strip(), usage, turns)
+        return AgentMessage.result(
+            self.name, self.role, text.strip(), usage, turns, plan_blocked=plan_blocked
+        )
 
     async def complete(self, content: str) -> AgentMessage:
         """One no-tools completion with ``content`` as the user turn.
@@ -388,6 +417,10 @@ class AgentOrchestrator:
         # and SubAgent._execute_worker), emitted once as a gate_denial event
         # before done so headless team runs can report status "blocked".
         self.gate_denial: str | None = None
+        # Task 0001: the first plan worker's nested plan failure of the run
+        # (see SubAgent._execute_plan), forwarded the same way as a
+        # plan_failed event before done.
+        self.plan_blocked: dict[str, str] | None = None
 
     async def run(self, message: str) -> AsyncIterator[dict[str, Any]]:
         # UserPromptSubmit hooks gate the prompt before any planning work: a
@@ -425,6 +458,7 @@ class AgentOrchestrator:
         self.total_usage = Usage()
         self.total_turns = 0
         self.gate_denial = None
+        self.plan_blocked = None
         try:
             yield {"type": "text_delta", "text": "Phase 1: planner\n\n"}
             steps = await self._plan_steps(message)
@@ -456,6 +490,13 @@ class AgentOrchestrator:
         # stop at done (fold_engine_result) still see it.
         if self.gate_denial is not None:
             yield {"type": "gate_denial", "reason": self.gate_denial}
+        # Task 0001: a plan worker's nested plan_failed event is consumed
+        # inside SubAgent._execute_plan, so this structured forward — the
+        # task-id -> rejection-reason map — is the run's only machine-visible
+        # trace that the worker's plan did not complete. Same placement as
+        # gate_denial: before done, so folds that stop there still see it.
+        if self.plan_blocked:
+            yield {"type": "plan_failed", "blocked_tasks": dict(self.plan_blocked)}
         done: dict[str, Any] = {
             "type": "done",
             "total_turns": self.total_turns,
@@ -596,6 +637,8 @@ class AgentOrchestrator:
             self.total_turns += result.turns
             if result.gate_denial and self.gate_denial is None:
                 self.gate_denial = result.gate_denial
+            if result.plan_blocked and self.plan_blocked is None:
+                self.plan_blocked = result.plan_blocked
             if result.type == AgentMessageType.ERROR or not result.content.strip():
                 self._update_step(
                     steps, step.id, step.with_failed(result.content or "empty result")
@@ -619,6 +662,8 @@ class AgentOrchestrator:
                 self.total_turns += retry_result.turns
                 if retry_result.gate_denial and self.gate_denial is None:
                     self.gate_denial = retry_result.gate_denial
+                if retry_result.plan_blocked and self.plan_blocked is None:
+                    self.plan_blocked = retry_result.plan_blocked
                 if retry_result.type == AgentMessageType.ERROR or not retry_result.content.strip():
                     issues = retry_result.content or "empty retry result"
                     continue

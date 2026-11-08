@@ -24,6 +24,11 @@
 
 - [x] 为何现在才修？→ 收尾轮按最小接线原则挂账；用户 2026-11-08 指令清掉剩余可做项。
 
+### 2.2 关键假设
+
+- A1 | gate_denial 转发与 `_team_result_from_events` 机制已在 main 可复用 | system | 收尾轮 M1 修复记录与 main HEAD 代码实读 | CONFIRMED | if false: 本包退化为重新实现转发机制，工作量加倍
+- A2 | 两项修复不影响 repl 等其他外层事件消费方 | system | 外层事件流消费方仅 cli 与 runtime/api，均有 scoped 回归覆盖 | UNVERIFIED | if false: 按 regression 结果扩大 boundary 并记录偏离
+
 ## 3. 功能范围
 
 ### 3.1 核心功能（MVP）
@@ -34,6 +39,20 @@
 ### 3.3 不在范围内
 
 - 不处理真实模型 eval、Windows 沙箱等 3.2 扩展功能；不做事件溯源式重写。
+
+## 4. 最小实现路径
+
+- 最简单可行方案：两任务并行——0001 复用收尾轮 M1 的 gate_denial 转发模式补 plan_failed 转发；0002 在 runtime 折叠白名单放行 gate_denial 并在 derive.ts 展示。
+- 暂不引入：事件溯源、前端状态管理库、新的配置项。
+- 不做的抽象：不为单一事件类型建通用转发注册表（单一实现者阶段保持直连）。
+
+### 4.1 方案阶梯
+
+- B0 | literal ask | 两任务最小接线修复，覆盖 headless 与 workbench 两条用户可见路径 | 用户指令清掉剩余可做项；两项残留的位置与修法已在收尾轮复核记录写明
+- B1 | minimal change | 只修 headless 路径（0001），workbench 展示留待后续 | 交付更快，但 workbench 用户仍看不到门拒绝，不满足「清掉可做项」的字面范围
+- B2 | recommended alternative | 两项都修且顺带把事件折叠重写为注册表 | 覆盖面相同但引入不必要的重构，违反最小接线取舍
+
+Recommendation: B0 because 两项残留的机制前提已验证存在，最小接线即可闭环。Flips if A2 is FALSIFIED.
 
 ## 5. 技术决策
 
@@ -63,8 +82,8 @@
 
 ## 6. 成功标准与验证方式
 
-- [ ] `--worker-mode plan` 的 team 运行中 plan worker 失败时报 `blocked` 与原因，headless 不再静默 `ok` -> verify: task_0001
-- [ ] workbench/SSE 路径可见 `gate_denial`（帧带 seq、前端展示被拒原因） -> verify: task_0002
+- [x] `--worker-mode plan` 的 team 运行中 plan worker 失败时报 `blocked` 与原因，headless 不再静默 `ok` -> verify: task_0001
+- [x] workbench/SSE 路径可见 `gate_denial`（帧带 seq、前端展示被拒原因） -> verify: task_0002
 
 ## 7. 风险与约束
 

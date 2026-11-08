@@ -26,6 +26,7 @@ export type WorkbenchEventKind =
   | "tool_call"
   | "tool_result"
   | "turn.completed"
+  | "gate_denial"
   | "approval_suspended"
   | "approval_resolved";
 
@@ -54,6 +55,11 @@ export function mapEventName(event: string): WorkbenchEventKind | null {
       return "tool_result";
     case "turn.completed":
       return "turn.completed";
+    // gate_denial：team orchestrator 在 done 前 yield 的门禁拒绝事件，api.py
+    // _run_turn 白名单转发落库（带 per-thread seq）——运行报告被拒原因的
+    // 唯一事件源（derive.ts denials 计数），2026-11-08 评审残留修复 0002。
+    case "gate_denial":
+      return "gate_denial";
     case "approval_suspended":
       return "approval_suspended";
     case "approval_resolved":
@@ -81,6 +87,7 @@ export type WorkbenchEvent =
       mode: string;
       totalTokens: number;
     }
+  | { kind: "gate_denial"; seq: number; reason: string }
   | {
       kind: "approval_suspended";
       seq: number;
@@ -159,6 +166,10 @@ function frameToEvent(
         mode: asString(data.mode),
         totalTokens: asNumber(data.total_tokens),
       };
+    case "gate_denial":
+      // payload 形状 = api.py _jsonable(gate_denial 事件) + seq：{type, reason}。
+      // reason 缺失时归固定占位，不炸 UI。
+      return { kind, seq, reason: asString(data.reason) || "gate_denied" };
     case "approval_suspended":
       // 形状来源 approvals.py:155-162 as_event()；字段缺失时宽松归空，不炸 UI。
       return {

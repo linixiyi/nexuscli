@@ -457,6 +457,224 @@ def test_team_denial_fail_on_blocked_exits_two(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Team mode: a plan worker's nested plan failure is forwarded (Task 0001)
+# ---------------------------------------------------------------------------
+
+# The orchestrator's forwarded plan_failed event (the shape
+# _team_result_from_events consumes) for a plan worker whose nested plan
+# ended blocked — the nested plan's own plan_failed event never leaves the
+# SubAgent fold.
+_TEAM_PLAN_FAILED_EVENTS = [
+    {"type": "text_delta", "text": "Phase 2: workers and reviewer\n\n计划未完成。\n\n"},
+    {"type": "plan_failed", "blocked_tasks": {"task_1": "拒绝原因"}},
+    {
+        "type": "done",
+        "total_turns": 2,
+        "total_tokens": 10,
+        "usage": {"input_tokens": 6, "output_tokens": 4, "total_tokens": 10},
+    },
+]
+
+_TEAM_PLAN_STALLED_EVENTS = [
+    {"type": "text_delta", "text": "计划已停滞。\n\n"},
+    {"type": "plan_failed", "blocked_tasks": {}},
+    {"type": "done", "total_turns": 1, "total_tokens": 2, "usage": {}},
+]
+
+
+def test_team_nested_plan_failed_json_is_blocked_with_task_reason(tmp_path, monkeypatch):
+    """A forwarded plan_failed event reports blocked with the task reasons; exit stays 0."""
+    capture = _WriteCapture()
+    _install_stub_engine(monkeypatch, StubQueryEngine(_TEAM_PLAN_FAILED_EVENTS))
+    monkeypatch.setattr(sys, "stdout", capture)
+
+    # No typer.Exit: like the react gate denial, the nested plan failure used
+    # to pass silently as ok and the default exit code stays compatible.
+    asyncio.run(
+        cli._run_prompt(
+            "hello",
+            str(tmp_path),
+            _test_config(),
+            mode="team",
+            worker_mode="plan",
+            json_output=True,
+        )
+    )
+
+    payload = _payload_of(capture)
+    assert payload["status"] == "blocked"
+    assert payload["worker_mode"] == "plan"
+    assert payload["blocked_reason"] == "task_1: 拒绝原因"
+
+
+def test_team_nested_plan_stall_reports_generic_reason(tmp_path, monkeypatch):
+    """A forwarded plan_failed without blocked_tasks (stalled plan) keeps the generic reason."""
+    capture = _WriteCapture()
+    _install_stub_engine(monkeypatch, StubQueryEngine(_TEAM_PLAN_STALLED_EVENTS))
+    monkeypatch.setattr(sys, "stdout", capture)
+
+    asyncio.run(
+        cli._run_prompt(
+            "hello",
+            str(tmp_path),
+            _test_config(),
+            mode="team",
+            worker_mode="plan",
+            json_output=True,
+        )
+    )
+
+    payload = _payload_of(capture)
+    assert payload["status"] == "blocked"
+    assert payload["blocked_reason"] == "plan did not complete (tasks blocked or failed)"
+
+
+class _TeamPlanWorkerFailedClient:
+    """Scripted team LLM: planner → plan-mode worker whose nested plan fails.
+
+    Task 0001 live repro: the ``--worker-mode plan`` worker's nested
+    PlanExecuteAgent folds its blocked tasks into its own plan_failed event,
+    which is consumed inside SubAgent._execute_plan — only the orchestrator's
+    forwarded plan_failed event can reach the CLI. Runs against the real
+    QueryEngine → AgentOrchestrator → PlanExecuteAgent → ToolExecutor chain,
+    with the nested plan-mode read-only gate refusing the worker's write_file
+    call.
+    """
+
+    model_name = "fake-model"
+    provider_name = "fake-provider"
+    max_context_window = 1000
+
+    def calculate_cost(self, usage, *, currency="usd"):
+        # The _MeasuredLlmClient wrapper delegates calculate_cost
+        # unconditionally; zero-token usage means an honest zero cost.
+        return CostBreakdown(
+            currency=currency,
+            input_cache_hit_tokens=0,
+            input_cache_miss_tokens=0,
+            input_uncategorized_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+            input_cache_hit_cost=0.0,
+            input_cache_miss_cost=0.0,
+            input_uncategorized_cost=0.0,
+            output_cost=0.0,
+            total_cost=0.0,
+        )
+
+    async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+        last = messages[-1]
+        body = last.content if isinstance(last.content, str) else ""
+        if "Create an execution plan" in body:
+            # The team planner schedules one step pinned to worker-mode plan.
+            yield {
+                "type": "text_delta",
+                "text": (
+                    '{"steps": [{"id": "a", "description": "写入季度报告", '
+                    '"type": "COMMAND", "mode": "plan", "dependencies": []}]}'
+                ),
+            }
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+        elif "请为以下目标创建执行计划" in body:
+            # The nested plan's planner schedules one write task.
+            yield {
+                "type": "text_delta",
+                "text": (
+                    '{"summary": "写报告", '
+                    '"tasks": [{"id": "w", "description": "写入报告文件", '
+                    '"type": "FILE_WRITE", "dependencies": []}]}'
+                ),
+            }
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+        elif "Original task" in body:
+            yield {
+                "type": "text_delta",
+                "text": '{"approved": true, "summary": "ok", "issues": []}',
+            }
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+        elif getattr(last, "role", "") == "tool":
+            # The nested task worker saw the plan-gate refusal and gives up
+            # in words — the forwarded plan_failed event, not this text,
+            # carries the verdict.
+            yield {"type": "text_delta", "text": "写入被拒绝，无法完成。"}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+        else:
+            # The nested plan task asks for the write the read-only gate refuses.
+            yield {
+                "type": "tool_call_delta",
+                "tool_call": {
+                    "index": 0,
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": '{"path": "report.txt"}'},
+                },
+            }
+            yield {"type": "message_end", "stop_reason": "tool_use"}
+
+
+def _install_team_plan_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wire _run_prompt to the real engine + orchestrator + nested planner."""
+
+    async def fake_build_registry(config, cwd):
+        _ = config, cwd
+        return _registry_with_write_tool(), None
+
+    monkeypatch.setattr(cli, "build_tool_registry", fake_build_registry)
+    monkeypatch.setattr(
+        cli, "create_llm_client", lambda llm, telemetry_enabled: _TeamPlanWorkerFailedClient()
+    )
+
+
+def test_team_plan_worker_failed_json_is_blocked_with_reason_and_exits_zero(tmp_path, monkeypatch):
+    """``-p --mode team --worker-mode plan`` with a blocked nested plan reports blocked."""
+    capture = _WriteCapture()
+    _install_team_plan_engine(monkeypatch)
+    monkeypatch.setattr(sys, "stdout", capture)
+
+    # No typer.Exit: the default exit code stays 0 (the nested failure used
+    # to pass silently as ok), only the machine-readable status becomes
+    # correct.
+    asyncio.run(
+        cli._run_prompt(
+            "write the report",
+            str(tmp_path),
+            _test_config(),
+            mode="team",
+            worker_mode="plan",
+            json_output=True,
+        )
+    )
+
+    payload = _payload_of(capture)
+    assert payload["status"] == "blocked"
+    assert payload["worker_mode"] == "plan"
+    assert payload["blocked_reason"].startswith("task_1:")
+    assert "is not allowed in plan mode" in payload["blocked_reason"]
+
+
+def test_team_plan_worker_failed_fail_on_blocked_exits_two(tmp_path, monkeypatch):
+    capture = _WriteCapture()
+    _install_team_plan_engine(monkeypatch)
+    monkeypatch.setattr(sys, "stdout", capture)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        asyncio.run(
+            cli._run_prompt(
+                "write the report",
+                str(tmp_path),
+                _test_config(),
+                mode="team",
+                worker_mode="plan",
+                json_output=True,
+                fail_on_blocked=True,
+            )
+        )
+
+    assert excinfo.value.exit_code == 2
+    assert _payload_of(capture)["status"] == "blocked"
+
+
+# ---------------------------------------------------------------------------
 # Exit codes: default vs --fail-on-blocked
 # ---------------------------------------------------------------------------
 

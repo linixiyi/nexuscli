@@ -8,17 +8,19 @@
 
 ## 阶段 A：残留修复（机器任务）
 
-- [ ] 0001 plan worker 的嵌套 plan_failed 转发到外层事件流（原挂账一）
+- [x] 0001 plan worker 的嵌套 plan_failed 转发到外层事件流（原挂账一）
   - boundary: `src/nexuscli/agent/orchestrator.py`、`src/nexuscli/entrypoints/cli.py`、`tests/test_headless_status.py`、`tests/test_multi_agent.py`。
   - 行为：`--worker-mode plan` 的 `SubAgent._execute_plan` 折叠内层事件时，识别嵌套 `plan_failed` 并以结构化事件转发到外层流（镜像收尾轮 M1 对 gate_denial 的转发方式）；`cli.py` 的 `_team_result_from_events` 消费该事件——plan worker 失败时 team 结果报 `blocked`（带拒绝原因），不再静默 `ok`；react/plan 分支与既有默认行为不变。
   - 测试：`tests/test_headless_status.py` 补 team+plan-worker 失败用例（status blocked、blocked_reason、默认退出码 0、`--fail-on-blocked` exit 2）；`tests/test_multi_agent.py` 回归。
   - verify: `uv run pytest -q tests/test_headless_status.py tests/test_multi_agent.py`
+  - evidence: uv run pytest -q tests/test_headless_status.py tests/test_multi_agent.py -> exit 0, 40 passed (uv run pytest -q tests/test_headless_status.py tests/test_multi_agent.py → 40 dots, exit 0); ruff format+check on the 4 changed files: All checks passed
 
-- [ ] 0002 runtime 事件折叠放行 gate_denial 并在前端展示（原挂账二）
+- [x] 0002 runtime 事件折叠放行 gate_denial 并在前端展示（原挂账二）
   - boundary: `src/nexuscli/runtime/api.py`、`frontend/src/derive.ts`、`frontend/dist/`（构建产物，src 变更后用 `npm --prefix frontend run build` 重建）、`tests/test_runtime_sse.py`、`frontend/e2e/workbench.spec.ts`（可选）。
   - 行为：`runtime/api.py` 的线程折叠白名单放行 `gate_denial` 事件（SSE 帧按既有规则带递增 `seq`），前端 `derive.ts` 保留该事件并在运行报告/审批区域展示被拒原因，与既有 approval_suspended/approval_resolved 事件顺序不冲突。
   - 测试：`tests/test_runtime_sse.py` 断言 gate_denial 帧下发且 seq 单调；e2e 可选补一条断言。
   - verify: `uv run pytest -q tests/test_runtime_sse.py tests/test_runtime_approvals.py && npm --prefix frontend run test:e2e`
+  - evidence: uv run pytest -q tests/test_runtime_sse.py tests/test_runtime_approvals.py && npm --prefix frontend run test:e2e -> exit 0, pytest 35 passed（test_runtime_sse 15 含新用例 test_sse_gate_denial_frame_forwarded_with_monotonic_seq + test_runtime_approvals 20）&& e2e 12 passed (9.2s)；ruff：2 files left unchanged / All checks passed；npm --prefix frontend run build 重建 dist 成功
 
 ---
 

@@ -517,6 +517,93 @@ def test_sse_resync_on_backlog_high_water(sse_server) -> None:
     ), collected
 
 
+# ---------------------------------------------------------------- 0002 gate_denial 白名单放行
+
+
+class _GateDenialTeamEngine:
+    """线程折叠白名单用假引擎：team 流产出 gate_denial（done 前），镜像
+    AgentOrchestrator.run 的真实产出顺序（orchestrator.py:456-458——gate_denial
+    是 worker 门禁拒绝唯一机器可见的痕迹，在 done 之前 yield）。"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass  # QueryEngine 构造参数（llm_client/tool_registry/config/cwd）全部忽略
+
+    async def team(self, message: str, *, worker_mode: str = "react"):  # noqa: ARG002
+        yield {"type": "text_delta", "text": "team run blocked by gate"}
+        yield {
+            "type": "gate_denial",
+            "reason": 'Tool "bash" was denied by approval policy (write scope).',
+        }
+        yield {"type": "done", "total_tokens": 11, "total_turns": 1}
+
+
+def test_sse_gate_denial_frame_forwarded_with_monotonic_seq(sse_server, monkeypatch) -> None:
+    """0002：线程折叠白名单放行 gate_denial——team turn 的拒绝原因经 SSE 帧下发。
+
+    - live 段 gate_denial 帧即时直通、带 id: 行（落库行，重放游标可推进），
+      payload.reason 原样透出，帧序在 done 之前（与真实 orchestrator 顺序一致）。
+    - 带序帧的 per-thread seq 在 live 段严格递增（合帧 message.delta 是唯一
+      不带 seq 的例外）；GET events 全量回放（无合帧）seq 严格连续，gate_denial
+      行在回放中可复现——workbench 报告区的被拒原因在刷新/重建后不丢。
+    """
+
+    server, port = sse_server
+    server.config.llm.api_key = "test-key"  # 假链路不校验，仅为过 _ensure_llm_key
+    monkeypatch.setattr("nexuscli.runtime.api.QueryEngine", _GateDenialTeamEngine)
+    monkeypatch.setattr("nexuscli.runtime.api.create_llm_client", lambda *args, **kwargs: object())
+    thread_id = _create_thread(server, port)
+    collected: list[str] = []
+
+    def reader() -> None:
+        _stream_lines_live(
+            port, f"/v1/threads/{thread_id}/events/stream?since=0", seconds=8, sink=collected
+        )
+
+    reader_thread = threading.Thread(target=reader, daemon=True)
+    reader_thread.start()
+    time.sleep(0.5)  # 连接建立并完成回放段（thread.created，进入 live 段）
+
+    status, _headers, _body = _request(
+        port,
+        "POST",
+        f"/v1/threads/{thread_id}/turns",
+        headers={"x-api-key": KEY},
+        body={"message": "team gate check", "mode": "team"},
+    )
+    assert status == 200
+
+    assert _wait_for(
+        lambda: any(event == "gate_denial" for _fid, event, _data in _frames(collected))
+    ), collected
+    frames = _frames(collected)
+    events = [event for _fid, event, _data in frames]
+    gate_frames = [(fid, data) for fid, event, data in frames if event == "gate_denial"]
+    assert len(gate_frames) == 1
+    gate_id, gate_data = gate_frames[0]
+    assert gate_id is not None  # 落库行帧带 id:（非登记表裸帧）
+    assert gate_data is not None and "reason" in gate_data
+    assert gate_data["reason"] == 'Tool "bash" was denied by approval policy (write scope).'
+    # 帧序：gate_denial 在 done 之前（orchestrator 在 done 前 yield，白名单保序直通）
+    assert events.index("gate_denial") < events.index("done")
+    # live 段 seq 单调：带 seq 的帧按到达序严格递增（thread.created/turn.started/
+    # gate_denial/done/turn.completed；合帧 message.delta 不带 seq，不进断言）
+    seqs = [int(data["seq"]) for _fid, _event, data in frames if data and "seq" in data]
+    assert seqs == sorted(set(seqs)), seqs
+    assert gate_data["seq"] in seqs  # gate_denial 自带 per-thread seq（SSE 帧按既有规则盖章）
+
+    # 回放段（GET events 逐行原文，无合帧）：seq 严格连续，gate_denial 行可复现
+    status, _headers, body = _request(
+        port, "GET", f"/v1/threads/{thread_id}/events", headers={"x-api-key": KEY}
+    )
+    assert status == 200
+    replayed = _frames(body.decode("utf-8").splitlines())
+    replay_seqs = [int(data["seq"]) for _fid, _event, data in replayed if data and "seq" in data]
+    assert replay_seqs == list(range(1, len(replay_seqs) + 1)), replay_seqs
+    gate_rows = [data for _fid, event, data in replayed if event == "gate_denial"]
+    assert len(gate_rows) == 1
+    assert gate_rows[0] == gate_data  # 回放与 live 帧载荷一致（A7：data 即落库 payload 原文）
+
+
 # ---------------------------------------------------------------- 0021 扩展动词与可配超时
 
 
