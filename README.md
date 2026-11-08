@@ -163,7 +163,7 @@ uv run nexuscli --mode plan -p "先读取 README，再验证项目" --json
 uv run nexuscli --mode team --worker-mode plan -p "并行审计核心模块" --json
 ```
 
-三种名字里带「plan」的机制要区分开：`--mode plan`（单次 `-p`）是**只读规划**——只读闸门全程开启，不会执行任何写入，`--yes` 在该模式无效（启动时打印 warning 并忽略），计划被只读闸门拦下时按失败收场（exit 1）；REPL 的 `/plan <task>` 是交互式 Plan-and-Execute 入口，与 `--mode plan` 同一只读闸门口径，支持图级 checkpoint 与 `--resume` 续跑；交互模式 `Shift+Tab` 切到的 `plan (read-only)` 是会话只读态，作用于整个 REPL 会话（普通对话也硬拒写），不是计划入口。三者详见 [docs/plan-execute.md](docs/plan-execute.md) 与 [docs/permissions.md](docs/permissions.md#会话权限模式default--auto--plan)。
+三种名字里带「plan」的机制要区分开：`--mode plan`（单次 `-p`）是**只读规划**——只读闸门全程开启，不会执行任何写入，规划指令按白名单收紧：计划任务只允许 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具，禁止安排 bash/execute_command 任务（即使命令看似只读）与 pytest、npm、uv run、安装依赖、构建、写盘类任务，`--yes` 在该模式无效（启动时打印 warning 并忽略），计划被只读闸门拦下时按失败收场（exit 1）；REPL 的 `/plan <task>` 是交互式 Plan-and-Execute 入口，与 `--mode plan` 同一只读闸门口径，支持图级 checkpoint 与 `--resume` 续跑；交互模式 `Shift+Tab` 切到的 `plan (read-only)` 是会话只读态，作用于整个 REPL 会话（普通对话也硬拒写），不是计划入口。三者详见 [docs/plan-execute.md](docs/plan-execute.md) 与 [docs/permissions.md](docs/permissions.md#会话权限模式default--auto--plan)。
 
 `-p` 模式没有人工审批通道，默认按失败关闭：需要写文件、跑命令、`save_memory` 等落盘动作的调用会被拒绝（审计留痕），显式加 `--yes` 才放行；旗标在 `-p "prompt"` 之前或之后均可，没有 `--approve-all` 别名。`-p` 里也可以触发自定义斜杠命令（`uv run nexuscli -p "/命令名 参数"`）。完整口径见 [docs/permissions.md](docs/permissions.md#单次--p-模式下没有审批弹窗)。
 
