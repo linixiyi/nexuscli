@@ -36,20 +36,25 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
 
 from nexuscli import __version__
 from nexuscli.agent import QueryEngine
+from nexuscli.agent.agent import prompt_breakdown as measure_prompt_breakdown
+from nexuscli.agent.results import gate_denial_reason
 from nexuscli.bootstrap import build_tool_registry
-from nexuscli.config import get_config_paths, load_config
+from nexuscli.config import NexusCliConfig, get_config_paths, load_config
 from nexuscli.entrypoints.repl import start_repl
 from nexuscli.entrypoints.slash_commands import (
+    CommandFrontmatterError,
+    CustomCommand,
     build_init_prompt,
+    ensure_usable_frontmatter,
     expand_custom_command,
     load_slash_commands,
     split_command_message,
@@ -80,6 +85,8 @@ from nexuscli.eval.real import (
     write_real_comparison,
 )
 from nexuscli.llm import create_llm_client
+from nexuscli.llm.base import LlmClient
+from nexuscli.llm.pricing import UNKNOWN_MODEL_PRICE_NOTE, CostBreakdown, ModelPriceProfile
 from nexuscli.mcp import (
     McpConfigError,
     read_mcp_config_entries,
@@ -87,10 +94,13 @@ from nexuscli.mcp import (
     serve_stdio,
     write_chrome_devtools_config,
 )
+from nexuscli.prompt import PromptAssembler
 from nexuscli.runtime import RuntimeApiServer
 from nexuscli.runtime.api import runtime_api_key
 from nexuscli.runtime.cron import CronError, cron_tasks_path, list_tasks, next_trigger, run_task
 from nexuscli.session import SessionStore, SessionUsageTotals
+from nexuscli.tools.registry import ToolRegistry
+from nexuscli.types import Message, QueryResult, Usage
 
 app = typer.Typer(
     name="nexuscli",
@@ -146,7 +156,13 @@ def main(
     # --- Agent mode ---
     mode: Annotated[
         str | None,
-        typer.Option("--mode", help="Agent mode: react, plan, or team"),
+        typer.Option(
+            "--mode",
+            help=(
+                "Agent mode: react, plan, or team. plan is read-only planning "
+                "that never executes writes; --yes is ignored in plan mode"
+            ),
+        ),
     ] = None,
     worker_mode: Annotated[
         str,
@@ -184,6 +200,16 @@ def main(
         typer.Option(
             "--no-approve",
             help="Single-prompt only: refuse every tool call that would ask (the default)",
+        ),
+    ] = False,
+    fail_on_blocked: Annotated[
+        bool,
+        typer.Option(
+            "--fail-on-blocked",
+            help=(
+                "Single-prompt only: exit 2 when the run ends blocked (approval/"
+                "permission/plan-gate refusal) or failed (exception)"
+            ),
         ),
     ] = False,
     # --- Workspace ---
@@ -232,21 +258,27 @@ def main(
         raise typer.BadParameter("--yes and --no-approve are mutually exclusive")
 
     if prompt is not None:
-        selected_mode = (mode or config.prompt.agent_mode or "react").lower()
+        expanded = _expand_custom_prompt(prompt, str(root))
+        prompt = str(expanded)
+        selected_mode, allowed_tools = _apply_prompt_command_frontmatter(
+            config, expanded.command, mode
+        )
         if selected_mode not in {"react", "plan", "team"}:
             raise typer.BadParameter("mode must be react, plan, or team", param_hint="--mode")
         if worker_mode not in {"react", "plan"}:
             raise typer.BadParameter(
                 "worker-mode must be react or plan", param_hint="--worker-mode"
             )
-        # --mode plan selects the Plan-and-Execute AGENT, which is not the same
-        # thing as the REPL's read-only plan gate. Leaving policy.plan_mode
-        # False meant '-p --mode plan' happily wrote files while README offered
-        # it as the "read a bit, then verify" example — two ideas sharing one
-        # name. Turn the gate on so the advertised guarantee holds; the flag is
-        # reset for react/team so it never leaks into those runs.
-        config.policy.plan_mode = selected_mode == "plan"
-        prompt = _expand_custom_prompt(prompt, str(root))
+        # Task 0039: --mode plan is read-only planning — the read-only gate
+        # blocks every write before approval is even consulted, so --yes
+        # cannot unblock anything here. Say so out loud instead of silently
+        # accepting a flag that will do nothing.
+        if yes and selected_mode == "plan":
+            typer.echo(
+                "Warning: --mode plan is read-only planning and never executes "
+                "writes; --yes is ignored in plan mode.",
+                err=True,
+            )
         history, usage_baseline = _load_resume_history(
             str(root), resume=resume, continue_last=continue_session
         )
@@ -256,6 +288,17 @@ def main(
             # The run did not continue that transcript, so its usage records
             # are not part of this run's session ledger either.
             usage_baseline = SessionUsageTotals()
+        # allowed_tools rides along only when a command actually narrows the
+        # run: _run_prompt replacements (eval harnesses, tests) declare the
+        # historic keyword-only shape, and an always-on empty narrowing would
+        # break every one of them while carrying zero information.
+        run_kwargs: dict = {}
+        if allowed_tools:
+            run_kwargs["allowed_tools"] = allowed_tools
+        # Same rule for --fail-on-blocked: pass it only when switched on, so
+        # _run_prompt replacements keep working unchanged.
+        if fail_on_blocked:
+            run_kwargs["fail_on_blocked"] = True
         asyncio.run(
             _run_prompt(
                 prompt,
@@ -267,6 +310,7 @@ def main(
                 history=history,
                 usage_baseline=usage_baseline,
                 approve_all=yes,
+                **run_kwargs,
             )
         )
     elif resume or continue_session:
@@ -275,24 +319,117 @@ def main(
         asyncio.run(start_repl(str(root), config))
 
 
-def _expand_custom_prompt(prompt: str, root: str) -> str:
+class _ExpandedPrompt(str):
+    """Expanded one-shot prompt carrying the custom command that produced it.
+
+    ``-p "/cmd"`` must both expand the body and apply the command file's
+    frontmatter (``mode``/``allowed-tools``), but the established return
+    contract of :func:`_expand_custom_prompt` is a plain prompt string
+    (test_init_command.py asserts equality against the expanded text).
+    Subclassing str keeps every existing consumer working while ``.command``
+    tells main() which file's frontmatter to apply — ``None`` for plain
+    messages, unknown ``/names``, and the built-in ``/init``.
+    """
+
+    __slots__ = ("command",)
+
+    command: CustomCommand | None
+
+    def __new__(cls, text: str, command: CustomCommand | None = None) -> _ExpandedPrompt:
+        self = super().__new__(cls, text)
+        self.command = command
+        return self
+
+
+def _expand_custom_prompt(prompt: str, root: str) -> _ExpandedPrompt:
     """Expand a custom slash command (or built-in ``/init``) in one-shot mode.
 
     Custom commands win on name conflicts: a user/project ``init`` command is
     looked up and expanded first, and the built-in initialization prompt is
     only used when no custom command matched. Any other unmatched ``/name``
-    is returned unchanged as a plain prompt.
+    is returned unchanged as a plain prompt. The matched command rides on the
+    result (see :class:`_ExpandedPrompt`) so the caller can apply its
+    frontmatter the way the REPL already does (custom_cmds.py).
     """
     parsed = split_command_message(prompt)
     if parsed is None:
-        return prompt
+        return _ExpandedPrompt(prompt)
     name, args = parsed
     command = load_slash_commands(root).get(name.lstrip("/"))
     if command is None:
         if name.lstrip("/") == "init":
-            return build_init_prompt(args, root)
-        return prompt
-    return expand_custom_command(command, args)
+            return _ExpandedPrompt(build_init_prompt(args, root))
+        return _ExpandedPrompt(prompt)
+    return _ExpandedPrompt(expand_custom_command(command, args), command)
+
+
+def _apply_prompt_command_frontmatter(
+    config: NexusCliConfig,
+    command: CustomCommand | None,
+    explicit_mode: str | None,
+) -> tuple[str, tuple[str, ...]]:
+    """Apply a matched ``-p "/cmd"`` command's frontmatter to the run config.
+
+    Returns ``(selected_mode, allowed_tools)``. ``mode`` mirrors the REPL
+    consumption (``custom_cmds._run_custom_command``): ``plan`` is the
+    read-only permission gate with the agent runner unchanged, ``react`` and
+    ``team`` pick the runner. An explicit ``--mode`` flag outranks the file
+    for the runner, and the read-only gate is OR-ed so frontmatter ``plan``
+    never turns a flag-requested gate off. ``allowed-tools`` narrows the
+    run's tool registry (applied by :func:`_run_prompt`); empty keeps the
+    default registry.
+
+    Unknown/illegal frontmatter values are not silently ignored: an invalid
+    ``mode`` exits with a readable error naming the file and the legal
+    values, before any run starts. Unknown ``allowed-tools`` names are
+    reported by :func:`_run_prompt` when they match nothing in the built
+    registry.
+    """
+    frontmatter_mode = ""
+    allowed_tools: tuple[str, ...] = ()
+    if command is not None:
+        try:
+            ensure_usable_frontmatter(command)
+        except CommandFrontmatterError as exc:
+            typer.echo(f"Fatal error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        frontmatter_mode = command.mode
+        allowed_tools = command.allowed_tools
+    # "plan" is a permission gate here, not a runner choice; "react" is the
+    # default and "team" is the only runner a command file selects.
+    runner_override = frontmatter_mode if frontmatter_mode in {"react", "team"} else ""
+    selected_mode = (
+        explicit_mode or runner_override or config.prompt.agent_mode or "react"
+    ).lower()
+    # The read-only gate must hold for every advertised plan run: an explicit
+    # --mode plan also selects the Plan-and-Execute AGENT (the caller routes
+    # on the returned mode), and frontmatter plan is the REPL's permission
+    # gate with the runner unchanged. OR-ing means a mode can only turn the
+    # gate on, never off, so it never leaks into runs that asked for plan.
+    config.policy.plan_mode = selected_mode == "plan" or frontmatter_mode == "plan"
+    return selected_mode, allowed_tools
+
+
+def _narrow_registry(
+    registry: ToolRegistry,
+    allowed_tools: tuple[str, ...],
+) -> tuple[ToolRegistry, tuple[str, ...]]:
+    """Build a registry holding only the whitelisted tools of *registry*.
+
+    Mirrors the REPL's whitelist narrowing (custom_cmds._narrow_registry) and
+    the subagent filtering behind it: unknown names never make the cut. The
+    names that matched nothing come back so the caller can report them —
+    one-shot mode has no interactive moment to notice a missing tool.
+    """
+    narrowed = ToolRegistry()
+    missing: list[str] = []
+    for name in allowed_tools:
+        tool = registry.get(name)
+        if tool is None:
+            missing.append(name)
+        else:
+            narrowed.register(tool)
+    return narrowed, tuple(missing)
 
 
 def _load_resume_history(
@@ -341,10 +478,23 @@ def _load_resume_history(
 @app.command("doctor")
 def doctor(
     cwd: Annotated[Path | None, typer.Option("--cwd", help="Working directory")] = None,
+    token_budget: Annotated[
+        bool,
+        typer.Option(
+            "--token-budget",
+            help="Print the fixed prompt/tool token baseline instead of the environment check",
+        ),
+    ] = False,
 ) -> None:
     """Inspect the system: Python, uv, Node, API key, and config."""
     root = (cwd or Path.cwd()).resolve()
     config = load_config(project_root=root)
+    if token_budget:
+        # Task 0038: diagnose the fixed prompt/tool overhead the current
+        # config starts every request from (system + tool schemas, empty
+        # history) instead of the environment check.
+        typer.echo(json.dumps(_token_budget_report(config, str(root)), ensure_ascii=False))
+        return
     checks = {
         "python": sys.version.split()[0],
         "uv": shutil.which("uv") or "missing",
@@ -358,6 +508,40 @@ def doctor(
         "config_paths": [str(path) for path in get_config_paths(root)],
     }
     console.print_json(json.dumps(checks, ensure_ascii=False))
+
+
+def _token_budget_report(config: NexusCliConfig, root: str) -> dict[str, Any]:
+    """Task 0038: the fixed prompt/tool overhead of an empty-history request.
+
+    Builds the registry and effective system prompt the first request in this
+    project would carry (builtin + VFS + MCP tools at the configured
+    ``agent.prompt_profile``), then measures them with the shared
+    :func:`prompt_breakdown` helper — ``history_chars`` is 0 by construction,
+    so the numbers are the baseline every turn starts from. The model line of
+    the dynamic prompt uses the configured provider/model (no LLM client is
+    built, so no API key is needed to diagnose the baseline).
+    """
+
+    registry, _manager = asyncio.run(build_tool_registry(config=config, cwd=root))
+    tool_names = registry.list_names()
+    assembler = PromptAssembler(
+        config=config,
+        cwd=root,
+        tool_names=tool_names,
+        model=config.llm.model,
+        provider=config.llm.provider,
+    )
+    effective_system = f"{assembler.build_static()}\n\n{assembler.build_dynamic('')}".strip()
+    return {
+        "prompt_profile": config.agent.prompt_profile,
+        "context_window": config.llm.context_window,
+        "max_tokens": config.llm.max_tokens,
+        "baseline": measure_prompt_breakdown(
+            system_prompt=effective_system,
+            tool_definitions=registry.definitions(profile=config.agent.prompt_profile),
+            messages=[],
+        ),
+    }
 
 
 @app.command("sessions")
@@ -817,7 +1001,7 @@ async def _ask_streaming(
     *,
     history: list | None,
     stream_deltas: bool,
-):
+) -> tuple[QueryResult, str | None]:
     """Run react mode over the engine's live event stream.
 
     Text deltas are written straight to stdout (write + flush) as they arrive,
@@ -827,17 +1011,29 @@ async def _ask_streaming(
     reimplemented: the ``QueryResult`` comes from the engine's existing event
     aggregation helper, keeping text/turns/usage/cost plus warning/error
     handling identical to the buffered ``ask_complete_async`` path.
+
+    Returns ``(result, gate_denial)``: the first tool result the permission
+    gates refused (Task 0036), classified by :func:`gate_denial_reason`, or
+    None when every call went through. A headless run with no approver
+    fails closed and still finishes with ``done``, so this pass over the
+    stream is the only place the refusal shows up.
     """
 
+    gate_denial: str | None = None
+
     async def _tee(events):
+        nonlocal gate_denial
         async for event in events:
+            if event.get("type") == "tool_result" and event.get("is_error") and not gate_denial:
+                gate_denial = gate_denial_reason(str(event.get("result") or ""))
             if stream_deltas and event.get("type") == "text_delta":
                 delta = str(event.get("text") or "")
                 sys.stdout.write(delta)
                 sys.stdout.flush()
             yield event
 
-    return await engine._complete_from_events(_tee(engine.ask(prompt, history)))
+    result = await engine._complete_from_events(_tee(engine.ask(prompt, history)))
+    return result, gate_denial
 
 
 def _auto_approver(request: dict) -> str:
@@ -852,6 +1048,92 @@ def _auto_approver(request: dict) -> str:
     return "approve"
 
 
+async def _plan_result_from_events(events) -> tuple[QueryResult, bool, dict[str, str]]:
+    """Fold a plan-mode event stream into (QueryResult, plan_failed, blocked_tasks).
+
+    Mirrors ``QueryEngine._complete_from_events`` (agent/query_engine.py is
+    outside this change's boundary) with one addition: the plan-mode
+    ``plan_failed`` event emitted by PlanExecuteAgent is consumed here so
+    ``-p --mode plan`` can exit non-zero when tasks were blocked by the
+    read-only gate, instead of reporting success for an unfinished plan.
+    The event's ``blocked_tasks`` map (task id -> rejection reason) rides
+    along for the headless ``status``/``blocked_reason`` fields (Task 0036).
+    """
+    text = ""
+    tokens = 0
+    turns = 0
+    usage = Usage()
+    cost = {}
+    plan_failed = False
+    blocked_tasks: dict[str, str] = {}
+    async for event in events:
+        event_type = event.get("type")
+        if event_type == "text_delta":
+            text += str(event.get("text") or "")
+        elif event_type == "error":
+            raise event["error"]
+        elif event_type == "warning":
+            # Same stderr surface as _complete_from_events: stdout stays
+            # reserved for the answer text (and --json output).
+            print(f"[warning] {event.get('message')}", file=sys.stderr)
+        elif event_type == "plan_failed":
+            plan_failed = True
+            blocked_tasks = {str(k): str(v) for k, v in (event.get("blocked_tasks") or {}).items()}
+        elif event_type == "done":
+            tokens += int(event.get("total_tokens") or 0)
+            turns += int(event.get("total_turns") or 0)
+            usage = usage + Usage.from_mapping(event.get("usage") or {})
+            cost = dict(event.get("cost") or cost)
+    return (
+        QueryResult(text=text, total_tokens=tokens, turns=turns, usage=usage, cost=cost),
+        plan_failed,
+        blocked_tasks,
+    )
+
+
+async def _team_result_from_events(events) -> tuple[QueryResult, str | None]:
+    """Fold a team-mode event stream into (QueryResult, gate_denial).
+
+    Mirrors ``QueryEngine._complete_from_events`` (agent/query_engine.py is
+    outside this change's boundary) with one addition: the ``gate_denial``
+    event the orchestrator emits when a worker's tool call was refused by a
+    permission/approval gate. The worker's raw is_error tool_result events
+    never leave the SubAgent fold, so classifying them here the way react's
+    ``_ask_streaming`` tee does would see nothing; the orchestrator classifies
+    with the same :func:`gate_denial_reason` table and forwards the denial,
+    and this fold just picks it up so ``-p --mode team`` reports
+    ``status: "blocked"`` with the denial text instead of a silent success
+    (Task 0036).
+    """
+    text = ""
+    tokens = 0
+    turns = 0
+    usage = Usage()
+    cost = {}
+    gate_denial: str | None = None
+    async for event in events:
+        event_type = event.get("type")
+        if event_type == "text_delta":
+            text += str(event.get("text") or "")
+        elif event_type == "error":
+            raise event["error"]
+        elif event_type == "warning":
+            # Same stderr surface as _complete_from_events: stdout stays
+            # reserved for the answer text (and --json output).
+            print(f"[warning] {event.get('message')}", file=sys.stderr)
+        elif event_type == "gate_denial":
+            gate_denial = str(event.get("reason") or "") or None
+        elif event_type == "done":
+            tokens += int(event.get("total_tokens") or 0)
+            turns += int(event.get("total_turns") or 0)
+            usage = usage + Usage.from_mapping(event.get("usage") or {})
+            cost = dict(event.get("cost") or cost)
+    return (
+        QueryResult(text=text, total_tokens=tokens, turns=turns, usage=usage, cost=cost),
+        gate_denial,
+    )
+
+
 async def _run_prompt(
     prompt: str,
     cwd: str,
@@ -863,6 +1145,8 @@ async def _run_prompt(
     history: list | None = None,
     usage_baseline: SessionUsageTotals | None = None,
     approve_all: bool = False,
+    allowed_tools: tuple[str, ...] = (),
+    fail_on_blocked: bool = False,
 ) -> None:
     """Execute a single prompt and print the result.
 
@@ -870,6 +1154,21 @@ async def _run_prompt(
     that requires one is refused (the executor fails closed), which made -p
     useless for scripted work that writes files or runs commands. The default
     stays "deny"; --yes says out loud that nobody will be asked.
+
+    allowed_tools is a ``-p "/cmd"`` command's ``allowed-tools`` frontmatter:
+    the registry is narrowed to the listed tools before the engine sees it
+    (empty keeps the default). Names matching nothing are reported on stderr
+    instead of being silently dropped — the run has no interactive moment
+    where a missing tool would otherwise become visible.
+
+    fail_on_blocked is the --fail-on-blocked switch (Task 0036): the run
+    always reports ``status`` ("ok" | "blocked" | "failed") — approval or
+    permission-gate refusals and plan read-only interceptions are "blocked"
+    with a ``blocked_reason``, exceptions are "failed" — but the default
+    exit codes stay compatible (0 for ok and for react denials that used to
+    pass silently, 1 for exceptions and 0034's blocked plans). With the
+    switch, blocked/failed exit 2 instead. Non-JSON mode prints the status
+    as one stderr line.
     """
     config.render_mode = "plain"
     if not config.llm.api_key:
@@ -884,54 +1183,168 @@ async def _run_prompt(
     if manager and manager.last_errors:
         for name, error in manager.last_errors.items():
             typer.echo(f"MCP server {name} failed to load: {error}", err=True)
+    if allowed_tools:
+        registry, missing = _narrow_registry(registry, allowed_tools)
+        if missing:
+            typer.echo(
+                "Note: allowed-tools not found in this run's tool registry (ignored): "
+                + ", ".join(missing),
+                err=True,
+            )
+    llm_client = create_llm_client(config.llm, telemetry_enabled=config.telemetry.enabled)
+    # Task 0038: measure the fixed request overhead at the llm-client
+    # boundary. The react Agent keeps its own record on
+    # last_prompt_breakdown, but the engine owns that instance, so the CLI
+    # reads the same calls through this transparent wrapper. Event streams
+    # stay untouched (they must stay react≡query(), see
+    # test_agent_overflow_parity), so usage.prompt_breakdown is attached to
+    # the --json payload below instead.
+    measured_client = _MeasuredLlmClient(llm_client)
     engine = QueryEngine(
-        llm_client=create_llm_client(config.llm, telemetry_enabled=config.telemetry.enabled),
+        llm_client=measured_client,
         tool_registry=registry,
         config=config,
         cwd=cwd,
         approval_callback=_auto_approver if approve_all else None,
     )
+    # Task 0034: plan mode folds the event stream itself (not via
+    # plan_complete_async) so a plan the read-only gate blocked is visible as
+    # a failure below; react runs through _ask_streaming's tee, and team folds
+    # its own stream for the same reason (Task 0036): the orchestrator's
+    # gate_denial event — a worker's approval/permission refusal — must reach
+    # the status decision below instead of passing as ok.
+    plan_failed = False
+    blocked_tasks: dict[str, str] = {}
+    gate_denial: str | None = None
+    failure: Exception | None = None
+    result: QueryResult | None = None
     try:
         if mode == "plan":
-            result = await engine.plan_complete_async(prompt)
+            result, plan_failed, blocked_tasks = await _plan_result_from_events(engine.plan(prompt))
         elif mode == "team":
-            result = await engine.team_complete_async(prompt, worker_mode=worker_mode)
+            result, gate_denial = await _team_result_from_events(
+                engine.team(prompt, worker_mode=worker_mode)
+            )
         else:
-            result = await _ask_streaming(
+            result, gate_denial = await _ask_streaming(
                 engine,
                 prompt,
                 history=history,
                 stream_deltas=not json_output,
             )
     except Exception as exc:  # noqa: BLE001 - CLI should report model/config errors cleanly
+        # Task 0036: the exception is recorded as status "failed" (and still
+        # prints the fatal line); the exit code is decided below so --json
+        # gets its payload even on this path.
+        failure = exc
         typer.echo(f"Fatal error: {exc}", err=True)
-        raise typer.Exit(1) from exc
+
+    if failure is not None:
+        status = "failed"
+        blocked_reason: str | None = None
+    elif plan_failed or gate_denial is not None:
+        status = "blocked"
+        blocked_reason = gate_denial or _plan_blocked_reason(blocked_tasks)
+    else:
+        status = "ok"
+        blocked_reason = None
+
     if json_output:
-        typer.echo(
-            json.dumps(
-                {
-                    "text": result.text,
-                    "mode": mode,
-                    "worker_mode": worker_mode if mode == "team" else None,
-                    "turns": result.turns,
-                    "total_tokens": result.total_tokens,
-                    "usage": result.usage.to_dict(),
-                    "cost": result.cost,
-                    "session_usage": _single_shot_session_usage(result, usage_baseline),
-                },
-                ensure_ascii=False,
+        if failure is not None:
+            # The run died mid-flight: emit the same schema with zeroed
+            # accounting (usage was lost with the exception) so machine
+            # consumers always get one JSON object with a status field.
+            payload = {
+                "text": "",
+                "status": status,
+                "mode": mode,
+                "worker_mode": worker_mode if mode == "team" else None,
+                "turns": 0,
+                "total_tokens": 0,
+                "usage": Usage().to_dict(),
+                "cost": None,
+                "error": str(failure),
+                "session_usage": _single_shot_session_usage(
+                    QueryResult(text="", total_tokens=0, turns=0),
+                    usage_baseline,
+                    cost_unknown=True,
+                ),
+            }
+        else:
+            # No resolvable price profile (model absent from the built-in table and
+            # no llm.prices override) and the run produced no cost mapping: report
+            # cost as null with a note instead of an empty dict / fabricated 0.0.
+            # Known-model output is byte-identical to the previous contract.
+            cost_unknown = _cost_unknown(llm_client, result.cost)
+            usage_payload: dict[str, Any] = result.usage.to_dict()
+            if mode == "react" and measured_client.last_prompt_breakdown is not None:
+                # Task 0038: the fixed request overhead of the run's last LLM
+                # call, under the usage object. Reported for react only — the
+                # mode whose Agent records the same numbers — and absent when
+                # nothing was measured (engine doubles that never call chat),
+                # so the old JSON contract stays intact.
+                usage_payload["prompt_breakdown"] = measured_client.last_prompt_breakdown
+            payload = {
+                "text": result.text,
+                "status": status,
+                "mode": mode,
+                "worker_mode": worker_mode if mode == "team" else None,
+                "turns": result.turns,
+                "total_tokens": result.total_tokens,
+                "usage": usage_payload,
+                "cost": None if cost_unknown else result.cost,
+            }
+            if cost_unknown:
+                payload["cost_note"] = UNKNOWN_MODEL_PRICE_NOTE
+            if blocked_reason is not None:
+                payload["blocked_reason"] = blocked_reason
+            payload["session_usage"] = _single_shot_session_usage(
+                result, usage_baseline, cost_unknown=cost_unknown
             )
-        )
-    elif mode == "react":
+        typer.echo(json.dumps(payload, ensure_ascii=False))
+    elif failure is None and mode == "react":
         # The answer text was already echoed incrementally; only the trailing
         # newline that typer.echo(result.text) used to add is still missing.
         sys.stdout.write("\n")
         sys.stdout.flush()
-    else:
+    elif failure is None:
         typer.echo(result.text)
+    if not json_output:
+        # Task 0036: one machine-greppable status line on stderr, even for
+        # "ok" — headless harnesses should not have to parse JSON to learn
+        # how a run ended.
+        detail = str(failure) if failure is not None else (blocked_reason or "")
+        typer.echo(f"status: {status}" + (f" ({detail})" if detail else ""), err=True)
+    if fail_on_blocked and status in {"blocked", "failed"}:
+        raise typer.Exit(2)
+    if failure is not None:
+        raise typer.Exit(1) from failure
+    if plan_failed:
+        # Task 0034: the plan-mode run ended with tasks the read-only gate
+        # blocked (or failed). The summary above already says the plan did
+        # not complete; the exit code must agree instead of reporting 0.
+        raise typer.Exit(1)
 
 
-def _single_shot_session_usage(result, usage_baseline: SessionUsageTotals | None) -> dict:
+def _plan_blocked_reason(blocked_tasks: dict[str, str]) -> str:
+    """Human-readable blocked_reason for a plan run the read-only gate stopped.
+
+    The plan_failed event's ``blocked_tasks`` map carries one rejection reason
+    per blocked task; a plan that stalled for another reason (dependencies
+    unsatisfied) has no entries, so the reason says so generically instead of
+    inventing a gate refusal that did not happen.
+    """
+    if not blocked_tasks:
+        return "plan did not complete (tasks blocked or failed)"
+    return "; ".join(f"{task_id}: {reason}" for task_id, reason in blocked_tasks.items())
+
+
+def _single_shot_session_usage(
+    result,
+    usage_baseline: SessionUsageTotals | None,
+    *,
+    cost_unknown: bool = False,
+) -> dict:
     """Dual-scope session usage for single-prompt ``--json``.
 
     Mirrors the REPL ``/usage`` JSON: ``historical_total`` is the resumed
@@ -939,17 +1352,102 @@ def _single_shot_session_usage(result, usage_baseline: SessionUsageTotals | None
     run only. One caveat stated in ``sources``: a single-prompt run does not
     append its usage to the transcript, so the baseline here is informational
     and is not persisted back.
+
+    ``cost_unknown`` marks a run whose model price is unresolvable: the cost
+    fields become null — including on ``historical_total``, since baseline
+    plus unknown is itself unknown — instead of a fabricated 0.0.
     """
     this_run = SessionUsageTotals.from_turn(usage=result.usage, cost=result.cost)
     baseline = usage_baseline if usage_baseline is not None else SessionUsageTotals()
+    historical = (baseline + this_run).to_dict()
+    current = this_run.to_dict()
+    if cost_unknown:
+        for scope in (historical, current):
+            scope["cost_usd"] = None
+            scope["cost_cny"] = None
     return {
-        "historical_total": (baseline + this_run).to_dict(),
-        "current_process": this_run.to_dict(),
+        "historical_total": historical,
+        "current_process": current,
         "sources": {
             "historical_total": "resumed session usage baseline + this run (not persisted)",
             "current_process": "this run only",
         },
     }
+
+
+# Clients that do not expose ``price_profile`` (test doubles, custom provider
+# wrappers) stay on the pass-through contract; only an explicit None means the
+# factory resolved no price profile for this model.
+_PRICE_PROFILE_ABSENT = object()
+
+
+class _MeasuredLlmClient:
+    """Transparent LLM-client wrapper measuring each ``chat()`` request.
+
+    Task 0038: every ``chat()`` call is measured with the shared
+    :func:`nexuscli.agent.agent.prompt_breakdown` helper — the exact inputs
+    the agent sends — and the last measurement backs ``-p --json``'s
+    ``usage.prompt_breakdown``. Everything else delegates to the wrapped
+    client, so streaming, retries, overflow recovery and cost resolution are
+    unchanged; the wrapper exists because the engine owns the Agent instance
+    (whose ``last_prompt_breakdown`` is the programmatic read-side) and the
+    event streams must stay react≡query() (test_agent_overflow_parity).
+    """
+
+    def __init__(self, client: LlmClient) -> None:
+        self._client = client
+        self.last_prompt_breakdown: dict[str, int] | None = None
+
+    @property
+    def model_name(self) -> str:
+        return self._client.model_name
+
+    @property
+    def provider_name(self) -> str:
+        return self._client.provider_name
+
+    @property
+    def max_context_window(self) -> int:
+        return self._client.max_context_window
+
+    @property
+    def price_profile(self) -> ModelPriceProfile | None:
+        return getattr(self._client, "price_profile", None)
+
+    def chat(
+        self,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
+        *,
+        system_prompt: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        self.last_prompt_breakdown = measure_prompt_breakdown(
+            system_prompt=system_prompt,
+            tool_definitions=list(tools),
+            messages=list(messages),
+        )
+        return self._client.chat(messages, tools, system_prompt=system_prompt)
+
+    def calculate_cost(
+        self,
+        usage: Usage | dict[str, Any],
+        *,
+        currency: str = "usd",
+    ) -> CostBreakdown:
+        return self._client.calculate_cost(usage, currency=currency)
+
+
+def _cost_unknown(llm_client: object, cost: dict[str, Any] | None) -> bool:
+    """True when ``--json`` must report cost as unknown (null + note).
+
+    Both halves matter: the client resolved no price profile (built-in table
+    miss and no ``llm.prices`` override), and the run indeed produced no cost
+    mapping — the offline demo provider, whose scripted ``calculate_cost``
+    returns honest zeros regardless of its ``None`` profile, keeps the
+    pass-through contract.
+    """
+    profile = getattr(llm_client, "price_profile", _PRICE_PROFILE_ABSENT)
+    return profile is None and not cost
 
 
 def _serve_or_exit(serve: Callable[[], None], port: int) -> None:

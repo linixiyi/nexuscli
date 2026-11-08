@@ -106,6 +106,36 @@ class PolicyConfig:
 
 
 @dataclass(slots=True)
+class SandboxConfig:
+    """OS-level command sandboxing (the ``sandbox`` config section).
+
+    ``backend`` selects the OS confinement applied to spawned shell
+    commands. The model-facing bash tool reads this section from the run's
+    config (``context.config.sandbox``) and wraps through
+    :func:`nexuscli.policy.os_sandbox.wrap_command`;
+    :class:`nexuscli.tools.commands.CommandExecutor` applies it when the
+    caller passes this config in:
+
+    - ``"none"`` (the default): no OS confinement — commands run exactly as
+      before; only env sanitization (:class:`PolicyConfig`) applies.
+    - ``"seatbelt"``: macOS ``sandbox-exec`` policy wrapping (see
+      :mod:`nexuscli.policy.os_sandbox`). Off macOS, or wherever the
+      backend cannot run, requesting it raises
+      :class:`nexuscli.policy.os_sandbox.OperationUnsupported` — the spawn
+      fails closed and never silently degrades to ``none``.
+
+    ``writable_paths`` are extra subpaths a sandboxed command may write
+    (its cwd and the system temp tree are always writable);
+    ``allow_network`` permits outbound network access (the network is
+    denied otherwise).
+    """
+
+    backend: str = "none"
+    writable_paths: list[str] = field(default_factory=list)
+    allow_network: bool = False
+
+
+@dataclass(slots=True)
 class PermissionsConfig:
     """Pattern-based permission rules (deny > ask > allow), evaluated before HITL."""
 
@@ -184,20 +214,30 @@ class FeatureConfig:
 class AgentConfig:
     """Agent loop settings for long-running tasks.
 
-    ``max_turns`` caps the react tool loop per user message; the default of
-    200 favours long-running tasks over a low hard stop. At load time values
-    are clamped to at least 1 (0 or a negative number would turn every run
-    into a no-op; see :func:`_dict_to_agent`).
+    ``max_turns`` is the single per-run turn budget for every agent loop: the
+    react tool loop, plan task workers (:class:`PlanExecuteAgent`) and team
+    workers (:class:`AgentOrchestrator` subagents) all read it, so no path
+    carries its own magic number. The default of 200 favours long-running
+    tasks over a low hard stop. At load time values are clamped to at least 1
+    (0 or a negative number would turn every run into a no-op; see
+    :func:`_dict_to_agent`).
 
     ``loop_detection_threshold`` is how many consecutive identical tool calls
     (same tool + same normalized arguments) are tolerated before the react
     loop blocks the call and nudges the model to change strategy; one more
     identical repeat terminates the turn. ``0`` disables detection entirely;
     negative values are clamped to 0 at load time (see :func:`_dict_to_agent`).
+
+    ``prompt_profile`` selects how much tool schema every request carries:
+    ``"full"`` (the default) advertises the whole registry, ``"lean"`` keeps
+    only the core tool schemas (:data:`nexuscli.tools.registry.LEAN_CORE_TOOLS`)
+    to cut the fixed per-request tool overhead. Unknown values fall back to
+    ``"full"`` at load time, so the default behaviour never changes silently.
     """
 
     max_turns: int = 200
     loop_detection_threshold: int = 3
+    prompt_profile: str = "full"
 
 
 @dataclass(slots=True)
@@ -260,6 +300,7 @@ class NexusCliConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     permissions: PermissionsConfig = field(default_factory=PermissionsConfig)
+    sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     hooks: HooksConfig = field(default_factory=HooksConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
@@ -493,6 +534,9 @@ def _apply_env(data: dict[str, Any], env: dict[str, str | None]) -> dict[str, An
             "freellmapi": ("FREELLMAPI_API_KEY",),
             "xfyun": ("XFYUN_API_KEY",),
             "agnes": ("AGNES_API_KEY",),
+            # Local gateways run without credentials by default; OLLAMA_API_KEY
+            # is only picked up when the server has OLLAMA_AUTH enabled.
+            "ollama": ("OLLAMA_API_KEY",),
         }
         for provider_key in provider_key_map.get(provider, ()):
             if env.get(provider_key):
@@ -621,6 +665,7 @@ def _dict_to_config(data: dict[str, Any]) -> NexusCliConfig:
         permissions=PermissionsConfig(
             **_filter_known(data.get("permissions", {}), PermissionsConfig)
         ),
+        sandbox=SandboxConfig(**_filter_known(data.get("sandbox", {}), SandboxConfig)),
         hooks=_dict_to_hooks(data.get("hooks")),
         prompt=PromptConfig(**_filter_known(data.get("prompt", {}), PromptConfig)),
         features=FeatureConfig(**_filter_known(data.get("features", {}), FeatureConfig)),
@@ -691,7 +736,8 @@ def _dict_to_agent(raw: Any) -> AgentConfig:
     it is clamped to 1 at load time; ``loop_detection_threshold`` clamps to 0
     instead (0 means the detection is disabled). Non-numeric values fall back
     to the defaults instead of raising, so one bad entry cannot prevent the
-    CLI from starting.
+    CLI from starting. ``prompt_profile`` accepts only ``"full"`` /
+    ``"lean"``; anything else (typo, wrong type) falls back to ``"full"``.
     """
     if not isinstance(raw, dict):
         return AgentConfig()
@@ -710,6 +756,10 @@ def _dict_to_agent(raw: Any) -> AgentConfig:
         )
     except (TypeError, ValueError):
         fields["loop_detection_threshold"] = default.loop_detection_threshold
+    profile = fields.get("prompt_profile", default.prompt_profile)
+    if profile not in ("full", "lean"):
+        profile = default.prompt_profile
+    fields["prompt_profile"] = profile
     return AgentConfig(**fields)
 
 

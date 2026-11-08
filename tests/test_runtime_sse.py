@@ -7,12 +7,17 @@ runtime.db / sessions 均落在临时目录。
 A10（spec 2026-10-25_port-realtime-offline-e2e）新增：审批事件入流（approval_suspended
 / approval_resolved）、live token 帧按 50ms 窗口合帧、单连接积压 resync 帧
 （Ported from kitagent (MIT, zed123214/kitagent) src/agent_runtime/web/session.py:13-266）。
+
+0021（spec 2026-11-07_fix-nexuscli-release-hardening）新增：扩展动词 approve_run 的
+收口帧（台账 decision=approve_run）与可配超时看护收口的 expired 帧（resolved_by=
+timeout）——同一连接内 suspended → resolved 帧序断言。
 """
 
 from __future__ import annotations
 
 import http.client
 import json
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -23,12 +28,20 @@ import pytest
 
 from nexuscli.runtime.api import RuntimeApiServer
 from nexuscli.runtime.approvals import ApprovalSuspension
-from tests.test_runtime import _runtime_test_key
+
+
+def _runtime_test_key() -> str:
+    # 与 tests/test_runtime.py 的同名 helper 同语义。本文件不 `from tests.…`
+    # 导入：任务 verify 用裸 `pytest`（非 `python -m pytest`）跑单文件时，
+    # 仓库根不在 sys.path，`tests` 命名空间包不可导入（test_workbench_static
+    # 同款先例）。
+    return os.environ.get("NEXUSCLI_UNITTEST_RUNTIME_CREDENTIAL") or "unit-test-value"
+
 
 KEY = _runtime_test_key()
 
 
-def _make_server(cwd: str) -> RuntimeApiServer:
+def _make_server(cwd: str, **kwargs: Any) -> RuntimeApiServer:
     from nexuscli.config import load_config
 
     return RuntimeApiServer(
@@ -36,6 +49,7 @@ def _make_server(cwd: str) -> RuntimeApiServer:
         config=load_config(project_root=None),
         api_key=KEY,
         port=0,
+        **kwargs,
     )
 
 
@@ -150,8 +164,9 @@ def _stream_lines_live(port: int, path: str, *, seconds: float, sink: list[str])
 def _frames(lines: list[str]) -> list[tuple[int | None, str, dict[str, Any] | None]]:
     """把 _stream_lines 的原始行解析成 (id, event, data) 帧。
 
-    服务端所有 data 均为单行 JSON，解析失败置 None；审批/resync 帧不带 id: 行
-    （id 为 None）；心跳注释行（": ping"）跳过。
+    服务端所有 data 均为单行 JSON，解析失败置 None；approval_suspended/resync
+    帧不带 id: 行（id 为 None；approval_resolved 已落 events 表、带 id）；
+    心跳注释行（": ping"）跳过。
     """
 
     frames: list[tuple[int | None, str, dict[str, Any] | None]] = []
@@ -388,14 +403,32 @@ def test_sse_pushes_approval_suspend_and_resolve(sse_server) -> None:
     assert _wait_for(
         lambda: any(event == "approval_resolved" for _fid, event, _data in _frames(collected))
     ), collected
-    resolved = [data for _fid, event, data in _frames(collected) if event == "approval_resolved"]
+    resolved_frames = [
+        (fid, data) for fid, event, data in _frames(collected) if event == "approval_resolved"
+    ]
+    # 2026-11-08 复审修复：approval_resolved 落 events 表（带 per-thread seq，流内帧
+    # 有 id: 行）——裸帧形状会被 live 段合帧引发的前端 SequenceGap 重建抹掉且不重发，
+    # 人工决定计数在真实流里恒 0。落库后回放/重建均可见（下方回放断言锁定）。
+    assert len(resolved_frames) == 1
+    assert resolved_frames[-1][0] is not None  # 事件行帧带 id:（重放游标可推进）
+    resolved = [data for _fid, data in resolved_frames]
     assert resolved[-1] == {
         "id": approval_id,
         "approval_id": approval_id,
         "decision": "approve",
         "resolved_by": "web",
         "status": "resolved",
+        "seq": 2,  # thread.created(seq 1) 之后的下一行
     }
+    # 落库持久性：GET events 全量回放包含同一收口行（前端 resync 重建的回放源；
+    # 该端点按既有契约不带 id: 行）
+    status, _, body = _request(
+        port, "GET", f"/v1/threads/{thread_id}/events", headers={"x-api-key": KEY}
+    )
+    assert status == 200
+    replayed = _frames(body.decode("utf-8").splitlines())
+    assert [event for _fid, event, _data in replayed].count("approval_resolved") == 1
+    assert replayed[-1][2] == resolved[-1]
 
 
 def test_sse_coalesces_live_token_deltas_in_order(sse_server) -> None:
@@ -482,3 +515,138 @@ def test_sse_resync_on_backlog_high_water(sse_server) -> None:
     assert _wait_for(
         lambda: any(event == "message.delta" for _fid, event, _data in _frames(collected))
     ), collected
+
+
+# ---------------------------------------------------------------- 0021 扩展动词与可配超时
+
+
+@pytest.fixture()
+def short_timeout_server(tmp_path):
+    """0021：审批超时可配的 SSE 服务器（0.5s 看护收口窗口）。"""
+
+    server = _make_server(str(tmp_path), approval_timeout_seconds=0.5)
+    thread = threading.Thread(target=server.serve_forever, name="nexuscli-sse-timeout", daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while server._server is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert server._server is not None
+    port = int(server._server.server_address[1])
+    time.sleep(0.1)
+    yield server, port
+    server._stop.set()
+    thread.join(timeout=5)
+
+
+def _register_thread_suspension(server: RuntimeApiServer, thread_id: str) -> str:
+    """挂起模式回调在本线程 scope 登记一张卡（登记即抛 ApprovalSuspension）。"""
+
+    suspend_cb = server.approval_bridge.callback_for(thread_id=thread_id, suspend=True)
+    try:
+        suspend_cb(
+            {
+                "tool_name": "bash",
+                "description": "list files",
+                "input": {"command": "ls"},
+            }
+        )
+    except ApprovalSuspension as exc:
+        return exc.approval_id
+    raise AssertionError("suspend callback did not raise ApprovalSuspension")
+
+
+def test_sse_approval_frames_order_for_approve_run(sse_server) -> None:
+    """0021：approve_run 收口帧的帧序与载荷——同一流内 approval_suspended 先于
+    approval_resolved，台账 decision 记应用动词 approve_run（等待方实际收到的
+    ToolDecision）。"""
+
+    server, port = sse_server
+    thread_id = _create_thread(server, port)
+    collected: list[str] = []
+
+    def reader() -> None:
+        _stream_lines_live(
+            port, f"/v1/threads/{thread_id}/events/stream?since=0", seconds=6, sink=collected
+        )
+
+    reader_thread = threading.Thread(target=reader, daemon=True)
+    reader_thread.start()
+    time.sleep(0.5)
+
+    approval_id = _register_thread_suspension(server, thread_id)
+    assert _wait_for(
+        lambda: any(event == "approval_suspended" for _fid, event, _data in _frames(collected))
+    ), collected
+
+    status, _, body = _request(
+        port,
+        "POST",
+        f"/v1/approvals/{approval_id}/decision",
+        headers={"x-api-key": KEY},
+        body={"decision": "approve_run"},
+    )
+    assert status == 200
+    assert json.loads(body)["decision"] == "approve_run"
+
+    assert _wait_for(
+        lambda: any(event == "approval_resolved" for _fid, event, _data in _frames(collected))
+    ), collected
+    frames = _frames(collected)
+    events = [event for _fid, event, _data in frames]
+    # 帧序：suspended 在 resolved 之前（同一连接内可观测）
+    assert events.index("approval_suspended") < events.index("approval_resolved")
+    resolved = [data for _fid, event, data in frames if event == "approval_resolved"]
+    # 2026-11-08 复审修复：resolved 落 events 表（带 seq；thread.created 之后下一行）
+    assert resolved[-1] == {
+        "id": approval_id,
+        "approval_id": approval_id,
+        "decision": "approve_run",
+        "resolved_by": "web",
+        "status": "resolved",
+        "seq": 2,
+    }
+
+
+def test_sse_timeout_expiry_emits_resolved_frame(short_timeout_server) -> None:
+    """0021：可配超时到期 → 看护线程 fail-closed 收口 → 流内 approval_resolved
+    帧（decision 保持 None：expired 卡没有形成过 Web 决策，resolved_by=timeout）。"""
+
+    server, port = short_timeout_server
+    thread_id = _create_thread(server, port)
+    collected: list[str] = []
+
+    def reader() -> None:
+        _stream_lines_live(
+            port, f"/v1/threads/{thread_id}/events/stream?since=0", seconds=6, sink=collected
+        )
+
+    reader_thread = threading.Thread(target=reader, daemon=True)
+    reader_thread.start()
+    time.sleep(0.5)
+
+    approval_id = _register_thread_suspension(server, thread_id)
+    assert _wait_for(
+        lambda: any(event == "approval_suspended" for _fid, event, _data in _frames(collected))
+    ), collected
+
+    def resolved_with_timeout() -> bool:
+        return any(
+            event == "approval_resolved" and (data or {}).get("resolved_by") == "timeout"
+            for _fid, event, data in _frames(collected)
+        )
+
+    assert _wait_for(resolved_with_timeout, timeout=8), collected
+    frames = _frames(collected)
+    events = [event for _fid, event, _data in frames]
+    assert events.index("approval_suspended") < events.index("approval_resolved")
+    resolved = [data for _fid, event, data in frames if event == "approval_resolved"]
+    # 2026-11-08 复审修复：resolved 落 events 表（带 seq；超时收口同样持久化）
+    assert resolved[-1] == {
+        "id": approval_id,
+        "approval_id": approval_id,
+        "decision": None,
+        "resolved_by": "timeout",
+        "status": "expired",
+        "seq": 2,
+    }
+    assert server.approval_bridge.record_status(approval_id) == "expired"

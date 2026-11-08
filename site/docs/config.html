@@ -9,6 +9,33 @@
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/config.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
+  <style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>
   <script>
     (function () {
       try {
@@ -28,6 +55,11 @@
         <a href="../index.html#docs">文档</a>
         <a href="../tutorial.html">教程</a>
       </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
+      </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
       <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
@@ -38,6 +70,7 @@
     <div class="toc-title">目录</div>
     <div class="toc">
 <ul>
+<li><a href="#固定-prompttool-开销诊断">固定 prompt/tool 开销诊断</a></li>
 <li><a href="#模型token-与费用">模型、Token 与费用</a></li>
 </ul>
 </div>
@@ -100,6 +133,14 @@ NEXUSCLI_API_KEY=your_key_here
 <td><code>ANTHROPIC_API_KEY</code></td>
 <td>Anthropic（原生 Messages API provider）</td>
 </tr>
+<tr>
+<td><code>GEMINI_API_KEY</code></td>
+<td>Google Gemini（原生 generateContent provider，<code>GOOGLE_API_KEY</code> 亦可用）</td>
+</tr>
+<tr>
+<td><code>OLLAMA_API_KEY</code></td>
+<td>Ollama（仅服务端开启 OLLAMA_AUTH 时需要）</td>
+</tr>
 </tbody>
 </table>
 <p>通过命令行临时覆盖 provider 和 model：</p>
@@ -112,6 +153,8 @@ NEXUSCLI_MODEL=qwen2.5-coder \
 uv run nexuscli -p &quot;解释这个仓库&quot;
 </code></pre>
 <p>原生 Anthropic provider（<code>NEXUSCLI_PROVIDER=anthropic</code>）走 Anthropic Messages API：API Key 只从 <code>ANTHROPIC_API_KEY</code> 环境变量（或既有 <code>llm.api_key</code> 配置路径）读取，默认 base_url 为 <code>https://api.anthropic.com</code>，默认上下文窗口 200K。注意两个边界：Anthropic 没有内置价格表，成本估算需要显式配置 <code>llm.prices</code>；该 provider 暂不支持图片输入，列表型消息会自动降级为文本。</p>
+<p>原生 Google Gemini provider（<code>NEXUSCLI_PROVIDER=google</code>）走 Gemini 原生 HTTP（<code>generateContent</code>/<code>streamGenerateContent</code> SSE）：API Key 优先级为 <code>llm.api_key</code> → <code>GEMINI_API_KEY</code> → <code>GOOGLE_API_KEY</code>，只随 <code>x-goog-api-key</code> 请求头发送（不进 URL），默认 base_url 为 <code>https://generativelanguage.googleapis.com</code>。模型能力按模型 profile 的能力字段判定（<code>/model</code> 选内置 Gemini 模型会带入 <code>vision: true</code>；直接写 config 时用 <code>llm.vision</code> 显式声明），不做模型名猜测——未知模型一律按保守默认处理（无图片输入、上下文窗口回落 128K，可用 <code>llm.context_window</code> 覆盖）。图片输入支持 <code>@image:</code> 产生的 data URL（转成 <code>inlineData</code>），远程 http(s) 图片 URL 无对应请求形态，会降级为文本占位。Gemini 同样没有内置价格表，成本估算需要显式配置 <code>llm.prices</code>。</p>
+<p>本地推理服务 provider：<code>NEXUSCLI_PROVIDER=ollama</code>（默认 base_url <code>http://127.0.0.1:11434/v1</code>）与 <code>NEXUSCLI_PROVIDER=llamacpp</code>（对应 llama.cpp 的 <code>llama-server</code>，默认 base_url <code>http://127.0.0.1:8080/v1</code>），另有统一别名 <code>provider="local"</code>——端点有歧义（两种服务端口不同），必须显式给出 <code>llm.base_url</code>，适合 vLLM、LM Studio 等其它 OpenAI-compatible 本地网关。三者复用 OpenAI-compatible 的流式与 tool call 协议（含 5xx/429 时自动降级非流式重试），需要显式配置 <code>llm.model</code>（如 <code>qwen2.5-coder:latest</code>）。本地服务通常无需鉴权：未配置 <code>llm.api_key</code> 时请求<strong>不携带 Authorization 头</strong>，配了才以 <code>Authorization: Bearer &lt;key&gt;</code> 发送（Ollama 开启 <code>OLLAMA_AUTH</code> 时用 <code>OLLAMA_API_KEY</code> 环境变量即可）。两个如实边界：本地网关不在内置价格表里，本地推理也不该按云端同名模型计价——成本估算需要显式 <code>llm.prices</code>（不配置时成本恒为 <code>null</code>，见下文）；默认上下文窗口按 32K 处理，比云端回落值保守得多，请用 <code>llm.context_window</code> 对齐服务端的 <code>num_ctx</code> / <code>-c</code> 设置。<code>/model</code> 的「API 拉取」探测失败时给出可读提示（如服务未启动时提示先运行 <code>ollama serve</code> / <code>llama-server</code>）。</p>
 <p>不想把 API Key 明文写进配置文件时，<code>llm.api_key</code> 支持 pi 兼容的 <code>"!command"</code> 形式——配置加载时执行命令、取 stdout 首行作为密钥（适合接系统密钥管理器）：</p>
 <pre><code class="language-json">{ &quot;llm&quot;: { &quot;provider&quot;: &quot;deepseek&quot;, &quot;api_key&quot;: &quot;!op read My-DeepSeek-Key&quot; } }
 </code></pre>
@@ -131,6 +174,13 @@ uv run nexuscli -p &quot;解释这个仓库&quot;
 <p>两者的完整口径（trace_id 关联、span 支持边界、落盘结构与用量落库覆盖面）见 <a href="observability.html">observability.md</a>。</p>
 <p>Agent 工具循环的回合上限由 <code>agent.max_turns</code> 控制（默认 200，加载时最小钳到 1）：单条消息内最多执行这么多轮工具调用；到达上限而模型仍想继续时，会输出显式 warning 提示任务可能未完成，长程任务可在 config.json 的 <code>"agent"</code> 段调大该值。子代理（<code>task</code> 工具委派）不继承该配置，而是使用独立的固定上限 <code>SUBAGENT_MAX_TURNS</code>（30），不随 <code>agent.max_turns</code> 放大。加载配置时若 <code>max_turns</code> 被判定为非数值（如字符串 <code>"abc"</code>），会回退默认 200，不会让 CLI 启动失败。</p>
 <p>同段的 <code>agent.loop_detection_threshold</code>（默认 3，<code>0</code> 关闭，负数钳到 0，非数值同样回退默认）控制工具循环调用检测：同一工具以完全相同的参数连续重复第 N 次（N=阈值）时该次调用<strong>不执行</strong>，模型收到一条注入的换策略提示；若下一次仍是相同调用，则终止该回合并输出 loop-abort warning。因此 warning 有两种来源（<code>max_turns</code> 用尽与循环终止），语义相同——任务可能没有完成。指纹按「工具名 + 参数排序序列化」判定，参数有任何变化即重新计数。</p>
+<p>同段的 <code>agent.prompt_profile</code>（默认 <code>"full"</code>，非法值回落 <code>"full"</code>）控制每次请求携带的工具 schema 规模：<code>"full"</code> 声明注册表里的全部工具；<code>"lean"</code> 只保留核心工具 schema（<code>read_file</code> / <code>write_file</code> / <code>edit_file</code> / <code>bash</code> / <code>list_dir</code> / <code>grep</code> / <code>glob</code> / <code>update_plan</code>，注册表里不存在的名字自然跳过），以压低固定 per-request 工具开销。它只收窄工具 schema，系统提示里的可用工具清单不变；默认行为不受影响。</p>
+<h2 id="固定-prompttool-开销诊断"><a class="toclink" href="#固定-prompttool-开销诊断">固定 prompt/tool 开销诊断</a></h2>
+<p>固定开销（系统提示 + 工具 schema）在每条请求前都一样大，出问题时可以用两个口子直接看到：</p>
+<ul>
+<li>单次 CLI 的 <code>--json</code> 在 <code>usage.prompt_breakdown</code> 输出 react 模式最后一次 LLM 请求的分解（CLI 在 llm client 边界测量，与 <code>Agent.last_prompt_breakdown</code> 同口径）：<code>system_chars</code> / <code>tools_chars</code> / <code>history_chars</code>（按消息正文计，图片列表与 assistant tool_calls 按其 JSON 长度计）、<code>tool_count</code>，以及按 chars/4 估算的 <code>estimated_tokens</code>（<code>ceil(总字符数 / 4)</code>——是诊断估算值，不是供应商口径，缓存与分词都会让真实 <code>input_tokens</code> 有出入）。plan/team 模式与未发起请求的运行保持旧契约，不添加该键。</li>
+<li><code>nexuscli doctor --token-budget</code>（可配 <code>--cwd</code>）打印当前配置的基线：<code>prompt_profile</code>、<code>llm.context_window</code>、<code>llm.max_tokens</code> 与空 history 的固定开销 <code>baseline</code>（该目录真实注册表的 builtin + VFS + MCP 工具、按当前 profile 收窄后的工具 schema 与静态+动态系统提示）。lean 配置下 <code>tool_count</code> 与 <code>tools_chars</code> 相应下降，可与 full 对比看节省量。</li>
+</ul>
 <h2 id="模型token-与费用"><a class="toclink" href="#模型token-与费用">模型、Token 与费用</a></h2>
 <p>默认 provider/model 是 <code>deepseek/deepseek-v4-flash</code>。DeepSeek V4 Flash/Pro 的内置 profile 使用 1M 上下文，并带有截至 2026-07-17 的官方每百万 Token 价格；价格会变化，因此可以用 <code>llm.context_window</code> 和 <code>llm.prices</code> 覆盖，未知 OpenAI-compatible 模型应显式配置。</p>
 <p><code>llm.prices</code> 的键是币种，值是每百万 Token 的 <code>{input_cache_hit, input_cache_miss, output}</code> 覆盖项（会与内置价格表合并、优先级更高）。本地 OpenAI-compatible 网关（如 Ollama、vLLM、LM Studio）的模型不在任何内置价格表里，不配置时 <code>/usage</code> 与 <code>/usage stats</code> 的成本恒为 0（token 计数正常）——想要成本估算就按你的计费方显式给出价格，例如：</p>
@@ -145,6 +195,17 @@ uv run nexuscli -p &quot;解释这个仓库&quot;
   }
 }
 </code></pre>
+<p>单次 CLI 的 <code>--json</code> 对未知价格显式标注：模型不在内置价格表且未配置 <code>llm.prices</code> 时，<code>cost</code> 为 <code>null</code>，并附 <code>cost_note: "unknown model price; configure llm.prices"</code>，<code>session_usage</code> 两个口径的 <code>cost_usd</code>/<code>cost_cny</code> 同样为 <code>null</code>（不再伪造 0.0）；token 计数不受影响。配置了价格（或命中内置表）的模型行为不变。示例如下：</p>
+<pre><code class="language-json">{
+  &quot;text&quot;: &quot;...&quot;,
+  &quot;cost&quot;: null,
+  &quot;cost_note&quot;: &quot;unknown model price; configure llm.prices&quot;,
+  &quot;session_usage&quot;: {
+    &quot;historical_total&quot;: { &quot;total_tokens&quot;: 1234, &quot;cost_usd&quot;: null, &quot;cost_cny&quot;: null },
+    &quot;current_process&quot;: { &quot;total_tokens&quot;: 1234, &quot;cost_usd&quot;: null, &quot;cost_cny&quot;: null }
+  }
+}
+</code></pre>
 <p>流式请求开启 <code>stream_options.include_usage</code>，并解析 <code>choices=[]</code> 的 usage-only 块、cache hit/miss 和 reasoning Token。REPL 用 <code>/usage</code> 查看最近一次普通 ReAct（含 <code>session_usage</code> 双口径，见 <a href="repl-commands.html">repl-commands.md</a>），用 <code>/usage stats [N天]</code> 查看本地落库的近 N 天汇总，单次 CLI 用 <code>--json</code> 获取完整 usage/cost——带 <code>-c</code> / <code>--resume</code> 时 payload 还会附 <code>session_usage</code>（恢复基线 + 本次运行的历史累计，与仅本次运行的双口径；单次模式不把 usage 回写转录，该值为提示性数据）。成本以供应商返回的实际 Token 为准，不能只用"代码行数"精确推算。</p><div class="pager"><a href="mcp.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🔌 MCP</span></a><a href="repl-commands.html" class="next"><span class="dir">下一篇 →</span><span class="name">💬 内置斜杠命令参考</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/config.md" target="_blank" rel="noopener">docs/config.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
@@ -152,6 +213,113 @@ uv run nexuscli -p &quot;解释这个仓库&quot;
   <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
 </footer><script src="../site.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "../";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {

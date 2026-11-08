@@ -23,16 +23,26 @@ from nexuscli.agent.loop_guard import (
     LOOP_ABORT_MESSAGE,
     LoopGuard,
     loop_abort_warning,
+    max_turns_warning,
     tool_call_fingerprint,
 )
 from nexuscli.agent.orchestrator import AgentOrchestrator
 from nexuscli.agent.plan_execute import PlanExecuteAgent
+
+# Shared turn helpers live in query.py (the lower layer — orchestrator and
+# plan_execute already import it, so the reverse edge would be a cycle). The
+# F12 message constant is re-exported here for existing importers.
+from nexuscli.agent.query import (
+    MAX_TOKENS_TOOL_RESULT_MESSAGE,  # noqa: F401
+    max_tokens_blocked_results,
+    stream_llm_turn_with_overflow_retry,
+)
 from nexuscli.agent.turn_checkpoint import TurnCheckpointStore
 from nexuscli.config import NexusCliConfig
 from nexuscli.context import ContextBudget, ContextWindowManager
 from nexuscli.hooks import fire_event, has_hooks
 from nexuscli.image import parse_image_references
-from nexuscli.llm.base import LlmClient, is_context_overflow_error
+from nexuscli.llm.base import LlmClient
 from nexuscli.prompt import PromptAssembler
 from nexuscli.skill import SkillContextBuffer, SkillRegistry
 from nexuscli.snapshot import SnapshotService
@@ -43,15 +53,6 @@ from nexuscli.tools.registry import ToolRegistry
 from nexuscli.types import Message, Usage
 
 AgentMode = Literal["react", "plan", "team"]
-
-# F12: synthetic tool_result for a `max_tokens` cutoff that landed inside a
-# tool_use block — the call's arguments JSON is incomplete, so the call is
-# never executed. Wording follows kitagent's loop synthesis (loop.py): tell
-# the model to split the task into smaller steps and retry.
-MAX_TOKENS_TOOL_RESULT_MESSAGE = (
-    "Error: output token limit reached before this tool call could be "
-    "completed. Please break the task into smaller steps and try again."
-)
 
 
 def _message_snapshot(message: Message) -> dict[str, Any]:
@@ -149,6 +150,12 @@ class Agent:
         # Accumulated usage / cost across all turns of the session.
         self.last_usage = Usage()
         self.last_cost: dict[str, Any] = {}
+        # Task 0038: fixed request overhead recorded before every LLM call of
+        # the react loop; the last record stays on the agent after the run
+        # (the CLI measures the same calls at its own client boundary for
+        # --json, since the event streams must stay react≡query()). Empty
+        # until a run starts.
+        self.last_prompt_breakdown: dict[str, int] = {}
 
         # Validate configuration.
         self._validate_config()
@@ -194,6 +201,14 @@ class Agent:
         ``done``
             {"type": "done", "total_turns": int, "total_tokens": int,
              "usage": {...}, "cost": {...}, "messages": [Message, ...]}
+
+        Task 0038: before every LLM call the react loop records the request's
+        fixed overhead (``system_chars`` / ``tools_chars`` / ``history_chars``
+        / ``tool_count`` plus ``estimated_tokens``) on
+        ``agent.last_prompt_breakdown`` — the last record stays after the run.
+        It deliberately does NOT ride the event stream: the react and
+        ``query()`` loops must stay event-equal (test_agent_overflow_parity),
+        so the CLI measures the same calls at its own llm-client boundary.
         """
         # Automatic turn snapshots are opt-in (features.auto_snapshot): a full
         # workspace copy per turn is too slow on some disks. Keeping the service
@@ -298,7 +313,9 @@ class Agent:
                 Message(role="user", content=parse_image_references(message, self.cwd)),
             ]
 
-        tool_defs = self.tool_registry.definitions()
+        # Task 0038: agent.prompt_profile == "lean" advertises only the core
+        # tool schemas; the default "full" keeps every tool of the registry.
+        tool_defs = self.tool_registry.definitions(profile=self.config.agent.prompt_profile)
         executor = ToolExecutor(self.tool_registry)
         context = ToolContext(
             cwd=self.cwd,
@@ -350,10 +367,6 @@ class Agent:
 
         while turn < self.max_turns:
             turn += 1
-            text = ""
-            stop_reason = "end_turn"
-            turn_usage = Usage()
-            tool_states: dict[int, dict[str, Any]] = {}
 
             # Compress if needed.
             if self.config.features.context_compression:
@@ -371,85 +384,40 @@ class Agent:
                         "summarized_messages": compression.summarized_messages,
                     }
 
-            # Call the LLM. A provider-reported context overflow (the request
-            # itself exceeded the window — e.g. a resumed session or tool
-            # results that pushed past the estimate-based threshold) is
-            # compacted once with the manual compressor and retried instead
-            # of failing the whole turn. Everything else surfaces as before.
-            text = ""
-            stop_reason = "end_turn"
-            turn_usage = Usage()
-            tool_states: dict[int, dict[str, Any]] = {}
-            stream_error: BaseException | None = None
-            for attempt in range(2):
-                text = ""
-                stop_reason = "end_turn"
-                turn_usage = Usage()
-                tool_states = {}
-                stream_error = None
-                async for event in self.llm_client.chat(
-                    messages,
-                    tool_defs,
-                    system_prompt=effective_system,
-                ):
-                    event_type = event.get("type")
-                    if event_type == "text_delta":
-                        delta = str(event.get("text") or "")
-                        text += delta
-                        yield {"type": "text_delta", "text": delta}
-                    elif event_type == "thinking_delta":
-                        yield {
-                            "type": "thinking_delta",
-                            "thinking": str(event.get("thinking") or ""),
-                        }
-                    elif event_type == "tool_call_delta":
-                        _merge_tool_delta(tool_states, event["tool_call"])
-                    elif event_type == "message_end":
-                        stop_reason = str(event.get("stop_reason") or "end_turn")
-                    elif event_type == "usage":
-                        usage = Usage.from_mapping(event.get("usage") or {})
-                        turn_usage = turn_usage + usage
-                        yield {"type": "usage", "usage": usage.to_dict()}
-                    elif event_type == "error":
-                        stream_error = event["error"]
-                        break
-                if stream_error is None:
-                    break
-                overflow_recoverable = (
-                    attempt == 0
-                    and self.config.features.context_compression
-                    and is_context_overflow_error(stream_error)
-                )
-                if not overflow_recoverable:
-                    break
-                compression = context_manager.compact_now(messages)
-                if not compression.compressed:
-                    # compact_now refuses to hand back a history that grew (the
-                    # summary block can cost more than the turns it replaces on
-                    # a short session). That refusal must not disable overflow
-                    # recovery: the provider already said the request is too
-                    # big, so a hard trim is the remaining lever. Drop the
-                    # oldest turns and retry once; if nothing is left to drop,
-                    # surface the provider error as-is.
-                    trimmed = context_manager.force_trim(messages)
-                    if trimmed is None:
-                        break
-                    messages = trimmed
-                else:
-                    messages = compression.messages
-                yield {
-                    "type": "text_delta",
-                    "text": (
-                        "\nProvider reported a context-length overflow; compacting the "
-                        "conversation history and retrying once.\n"
-                    ),
-                }
-            if stream_error is not None:
-                yield {"type": "error", "error": stream_error, "error_code": "llm_error"}
+            # Call the LLM through the shared turn streamer: a provider-reported
+            # context overflow (the request itself exceeded the window — e.g. a
+            # resumed session or tool results that pushed past the
+            # estimate-based threshold) is compacted once with the manual
+            # compressor and retried instead of failing the whole turn;
+            # everything else surfaces as before. Shared with query() so
+            # plan/team workers recover the same way.
+            # Task 0038: record the fixed request overhead right before the
+            # call — after compression, so the numbers match what is sent.
+            self.last_prompt_breakdown = prompt_breakdown(
+                system_prompt=effective_system,
+                tool_definitions=tool_defs,
+                messages=messages,
+            )
+            turn_outcome: dict[str, Any] = {}
+            async for event in stream_llm_turn_with_overflow_retry(
+                self.llm_client,
+                messages,
+                tool_defs,
+                system_prompt=effective_system,
+                context_manager=context_manager,
+                compression_enabled=self.config.features.context_compression,
+                outcome=turn_outcome,
+            ):
+                yield event
+            messages = turn_outcome["messages"]
+            if turn_outcome["error"] is not None:
+                yield {"type": "error", "error": turn_outcome["error"], "error_code": "llm_error"}
                 return
 
-            total_usage = total_usage + turn_usage
-            tool_calls = _finalize_tool_calls(tool_states)
+            text = turn_outcome["text"]
+            stop_reason = turn_outcome["stop_reason"]
+            total_usage = total_usage + turn_outcome["usage"]
+            tool_calls = _finalize_tool_calls(turn_outcome["tool_states"])
             messages.append(Message(role="assistant", content=text or "", tool_calls=tool_calls))
             yield {"type": "turn_complete", "turn": turn, "stop_reason": stop_reason}
 
@@ -463,25 +431,21 @@ class Agent:
             if turn == self.max_turns and (stop_reason == "tool_use" or tool_calls):
                 hit_limit = True
 
-            blocked_results: dict[str, ToolResult] = {}
-            if stop_reason == "max_tokens" and tool_calls:
-                # F12: a `max_tokens` cutoff landing inside a tool_use block
-                # truncates the call's arguments JSON — executing the
-                # degraded `{"raw": ...}` input would act on garbage. Answer
-                # every call with a synthetic is_error tool_result so the
-                # assistant tool_use / tool_result pairing invariant holds
-                # and execute nothing; the next turn lets the model retry
-                # with smaller steps. Loop-guard fingerprints are not
-                # recorded: these calls never ran, so they are not
-                # repetitions.
+            # F12: a token-limit cutoff landing inside a tool_use block
+            # truncates the call's arguments JSON — executing the degraded
+            # `{"raw": ...}` input would act on garbage. The shared helper
+            # answers every call with a synthetic is_error tool_result so the
+            # assistant tool_use / tool_result pairing invariant holds and
+            # nothing executes; the next turn lets the model retry with
+            # smaller steps. It fires on the OpenAI-style `max_tokens` and
+            # the raw `length` finish reason alike.
+            blocked_results: dict[str, ToolResult] = max_tokens_blocked_results(
+                tool_calls, stop_reason
+            )
+            if blocked_results:
+                # Loop-guard fingerprints are not recorded: these calls never
+                # ran, so they are not repetitions.
                 loop_aborted = False
-                for call in tool_calls:
-                    call_id = str(call.get("id") or "")
-                    blocked_results[call_id] = ToolResult(
-                        tool_use_id=call_id,
-                        content=MAX_TOKENS_TOOL_RESULT_MESSAGE,
-                        is_error=True,
-                    )
             else:
                 # Loop guard: record every call's fingerprint. When the same
                 # fingerprint reaches the threshold the call is NOT executed and
@@ -603,11 +567,7 @@ class Agent:
             yield {
                 "type": "warning",
                 "kind": "budget_exhausted",  # F11：类型化预算耗尽标记（折叠层不做字符串匹配）
-                "message": (
-                    f"Reached the agent.max_turns limit ({self.max_turns}); the task "
-                    "may be unfinished. Raise agent.max_turns in config.json to "
-                    "continue longer."
-                ),
+                "message": max_turns_warning(self.max_turns),
             }
 
         if loop_aborted:
@@ -632,13 +592,16 @@ class Agent:
 
     async def _run_plan(self, message: str) -> AsyncIterator[dict[str, Any]]:
         """Plan-then-execute mode: the planner creates a DAG, then workers run it."""
+        # max_task_turns is deliberately not threaded from self.max_turns (the
+        # react constructor default of 200 would silently lift the plan budget):
+        # plan task workers read the single agent.max_turns budget from config
+        # inside PlanExecuteAgent, same as team workers.
         agent = PlanExecuteAgent(
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
             config=self.config,
             cwd=self.cwd,
             approval_callback=self.approval_callback,
-            max_task_turns=self.max_turns,
         )
         agent.history = list(self.history)
 
@@ -690,6 +653,56 @@ class Agent:
 # ------------------------------------------------------------------
 # Shared helpers (also used by query.py)
 # ------------------------------------------------------------------
+
+
+def _message_chars(message: Message) -> int:
+    """One message's request-facing size in chars (content + tool_calls JSON)."""
+
+    import json
+
+    chars = 0
+    content = message.content
+    if isinstance(content, str):
+        chars += len(content)
+    elif content:
+        # Image-reference lists ride the request as JSON.
+        chars += len(json.dumps(content, ensure_ascii=False))
+    if message.tool_calls:
+        chars += len(json.dumps(message.tool_calls, ensure_ascii=False))
+    return chars
+
+
+def prompt_breakdown(
+    *,
+    system_prompt: str,
+    tool_definitions: list[dict[str, Any]],
+    messages: list[Message],
+) -> dict[str, int]:
+    """Fixed request overhead in chars, plus a chars/4 token estimate (Task 0038).
+
+    ``system_chars`` / ``tools_chars`` / ``history_chars`` count what one
+    request carries: the system prompt, the JSON-serialized tool schemas and
+    the conversation messages' text (image-reference lists and assistant
+    tool_calls count as their JSON); ``tool_count`` is the number of
+    advertised tools. ``estimated_tokens`` applies the docs' chars/4
+    heuristic to the whole request — a diagnostic estimate, not a provider
+    figure (tokenizers, prompt caching and serialization details make real
+    ``usage.input_tokens`` differ).
+    """
+
+    import json
+    import math
+
+    tools_chars = len(json.dumps(tool_definitions, ensure_ascii=False))
+    history_chars = sum(_message_chars(message) for message in messages)
+    total_chars = len(system_prompt) + tools_chars + history_chars
+    return {
+        "system_chars": len(system_prompt),
+        "tools_chars": tools_chars,
+        "history_chars": history_chars,
+        "tool_count": len(tool_definitions),
+        "estimated_tokens": math.ceil(total_chars / 4),
+    }
 
 
 def _merge_tool_delta(tool_states: dict[int, dict[str, Any]], delta: dict[str, Any]) -> None:

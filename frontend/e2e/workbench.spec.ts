@@ -19,10 +19,11 @@
 //   8. W2 会话回放：植入 title 为空的 REPL 会话 → 条目显示「会话 YYYY-MM-DD HH:MM」，
 //      不再出现 "(untitled)" 裸文案（植入手段见 seedUntitledSession）
 //
-// 服务策略：起真服务 scripts/web_validation_server.py（A11/lane2 交付）；脚本或浏览器
-// 二进制缺失时整文件跳过并留说明（本地可选，CI 不强制）。turn 用例依赖离线 Demo
-// provider（无 key 端到端）：服务报「NEXUSCLI_API_KEY is not configured」时按未就绪
-// 跳过，不伪造通过。
+// 服务策略：起真服务 scripts/web_validation_server.py（A11/lane2 交付）。脚本或浏览器
+// 二进制缺失时：本地整文件跳过并留说明（e2e 是本地可选步骤），CI（env CI 置位）必须
+// 硬失败——CI frontend job 先装 Chromium 再跑，缺失即环境错配，不允许静默变绿
+// （task_0020）。turn 用例依赖离线 Demo provider（无 key 端到端）：服务报
+// 「NEXUSCLI_API_KEY is not configured」时按未就绪跳过，不伪造通过。
 //
 // 2026-10-26 UI 重构（workbench-kitagent-ui）：App 已接入 useWorkbench 的
 // probeAuthorized 探针——带有效 cookie 的冷加载直接进工作台（用例 1 的页面继续
@@ -33,7 +34,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
 
 import { replayEvents } from "../src/state";
 
@@ -46,6 +47,9 @@ const validationServer = path.join(repoRoot, "scripts", "web_validation_server.p
 // lane2 交付的 validation server 以 api_key="offline-demo" 构造 RuntimeApiServer
 // （脚本内硬编码，忽略外部 env）；保留 env 覆盖缝以便脚本演进。
 const apiKey = process.env.NEXUSCLI_E2E_API_KEY ?? "offline-demo";
+// task_0020：CI（GitHub Actions 置位 CI=true）中 e2e 不允许静默跳过——浏览器缺失、
+// validation server 未就绪、静态托管缺 dist 都必须硬失败；本地保留 skip 语义。
+const inCI = process.env.CI === "true" || process.env.CI === "1";
 
 let serverProcess: ChildProcess | null = null;
 let harnessReady = false;
@@ -53,6 +57,8 @@ let servesWorkbench = false;
 let skipReason =
   `e2e 基线跳过：scripts/web_validation_server.py 尚未就绪（A11/lane2 并行交付）。` +
   `就绪后重跑 npm run test:e2e。`;
+// validation server 未就绪的原始原因（CI 硬失败时嵌入错误信息，本地进 skipReason）
+let harnessFailure = "";
 let uiSkipReason = "";
 let origin = "";
 let bootstrapToken = "";
@@ -60,6 +66,11 @@ let bootstrapToken = "";
 // （storageState 方案在本仓不可行：App 无 cookie 探针，冷加载恒为引导门）。
 let authedContext: BrowserContext | null = null;
 let authedPage: Page | null = null;
+// 自管浏览器实例（task_0020）：本 spec 不消费 browser/page 内建 fixture——内建
+// fixture 在测试体第一行 test.skip() 执行**之前**就绪并 launch，浏览器缺失时会把
+// 「本地可 skip」打回 fixture 硬失败；自管实例让 beforeAll 的探针判定成为唯一入口，
+// 本地缺浏览器 → 整文件如实 skip，CI（env CI 置位）→ 硬失败。
+let browserHandle: Browser | null = null;
 // W2 用例要在服务端植入一条无标题 REPL 会话。validation server 把 HOME 指到自己的
 // tempfile.TemporaryDirectory（scripts/web_validation_server.py:98-101），e2e 拿不到该路径——
 // 但 Python tempfile 遵循 TMPDIR：主服务实例用 e2e 自有的 TMPDIR 启动，READY 后按前缀
@@ -67,27 +78,44 @@ let authedPage: Page | null = null;
 // cwd 是 <root>/demo）。定位失败时 W2 用例如实跳过。
 let serverTmpDir: string | null = null;
 let serverRoot: string | null = null;
+// 隔离 HOME 壳目录登记处：beforeAll 的主服务实例与 spawnServer 的独立实例各自
+// mkdtempSync 一份，之前从不 rmSync——每跑一次 e2e 就泄漏一个（主 1 个 + 每个独立
+// 用例 1 个）。统一登记到这里，afterAll 在服务进程全部停止后一并清理。
+let isolatedHomeDirs: string[] = [];
 
 test.beforeAll(async () => {
   if (!existsSync(validationServer)) {
-    return; // 保持 harnessReady=false，用例按 skipReason 跳过
+    if (inCI) {
+      throw new Error(
+        "CI 中 e2e 不允许静默跳过：scripts/web_validation_server.py 缺失（task_0020）。",
+      );
+    }
+    return; // 本地：保持 harnessReady=false，用例按 skipReason 跳过
   }
   // 浏览器二进制缺失 → 如实跳过（不安装、不伪造结果）。
   // 用真实 launch 探针而非 executablePath() 存在性检查：新版 Playwright 的默认
   // headless 走独立的 chrome-headless-shell 二进制，executablePath() 指向完整版
-  // Chromium，二者可能只装其一。
+  // Chromium，二者可能只装其一。探针与实例合一：launch 成功即保留自管实例
+  // （browserHandle），全文件不再走会抢在 test.skip() 之前 launch 的内建 fixture。
   const { chromium } = await import("@playwright/test");
   try {
-    const browser = await chromium.launch();
-    await browser.close();
+    browserHandle = await chromium.launch();
   } catch (cause) {
+    const reason = cause instanceof Error ? cause.message.split("\n")[0] : String(cause);
+    if (inCI) {
+      throw new Error(
+        `CI 中 e2e 不允许静默跳过：Playwright 浏览器无法启动（${reason}）。` +
+          `CI frontend job 需先 npx playwright install chromium（task_0020）。`,
+      );
+    }
     skipReason =
-      `e2e 基线跳过：Playwright 浏览器无法启动（${cause instanceof Error ? cause.message.split("\n")[0] : String(cause)}）。` +
-      `可执行 cd frontend && npx playwright install chromium；e2e 为本地可选步骤，CI 不强制。`;
+      `e2e 基线跳过：Playwright 浏览器无法启动（${reason}）。` +
+      `可执行 cd frontend && npx playwright install chromium；e2e 为本地可选步骤。`;
     return;
   }
   // 隔离 HOME/USERPROFILE：runtime DB（~/.nexuscli/runtime/runtime.db，api.py:123）不得写进真实用户目录
   const isolatedHome = mkdtempSync(path.join(tmpdir(), "nexuscli-e2e-"));
+  isolatedHomeDirs.push(isolatedHome);
   serverTmpDir = mkdtempSync(path.join(tmpdir(), "nexuscli-e2e-tmpdir-"));
   const pythonArgv = process.env.NEXUSCLI_E2E_PYTHON
     ? [process.env.NEXUSCLI_E2E_PYTHON, validationServer]
@@ -145,12 +173,18 @@ test.beforeAll(async () => {
   }).then(
     (value) => value,
     (cause: unknown) => {
-      skipReason = `e2e 基线跳过：validation server 未就绪（${cause instanceof Error ? cause.message : String(cause)}）。`;
+      harnessFailure = cause instanceof Error ? cause.message : String(cause);
+      skipReason = `e2e 基线跳过：validation server 未就绪（${harnessFailure}）。`;
       return null;
     },
   );
   if (ready === null) {
     await stopServer();
+    if (inCI) {
+      throw new Error(
+        `CI 中 e2e 不允许静默跳过：validation server 未就绪（${harnessFailure}）（task_0020）。`,
+      );
+    }
     return;
   }
   origin = ready.origin;
@@ -165,6 +199,13 @@ test.beforeAll(async () => {
   const homeHtml = await fetch(`${origin}/`).then((r) => r.text());
   servesWorkbench = homeHtml.includes('<div id="root">') && !homeHtml.includes("UI 未构建");
   if (!servesWorkbench) {
+    if (inCI) {
+      await stopServer();
+      throw new Error(
+        "CI 中 e2e 不允许静默跳过：validation server 未托管已构建的 frontend/dist" +
+          "（dist 按 server.cwd 相对解析）。CI frontend job 需在 e2e 前先 npm run build（task_0020）。",
+      );
+    }
     uiSkipReason =
       "UI 基线跳过：validation server 未托管已构建的 frontend/dist（dist 按 server.cwd 相对解析，" +
       "而脚本把 cwd 指到临时 demo 工作区）——构建同步与 /v1 API 均正常，属 lane 间契约缝隙，待收口任务修复。";
@@ -173,11 +214,18 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await authedContext?.close();
+  await browserHandle?.close();
   await stopServer();
   // 服务端的 TemporaryDirectory 随进程退出自清；外层 TMPDIR 壳目录由本文件创建、本文件清。
   if (serverTmpDir !== null) {
     rmSync(serverTmpDir, { recursive: true, force: true });
   }
+  // 隔离 HOME 壳目录同理：主实例与 spawnServer 的独立实例都在这里清（force 吞掉
+  // 个别残留错误，不因清理失败掩盖测试结果）。
+  for (const dir of isolatedHomeDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  isolatedHomeDirs = [];
 });
 
 async function stopServer(): Promise<void> {
@@ -216,14 +264,14 @@ async function stopServer(): Promise<void> {
   }
 }
 
-test("bootstrap 认证流：一次性口令换发并抹除片段", async ({ browser }) => {
-  // 跨用例持久页面：Playwright 的 page fixture 每测试隔离、用例结束即销毁——
-  // 串行 authedPage 交接必须用 browser fixture 自建 context（主会话收口修复）。
-  // 1440x900：侧栏在 ≥1280px 才常驻（kitagent 同款断点），默认 1280 贴着断线。
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const page = await context.newPage();
+test("bootstrap 认证流：一次性口令换发并抹除片段", async () => {
   test.skip(!harnessReady, skipReason);
   test.skip(!servesWorkbench, uiSkipReason);
+  // 跨用例持久页面：Playwright 的 page fixture 每测试隔离、用例结束即销毁——
+  // 串行 authedPage 交接必须用自管 browser 实例自建 context（主会话收口修复）。
+  // 1440x900：侧栏在 ≥1280px 才常驻（kitagent 同款断点），默认 1280 贴着断线。
+  const context = await browserHandle!.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
   await page.goto(`${origin}/#bootstrap=${bootstrapToken}`);
   // 换发后口令不得留在地址栏（kitagent 同款断言）
   await expect(page).not.toHaveURL(/bootstrap=/);
@@ -235,23 +283,31 @@ test("bootstrap 认证流：一次性口令换发并抹除片段", async ({ brow
   authedPage = page;
 });
 
-test("加载：静态托管 + React 挂载无页面错误", async ({ page }) => {
+test("加载：静态托管 + React 挂载无页面错误", async () => {
   test.skip(!harnessReady, skipReason);
   test.skip(!servesWorkbench, uiSkipReason);
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(origin);
-  await expect(page.getByRole("heading", { name: "NexusCLI Workbench" })).toBeVisible();
-  // 无 cookie 冷加载 → 认证门（含粘贴换发入口，task_0006），无页面错误。
-  await expect(page.locator(".gate-card")).toBeVisible();
-  await expect(page.getByPlaceholder("粘贴一键链接或口令")).toBeVisible();
-  expect(errors).toEqual([]);
+  // 独立冷加载 context：无 cookie（内建 page fixture 改自管实例，见 browserHandle 注释）
+  const context = await browserHandle!.newContext();
+  const page = await context.newPage();
+  try {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(origin);
+    await expect(page.getByRole("heading", { name: "NexusCLI Workbench" })).toBeVisible();
+    // 无 cookie 冷加载 → 认证门（含粘贴换发入口，task_0006），无页面错误。
+    await expect(page.locator(".gate-card")).toBeVisible();
+    await expect(page.getByPlaceholder("粘贴一键链接或口令")).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
 });
 
 
 // 独立 spawn 一台 validation server（粘贴换发用例专用：一次性口令不能与用例 1 共享）。
 async function spawnServer(): Promise<{ origin: string; token: string; proc: ChildProcess }> {
   const isolatedHome = mkdtempSync(path.join(tmpdir(), "nexuscli-e2e-paste-"));
+  isolatedHomeDirs.push(isolatedHome);
   const pythonArgv = process.env.NEXUSCLI_E2E_PYTHON
     ? [process.env.NEXUSCLI_E2E_PYTHON, validationServer]
     : ["uv", "run", "python", validationServer];
@@ -315,11 +371,11 @@ async function stopProc(proc: ChildProcess): Promise<void> {
   }
 }
 
-test("gate 粘贴换发：页内换发成功后可发任务（复审 F2 回归）", async ({ browser }) => {
+test("gate 粘贴换发：页内换发成功后可发任务（复审 F2 回归）", async () => {
   test.skip(!harnessReady, skipReason);
   test.skip(!servesWorkbench, uiSkipReason);
   const own = await spawnServer();
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = await browserHandle!.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   try {
     await page.goto(`${own.origin}/`);
@@ -342,11 +398,11 @@ test("gate 粘贴换发：页内换发成功后可发任务（复审 F2 回归�
 // 2026-10-27_workbench-ux-iteration U1 回归：坏口令曾把 Gate 卡死在 bootstrapping
 // 分支（redeem 失败不还原 auth phase），整页无错误信息、无重试入口。
 // 独立 spawn 一台 server：坏口令尝试不烧真口令，但重试走同一台的一次性口令。
-test("U1 回归：坏口令就地报错，表单保留可重试", async ({ browser }) => {
+test("U1 回归：坏口令就地报错，表单保留可重试", async () => {
   test.skip(!harnessReady, skipReason);
   test.skip(!servesWorkbench, uiSkipReason);
   const own = await spawnServer();
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = await browserHandle!.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   try {
     await page.goto(`${own.origin}/`);
@@ -402,12 +458,19 @@ test("U2 回归：刷新后 csrf 自动重签恢复可写，且重签 csrf 能�
   await expect(page.getByText(/csrf token missing or invalid/)).toHaveCount(0);
 });
 
-test("发起 turn：幂等 POST + 审批门 + 事件 seq 严格连续", async () => {
+test("发起 turn：幂等 POST + 审批门 + 事件 seq 严格连续", async ({ request }) => {
   test.skip(!harnessReady, skipReason);
   // x-api-key 头通道（外部自动化通道，csrf 豁免；浏览器 cookie 通道的 UI 提交
-  // 另经 Composer/useWorkbench，不在本用例面）。
+  // 另经 Composer/useWorkbench，不在本用例面）。API 基线不消费 authedContext：
+  // 本地无 dist 时 bootstrap 用例按 uiSkipReason skip、authedContext 保持 null，
+  // 曾取 authedContext!.request 抛 TypeError 并因 serial 中断后续用例。改用
+  // request fixture（= playwright.request.newContext 的无 cookie 独立
+  // APIRequestContext；仅驱动连接、不 launch 浏览器，不触碰文件头规避内建
+  // browser/page fixture 的守则），全部请求凭 x-api-key 头认证（api.py 的
+  // api_key 通道，csrf 豁免）——beforeAll 探测自述的「API 基线（发起 turn）
+  // 照常执行」由此在本地无 dist 时成立。
   const authHeaders = { "x-api-key": apiKey };
-  const apiRequest = authedContext!.request; // cookie 通道（bootstrap 换发的会话）
+  const apiRequest = request;
   const created = await apiRequest.post(`${origin}/v1/threads`, {
     headers: { ...authHeaders, "content-type": "application/json" },
     data: {},
@@ -664,6 +727,55 @@ test("U6：结果 tab 的「执行事实与来源」逐工具列出，点击跳�
   await readRow.click();
   await expect(page.getByRole("tab", { name: /执行过程/ })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".tool-detail .detail-heading strong")).toHaveText("read_file");
+});
+
+// ---------------------------------------------------------------------------
+// 0021：审批卡片扩展动词（本轮放行 = approve_run / 切换自动模式 = approve_auto）
+// 与 Reason 行。置于 W1/U6 之后：W1 的前置清理（经 API 批准 U2 在途 turn 的审批）
+// 完成后页面 pending 已清、composer 可发。点击路径走 run 动词（切换自动模式会改
+// 会话权限、影响其他用例的审批前提，其语义由服务端测试 test_approve_auto_* 锁定）；
+// approve_run 的「本轮内后续同工具调用不再询问」由服务端
+// test_approve_run_covers_rest_of_run_via_executor 锁定，这里覆盖按钮可见性与
+// 点击后的卡片收口 + turn 真实完成。
+// ---------------------------------------------------------------------------
+
+test("0021 审批卡片：run/auto 按钮与 Reason 行可见，本轮放行后卡片收口且 turn 完成", async () => {
+  test.skip(!harnessReady, skipReason);
+  test.skip(!servesWorkbench, uiSkipReason);
+  test.skip(authedPage === null, "前置用例未产出已认证页面（bootstrap 认证流失败）。");
+  const page = authedPage as Page;
+  await page.getByRole("button", { name: "新建会话" }).click();
+  await page
+    .locator("textarea")
+    .first()
+    .fill("0021 审批按钮链路验证：检查样例数据并生成检查报告。");
+  await expect(page.locator(".send-button")).toBeEnabled({ timeout: 10_000 });
+  await page.locator(".send-button").click();
+  const card = page.locator(".approval-card", { hasText: "本线程" }).first();
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  // Reason 行（服务端契约：description 必现）与四个决策动词按钮
+  await expect(card.locator(".reason")).toBeVisible();
+  await expect(card.getByRole("button", { name: "批准" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "拒绝" })).toBeVisible();
+  const runButton = card.getByRole("button", { name: "本轮放行" });
+  const autoButton = card.getByRole("button", { name: "切换自动模式" });
+  await expect(runButton).toBeVisible();
+  await expect(autoButton).toBeVisible();
+  // 点击本轮放行：卡片收口消失（决策端点 200 → 轮询/SSE 刷新移除），
+  // turn 真实走完（运行报告就绪 = demo 链尾端到端完成）。
+  await runButton.click();
+  await expect(card).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator(".view-report")).toBeVisible({ timeout: 30_000 });
+  // 人工决定计数由 SSE approval_resolved 事件驱动（state.ts 无 seq 审批帧旁路 →
+  // derive.ts approvals 计数）。2026-11-08 前该帧被 applyEvent 丢弃、计数恒 0——
+  // 此断言锁死该回归。断言非零而非精确 1：demo 链若触发多张不同工具的审批卡，
+  // 计数随真实决策次数增长。
+  await page.locator(".view-report").click();
+  const approvalsStat = page
+    .locator(".report-stats > div")
+    .filter({ hasText: "人工决定" })
+    .locator("strong");
+  await expect(approvalsStat).toHaveText(/[1-9]\d*/, { timeout: 10_000 });
 });
 
 test("W2：无标题 REPL 会话回退显示「会话 YYYY-MM-DD HH:MM」，不再出现 (untitled)", async () => {

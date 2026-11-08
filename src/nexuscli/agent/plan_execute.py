@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -18,6 +18,33 @@ from nexuscli.snapshot import SnapshotService
 from nexuscli.tools.registry import ToolRegistry
 from nexuscli.types import Message, Usage
 
+# Task 0034: the one string the plan-mode read-only gate (tools/executor.py)
+# puts in every rejected tool result. A worker whose tool calls were rejected
+# by the gate cannot have completed its task, so plan_execute matches this
+# snippet on the tool_result events query() forwards and blocks the task
+# instead of marking it COMPLETED.
+PLAN_MODE_REJECTION_SNIPPET = "is not allowed in plan mode"
+
+# Task 0034, clause 1: the read-only planning directive appended to the
+# planner's user turns in plan mode — write-file / disk-writing tasks must not
+# be scheduled into the executable plan. The planner (plan/planner.py) is
+# outside this change's boundary, so the instruction rides the one seam
+# plan_execute owns: its client proxy. Obedience is the model's job; write
+# work that still slips into a plan is stopped by the executor's read-only
+# gate and reported as blocked, never COMPLETED.
+_PLAN_MODE_PLANNING_DIRECTIVE = (
+    "注意：当前处于 plan 只读模式。执行计划只能包含只读任务"
+    "（读文件、分析、验证，以及静态只读的命令）；"
+    "不得安排写文件、改文件或会写盘的命令任务——"
+    "执行阶段这类操作会被只读闸拒绝，请把写入动作留给用户切回默认模式后执行。"
+)
+
+# Footer of the plan-mode failure summary: the read-only gate's own hint,
+# repeated where the run actually ends so the user knows how to proceed.
+_PLAN_MODE_FOOTER = (
+    "plan 模式是只读模式：请切回默认模式（Shift+Tab，或 -p 时去掉 --mode plan）后重新运行该计划。"
+)
+
 
 @dataclass(slots=True)
 class TaskRunResult:
@@ -26,6 +53,14 @@ class TaskRunResult:
     usage: Usage
     turns: int
     error: Exception | None = None
+    # Task 0013: the messages this task produced beyond the history snapshot
+    # it started from; the plan-level history absorbs them in task order.
+    messages: list[Message] = field(default_factory=list)
+    # Task 0034: set when plan mode's read-only gate rejected this task's tool
+    # calls. Such a task is blocked — plan/models.py is outside this change's
+    # boundary, so there is no BLOCKED enum value: the status becomes FAILED
+    # with the rejection reason in Task.error, and it must never be COMPLETED.
+    blocked_reason: str | None = None
 
     @property
     def tokens(self) -> int:
@@ -42,7 +77,7 @@ class PlanExecuteAgent:
         cwd: str,
         approval_callback=None,
         planner: Planner | None = None,
-        max_task_turns: int = 8,
+        max_task_turns: int | None = None,
         checkpoint_store: PlanCheckpointStore | None = None,
         use_journal: bool = False,
         run_id: str | None = None,
@@ -52,13 +87,22 @@ class PlanExecuteAgent:
         self.config = config
         self.cwd = cwd
         self.approval_callback = approval_callback
-        # F9：plan 自身的 run_id（checkpoint 持久化）；任务 worker 的日志接线归 F10。
+        # F9：plan 自身的 run_id（checkpoint 持久化）；任务 worker 的 query() 共享
+        # 这本 journal 与 plan.run_id，恢复路径的副作用去重以此为前提。
         from nexuscli.tools.journal import get_tool_journal
 
         self._journal = get_tool_journal() if use_journal else None
         self._run_id = run_id or uuid4().hex
         self.planner = planner or Planner(llm_client)
-        self.max_task_turns = max_task_turns
+        # Task 0013: an injected planner owns its own context contract; the
+        # default one gets the session history seeded per run (run()).
+        self._planner_injected = planner is not None
+        # Plan task workers share the single agent.max_turns budget with the
+        # react loop and team workers; an explicit argument still wins for
+        # callers that need a different budget.
+        self.max_task_turns = (
+            max_task_turns if max_task_turns is not None else self.config.agent.max_turns
+        )
         # Checkpointing is on by default (store injectable for tests); team
         # workers that assemble this agent inherit it without any changes.
         self.checkpoint_store = checkpoint_store or PlanCheckpointStore()
@@ -109,7 +153,7 @@ class PlanExecuteAgent:
             yield {"type": "text_delta", "text": f"正在规划任务：{message}\n\n"}
             yield {"type": "plan_status", "phase": "planning"}
             plan: ExecutionPlan | None = None
-            async for event in self.planner.stream_plan(message):
+            async for event in self._planner_for_turn().stream_plan(message):
                 if event.get("type") == "plan_created":
                     plan = event["plan"]
                     continue
@@ -228,7 +272,32 @@ class PlanExecuteAgent:
         with suppress(Exception):
             self.checkpoint_store.save(plan)
 
+    def _planner_for_turn(self) -> Planner:
+        """The planner plans on top of the current session history.
+
+        plan/planner.py builds its planning messages itself and is outside this
+        change's boundary, so the history rides in through the one seam the
+        planner exposes — its llm_client: a thin proxy prefixes the history
+        snapshot onto every chat() the planner makes (the planning turn and its
+        repair round alike). An injected planner keeps its own contract.
+
+        Task 0034: in plan mode the proxy also appends a read-only planning
+        directive to the planner's user turn — the planner must not schedule
+        write-file / disk-writing tasks into the executable plan. Whether the
+        model obeys is up to the model; a plan that still carries write work
+        is caught at execution time by the read-only gate and reported as
+        blocked (see _apply_task_result).
+        """
+        if self._planner_injected:
+            return self.planner
+        directive = _PLAN_MODE_PLANNING_DIRECTIVE if self.config.policy.plan_mode else ""
+        return Planner(_PlannerHistoryClient(self.llm_client, self.history, directive))
+
     async def _execute_plan(self, plan: ExecutionPlan) -> AsyncIterator[dict[str, Any]]:
+        # Task 0034: task id -> rejection reason for every task whose worker
+        # ran into the plan-mode read-only gate. Filled as results are applied;
+        # drives the non-success terminal summary and the plan_failed event.
+        blocked: dict[str, str] = {}
         yield {"type": "text_delta", "text": "开始执行计划……\n\n"}
         yield {"type": "plan_status", "phase": "execution"}
         plan.mark_started()
@@ -257,7 +326,7 @@ class PlanExecuteAgent:
                         yield event
                 if result is None:
                     raise RuntimeError(f"task {executable[0].id} did not produce a result")
-                async for event in self._apply_task_result(plan, result):
+                async for event in self._apply_task_result(plan, result, blocked):
                     yield event
                 continue
             yield {
@@ -299,12 +368,31 @@ class PlanExecuteAgent:
                         turns=0,
                         error=RuntimeError(f"task {task.id} did not produce a result"),
                     )
-                async for event in self._apply_task_result(plan, result):
+                async for event in self._apply_task_result(plan, result, blocked):
                     yield event
 
         if plan.has_failed():
             plan.mark_failed()
-            yield {"type": "text_delta", "text": "计划部分完成，但有任务执行失败。\n\n"}
+            if self.config.policy.plan_mode:
+                # Task 0034: a plan-mode run that ended with blocked or failed
+                # tasks must not report success — the summary says so, and the
+                # plan_failed event lets the CLI (-p --mode plan) exit
+                # non-zero instead of pretending the run completed.
+                yield {
+                    "type": "plan_failed",
+                    "plan_id": plan.id,
+                    "blocked_tasks": dict(blocked),
+                }
+                yield {
+                    "type": "text_delta",
+                    "text": _build_plan_result(
+                        plan,
+                        header=_plan_mode_failure_header(blocked),
+                        footer=_PLAN_MODE_FOOTER,
+                    ),
+                }
+            else:
+                yield {"type": "text_delta", "text": "计划部分完成，但有任务执行失败。\n\n"}
         elif plan.is_all_completed():
             plan.mark_completed()
             yield {"type": "text_delta", "text": _build_plan_result(plan)}
@@ -322,8 +410,33 @@ class PlanExecuteAgent:
         self,
         plan: ExecutionPlan,
         result: TaskRunResult,
+        blocked: dict[str, str],
     ) -> AsyncIterator[dict[str, Any]]:
-        if result.error:
+        # Task 0013: the task's own messages join the plan-level history in
+        # task order (sequential batches apply immediately; a parallel batch
+        # applies in execution order once every worker finished). Later tasks
+        # snapshot them, and the final done event carries them exactly once.
+        self.history = [*self.history, *result.messages]
+        if result.blocked_reason:
+            # Task 0034: the worker ran into the plan-mode read-only gate —
+            # the task is blocked with the rejection reason, never COMPLETED,
+            # even when the worker's own text claimed success. The worker's
+            # own output (partial findings, or its false completion claim)
+            # is still reported, labeled as output rather than as a result.
+            reason = result.blocked_reason
+            if result.error:
+                reason = f"{reason}（任务随后异常：{result.error}）"
+            result.task.mark_failed(reason)
+            blocked[result.task.id] = reason
+            blocked_line = f"已阻断 [{result.task.id}]：{_preview(reason)}"
+            worker_output = result.text.strip()
+            if worker_output:
+                blocked_line += f"\n任务输出：{_preview(worker_output)}"
+            yield {
+                "type": "text_delta",
+                "text": blocked_line + "\n\n",
+            }
+        elif result.error:
             result.task.mark_failed(str(result.error))
             yield {"type": "text_delta", "text": f"失败 [{result.task.id}]：{result.error}\n\n"}
         else:
@@ -365,23 +478,42 @@ class PlanExecuteAgent:
             "task_id": task.id,
             "task_description": task.description,
         }
+        # Task 0013: every worker starts from a snapshot of the plan-level
+        # history — the session history plus the messages earlier tasks
+        # appended — instead of a blank slate. Parallel tasks all capture the
+        # same pre-batch snapshot because increments are only appended when a
+        # result is applied, after the whole batch has finished.
+        history_snapshot = list(self.history)
+        task_user_message = _task_context(plan, task)
         text = ""
         tool_results: list[str] = []
+        # Task 0034: tool results rejected by the plan-mode read-only gate,
+        # collected verbatim as the task's rejection reason.
+        gate_rejections: list[str] = []
         usage = Usage()
         turns = 0
+        task_messages: list[Message] = []
         try:
             async for event in query(
                 llm_client=self.llm_client,
                 tool_registry=self.tool_registry,
                 system_prompt=self._task_system_prompt(plan, task),
-                user_message=_task_context(plan, task),
-                history=[],
+                user_message=task_user_message,
+                history=history_snapshot,
                 cwd=self.cwd,
                 config=self.config,
                 approval_callback=self.approval_callback,
                 # Parallel plan tasks must never share one-shot Skill context.
                 skill_context_buffer=SkillContextBuffer(),
                 max_turns=self.max_task_turns,
+                # Task 0015: task workers claim side-effectful calls in the
+                # plan's tool journal, keyed on the plan's persisted run_id.
+                # A resumed run loads the same run_id from the checkpoint, so
+                # the executor's claim/hash dedup replays completed results
+                # instead of repeating the side effect (empty run_id covers
+                # checkpoints written before the field existed).
+                journal=self._journal,
+                run_id=plan.run_id or self._run_id,
             ):
                 if event.get("type") == "text_delta":
                     text += str(event.get("text") or "")
@@ -389,6 +521,8 @@ class PlanExecuteAgent:
                     content = str(event.get("result") or "")
                     if content:
                         tool_results.append(content)
+                    if event.get("is_error") and PLAN_MODE_REJECTION_SNIPPET in content:
+                        gate_rejections.append(content)
                     yield _with_task_context(event, task)
                 elif event.get("type") in {
                     "thinking_delta",
@@ -399,12 +533,20 @@ class PlanExecuteAgent:
                 elif event.get("type") == "done":
                     turns += int(event.get("total_turns") or 0)
                     usage = usage + Usage.from_mapping(event.get("usage") or {})
+                    task_messages = list(event.get("messages") or [])
                 elif event.get("type") == "error":
                     raise event["error"]
             result_text = text.strip() or "\n".join(tool_results).strip()
             yield {
                 "type": "plan_task_result",
-                "result": TaskRunResult(task=task, text=result_text, usage=usage, turns=turns),
+                "result": TaskRunResult(
+                    task=task,
+                    text=result_text,
+                    usage=usage,
+                    turns=turns,
+                    blocked_reason=_plan_gate_rejection_reason(gate_rejections),
+                    messages=_history_increment(history_snapshot, task_messages, task_user_message),
+                ),
             }
         except Exception as exc:  # noqa: BLE001
             yield {
@@ -415,6 +557,7 @@ class PlanExecuteAgent:
                     usage=usage,
                     turns=turns,
                     error=exc,
+                    blocked_reason=_plan_gate_rejection_reason(gate_rejections),
                 ),
             }
 
@@ -444,6 +587,89 @@ def _with_task_context(event: dict[str, Any], task: Task) -> dict[str, Any]:
     }
 
 
+def _history_increment(
+    snapshot: list[Message],
+    messages: list[Message],
+    task_user_content: str,
+) -> list[Message]:
+    """The messages one task produced beyond the history it started from.
+
+    query() returns the whole conversation — the snapshot prefix plus the
+    task's own turns — so the prefix must be stripped before the plan-level
+    history absorbs them: appending wholesale would duplicate every earlier
+    message once per task. The task's turns are anchored by the snapshot
+    prefix when it survived verbatim, otherwise by the task's own user
+    message (context compression may have summarized the older snapshot turns
+    away, but the current task's turns stay in the recent side). When neither
+    anchor matches, nothing is appended: a lost suffix is recoverable,
+    duplicated or torn history is not.
+    """
+    if messages[: len(snapshot)] == snapshot:
+        return list(messages[len(snapshot) :])
+    start = next(
+        (
+            index
+            for index, message in enumerate(messages)
+            if message.role == "user" and message.content == task_user_content
+        ),
+        None,
+    )
+    if start is None:
+        return []
+    return list(messages[start:])
+
+
+class _PlannerHistoryClient:
+    """LLM client proxy that prefixes the session history onto planner chats.
+
+    The planner builds its own ``[Message(role="user", content="请为以下目标
+    创建执行计划：…")]`` turn and plan/planner.py is outside this change's
+    boundary, so the history is injected at the client seam: every chat() the
+    planner makes (the planning turn and its repair round alike) starts with
+    the history snapshot; everything else forwards to the wrapped client.
+
+    Task 0034: a non-empty ``plan_mode_directive`` is appended to the planner's
+    own user turn (never to the session history) so a plan-mode run tells the
+    planner — on the planning turn and the repair round alike — not to
+    schedule write work. The directive rides on the user role: strict
+    alternating gateways reject assistant-side injected turns (AGENTS.md).
+    """
+
+    def __init__(
+        self,
+        inner: LlmClient,
+        history: list[Message],
+        plan_mode_directive: str = "",
+    ):
+        self._inner = inner
+        self._history = list(history)
+        self._directive = plan_mode_directive
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached for attributes this class does not define (chat is
+        # defined), so after __init__ has bound _inner there is no recursion.
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
+    def chat(
+        self,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
+        *,
+        system_prompt: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        forwarded = [*self._history, *messages]
+        if self._directive and forwarded and forwarded[-1].role == "user":
+            last = forwarded[-1]
+            forwarded[-1] = Message(role="user", content=f"{last.content}\n\n{self._directive}")
+        return self._inner.chat(
+            forwarded,
+            tools,
+            system_prompt=system_prompt,
+        )
+
+
 def _executable_tasks_in_order(plan: ExecutionPlan) -> list[Task]:
     executable_ids = {task.id for task in plan.executable_tasks()}
     return [plan.tasks[task_id] for task_id in plan.execution_order() if task_id in executable_ids]
@@ -463,7 +689,12 @@ def _task_context(plan: ExecutionPlan, task: Task) -> str:
     return "\n".join(lines)
 
 
-def _build_plan_result(plan: ExecutionPlan) -> str:
+def _build_plan_result(
+    plan: ExecutionPlan,
+    *,
+    header: str = "计划执行完成。",
+    footer: str | None = None,
+) -> str:
     status_labels = {
         TaskStatus.PENDING: "待执行",
         TaskStatus.RUNNING: "执行中",
@@ -471,12 +702,32 @@ def _build_plan_result(plan: ExecutionPlan) -> str:
         TaskStatus.FAILED: "失败",
         TaskStatus.SKIPPED: "已跳过",
     }
-    lines = ["计划执行完成。", "", "任务摘要："]
+    lines = [header, "", "任务摘要："]
     for task in plan.all_tasks():
         lines.append(f"- [{task.id}] {status_labels[task.status]}：{task.description}")
         if task.result:
             lines.append(f"  结果：{_preview(task.result)}")
+        if task.status is TaskStatus.FAILED and task.error:
+            lines.append(f"  原因：{_preview(task.error)}")
+    if footer:
+        lines.append("")
+        lines.append(footer)
     return "\n".join(lines) + "\n"
+
+
+def _plan_mode_failure_header(blocked: dict[str, str]) -> str:
+    """Task 0034: the plan-mode failure header — never claims success."""
+    if blocked:
+        return f"计划未完成：{len(blocked)} 个任务被 plan 只读闸拒绝，未执行。"
+    return "计划未完成：有任务执行失败。"
+
+
+def _plan_gate_rejection_reason(rejections: list[str]) -> str | None:
+    """The task's plan-gate rejection reason, deduplicated and joined."""
+    unique = list(dict.fromkeys(item for item in rejections if item))
+    if not unique:
+        return None
+    return "；".join(unique)
 
 
 def _task_language_instruction(goal: str) -> str:

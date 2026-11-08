@@ -25,7 +25,7 @@ $ARGUMENTS
 - frontmatter 的 `description` 会显示在 `/help` 里，`argument-hint` 提示参数写法
 - `mode: react|plan|team` 让命令在指定模式下运行（如 `plan` 只读审阅），运行完恢复原模式
 - `allowed-tools` 逗号分隔，命令运行期间只保留白名单内的工具，结束后恢复
-- 正文支持 `` !`cmd` `` 注入：展开时先执行命令并把 stdout 替换进提示词（30 秒超时）。被命令守卫判为高危的命令会被拒绝，原片段替换为 `[refused: <cmd> — blocked by command guard]` 标记，不会静默执行也不会炸掉整个展开
+- 正文支持 `` !`cmd` `` 注入：展开时先执行命令并把 stdout 替换进提示词（30 秒超时）。注入不是绕过安全门的旁路——每个片段作为内部 `slash_injection` 工具走与 bash 相同的 ToolExecutor 门链（命令守卫 → 权限规则 → hooks → HITL 审批 → 审计日志），子进程环境经 `sanitize_environment` 清洗（秘钥形与 `NEXUSCLI_*` 变量不进入子进程；`policy.env_sanitization` 关闭时与 bash 同口径回全量环境）。命令来源决定审批：项目级命令（`.nexuscli/commands/`，仓库可控）的每次注入都要人工批准，无审批通道时 fail-closed 直接拒绝；用户级命令（`~/.nexuscli/commands/`，本人文件）自动执行。被命令守卫判为高危的命令在审批之前就被拒绝，原片段替换为 `[refused: <cmd> — blocked by command guard]`；被门链（审批/权限规则/hooks/plan 模式）拒绝的替换为 `[refused: <cmd> — <原因>]`，执行失败的替换为 `[failed: <cmd> — <原因>]`——不会静默执行，也不会炸掉整个展开
 - REPL 输入 `/命令名` 或单次模式 `nexuscli -p "/命令名 参数"` 都会展开为提示词发给模型
 - 示例见仓库 `examples/commands/`，复制到命令目录即可使用
 

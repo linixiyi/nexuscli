@@ -26,6 +26,10 @@ Prompt 分为可缓存的静态前缀和逐请求重建的动态后缀。静态�
 
 压缩摘要的角色约束：摘要必须放 **user** 角色——严格交替网关会 outright 拒绝 assistant 开头或 assistant 连续的请求（GLM 实测 HTTP 400 code 11133）。
 
+**结构化摘要与文件台账**。有损摘要不再是逐消息的 bullet 流水，而是固定六节：Goal / Constraints / Progress / Key Decisions / Next Steps / Critical Context，外加一个 `Files touched (path | last op | note)` 台账——每个被读写过的文件一行 `- 路径 | 最近操作 | 关键结论`，同一文件的最近一次操作覆盖旧行（`read_file`/`write_file`/`edit_file` 等带 path 参数的工具调用都会入账，结论取配对工具结果的首行）。摘要是确定性抽取，不调 LLM：句子按关键词表归入小节，未命中的内容仍由 Progress 的 last update 与最近回合原文覆盖。
+
+台账跨多次压缩累计：摘要随 user 角色消息进入持久化历史，下一次压缩——包括新一次 run 用全新 manager 压缩恢复出来的历史——会先把旧摘要解析回来，六节内容与文件台账作为基底并入新摘要，新观察叠加其上。旧的逐消息格式没有小节头，解析器会把原文降级并入 Critical Context，不报错也不丢内容；摘要超预算被截断时只损失尾部小节，闭合标签始终保留。
+
 除了自动压缩，REPL 里可随时手动压缩（`/compact [focus]`，见 [repl-commands.md](repl-commands.md)）。
 
 **provider 超限自动压缩重试**：压缩阈值基于无 tokenizer 的估算，恢复的长会话或超大工具结果可能让请求越过估算直接撞上 provider 的真实 context 上限。这种报错（`llm/base.py` 的 `is_context_overflow_error` 按短语识别，覆盖 OpenAI「maximum context length」/`context_length_exceeded` 与 Anthropic「prompt is too long」等主流报文）不会立刻让回合失败：主循环先用与 `/compact` 相同的手动压缩器压一次历史并重试同一回合，只重试一次，通知以 `text_delta` 流出（「Provider reported a context-length overflow; compacting …」）。两种情况仍照常报错：历史已无可压内容（`compact_now` 报告未压缩），或重试后二次溢出。该行为随 `features.context_compression` 开关；如实边界：只接在主 Agent 的 ReAct 循环上，`task` 委派的子代理路径未接——子代理撞超限仍直接报错。新 provider 的报文措辞不在短语表里时不会触发重试，需要按需补充短语。

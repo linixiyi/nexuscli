@@ -196,6 +196,9 @@ def test_agent_section_in_public_dict(tmp_path, monkeypatch):
     assert config_to_public_dict(config)["agent"] == {
         "max_turns": 5,
         "loop_detection_threshold": 3,
+        # task_0038 在 AgentConfig 上新增 prompt_profile（默认 "full"）后，
+        # public dict 也随之携带该键；本断言锁的就是「默认档位为 full」。
+        "prompt_profile": "full",
     }
 
 

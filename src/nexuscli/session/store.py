@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -32,6 +33,9 @@ _TITLE_MAX_CHARS = 80
 USAGE_RECORD_TYPE = "usage"
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 _SNIPPET_WINDOW_CHARS = 60
+# Auto branch names handed out by ``SessionStore.fork`` when the caller does
+# not name the branch: ``fork-1``, ``fork-2``, … per parent session.
+_DEFAULT_BRANCH_RE = re.compile(r"^fork-(\d+)$")
 
 
 @dataclass(slots=True)
@@ -46,6 +50,12 @@ class SessionMeta:
     message_count: int = 0
     # Session id this transcript was forked from; "" = a native session.
     forked_from: str = ""
+    # Session-tree metadata (optional in the JSONL meta line): ``parent_id``
+    # is the parent session this one was forked from and ``branch`` the branch
+    # name recorded at fork time. "" on both = a root session; transcripts
+    # written before these fields existed read back as roots too.
+    parent_id: str = ""
+    branch: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +68,8 @@ class SessionMeta:
             "title": self.title,
             "message_count": self.message_count,
             "forked_from": self.forked_from,
+            "parent_id": self.parent_id,
+            "branch": self.branch,
         }
 
     @classmethod
@@ -72,7 +84,19 @@ class SessionMeta:
             title=str(data.get("title") or ""),
             message_count=int(data.get("message_count") or 0),
             forked_from=str(data.get("forked_from") or ""),
+            parent_id=str(data.get("parent_id") or ""),
+            branch=str(data.get("branch") or ""),
         )
+
+
+def tree_parent_id(meta: SessionMeta) -> str:
+    """The session's parent in the session tree; "" = a root session.
+
+    Prefers the ``parent_id`` tree field and falls back to the legacy
+    ``forked_from`` snapshot link, so forks recorded before ``parent_id``
+    existed still hang under their source instead of floating as roots.
+    """
+    return meta.parent_id or meta.forked_from
 
 
 @dataclass
@@ -335,17 +359,27 @@ class SessionStore:
         writer.persisted = len(messages)
         return writer
 
-    def fork(self, session_id: str, *, title: str | None = None) -> SessionRecord | None:
+    def fork(
+        self,
+        session_id: str,
+        *,
+        title: str | None = None,
+        branch: str | None = None,
+    ) -> SessionRecord | None:
         """Copy an existing transcript to a new session id; source untouched.
 
         The new transcript holds the full message history and records the
         source id in ``forked_from`` (a snapshot-style link: fork-point facts
         live on the fork itself, never re-read from the live parent — same
-        rule as ZCode's stable-fork metadata). ``title=None`` inherits the
-        source title; an empty source title lets SessionWriter.append derive
-        one from the first user message as usual. Nothing else is inherited:
-        the session goal (keyed by session id) is deliberately not copied at
-        fork time — ZCode's fork-time goal snapshot is not ported.
+        rule as ZCode's stable-fork metadata) and, for the session tree, in
+        ``parent_id`` together with the branch name in ``branch``.
+        ``branch=None`` auto-names the branch ``fork-N`` where N continues the
+        highest ``fork-N`` already recorded among the source's children.
+        ``title=None`` inherits the source title; an empty source title lets
+        SessionWriter.append derive one from the first user message as usual.
+        Nothing else is inherited: the session goal (keyed by session id) is
+        deliberately not copied at fork time — ZCode's fork-time goal
+        snapshot is not ported.
         """
         record = self.load(session_id)
         if record is None:
@@ -360,10 +394,28 @@ class SessionStore:
             provider=record.meta.provider,
             title=title if title is not None else record.meta.title,
             forked_from=record.meta.id,
+            parent_id=record.meta.id,
+            branch=branch if branch is not None else self._next_branch_name(record.meta.id),
         )
         writer = SessionWriter(self, meta)
         writer.append(list(record.messages))
         return SessionRecord(meta=meta, messages=list(record.messages))
+
+    def _next_branch_name(self, parent_id: str) -> str:
+        """Next auto branch name for children of ``parent_id``: ``fork-N``.
+
+        N continues the highest ``fork-N`` branch already recorded among the
+        parent's children (scanning every stored session), so explicit branch
+        names don't leave gaps in the auto numbering. Deleted siblings free
+        their number for reuse — branch names are labels, not unique keys.
+        """
+        numbers = [
+            int(match.group(1))
+            for meta in self.list(limit=10**6)
+            if tree_parent_id(meta) == parent_id
+            and (match := _DEFAULT_BRANCH_RE.match(meta.branch))
+        ]
+        return f"fork-{max(numbers, default=0) + 1}"
 
     def list(self, limit: int = 20, cwd: str | None = None) -> list[SessionMeta]:
         """Most recent sessions first, optionally filtered by working directory."""

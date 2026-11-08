@@ -5,7 +5,8 @@ Rules live under ``permissions.allow`` / ``permissions.deny`` / ``permissions.as
 in config.json and use one syntax::
 
     tool                     # every call of that tool
-    bash(git diff:*)         # command rules: ``prefix:*`` matches commands starting with prefix
+    bash(git diff:*)         # command rules: ``prefix:*`` matches the prefix at a token
+                             # boundary on a single un-chained command (no shell operators)
     bash(npm run *)          # other command specs are fnmatch globs on the command string
     write_file(src/**)       # path rules: fnmatch glob on the payload path
     web_fetch(domain:github.com)  # domain rules: exact host or subdomain match
@@ -106,7 +107,7 @@ def rule_matches(rule: PermissionRule, tool_name: str, subject_kind: str, subjec
         return True
     if subject_kind == "command":
         if rule.spec.endswith(":*"):
-            return subject.startswith(rule.spec[:-2])
+            return _command_prefix_matches(subject, rule.spec[:-2])
         return fnmatch.fnmatchcase(subject, rule.spec)
     if subject_kind == "path":
         return fnmatch.fnmatchcase(subject, rule.spec)
@@ -117,6 +118,39 @@ def rule_matches(rule: PermissionRule, tool_name: str, subject_kind: str, subjec
         return fnmatch.fnmatchcase(subject, rule.spec)
     # "any": a spec'd rule cannot match a tool without a matchable subject.
     return False
+
+
+# Shell metacharacters that turn the text after a matched prefix into another
+# command or command substitution. ``$(``, subshells and process substitution
+# are all covered by the bare parens; ``&`` covers ``&&`` and backgrounding
+# (redirection spellings like ``2>&1`` are gated too — conservative, and the
+# tool runs under /bin/sh where ``&>`` is not a redirect anyway).
+_COMPOUND_SHELL_CHARS = frozenset(";|&`()\r\n")
+
+
+def _command_prefix_matches(subject: str, prefix: str) -> bool:
+    """True when ``subject`` starts with ``prefix`` at a shell token boundary
+    and nothing after the prefix chains another command.
+
+    ``git diff:*`` must allow ``git diff`` and ``git diff --stat`` but never
+    ``git difftool``: a bare ``startswith`` lets a longer command word ride
+    the prefix. The character right after the prefix therefore has to end
+    the word. A space ends the word, but the tail may still chain commands
+    the rule never named (``git diff --stat && git push --force``, ``git
+    diff --stat; touch /tmp/x``): the rule only speaks for its own prefix,
+    so any shell operator or command substitution after it keeps the rule
+    silent and the call falls through to the ordinary approval chain —
+    including for deny rules, so a compound can neither dodge deny nor ride
+    an allow rule that only named the first segment.
+    """
+    if not subject.startswith(prefix):
+        return False
+    rest = subject[len(prefix) :]
+    if not rest:
+        return True
+    if rest[0] not in " \t":
+        return False
+    return not any(ch in _COMPOUND_SHELL_CHARS for ch in rest)
 
 
 def _tool_name_matches(pattern: str, tool_name: str) -> bool:

@@ -255,8 +255,22 @@ class McpClientManager:
                 continue
             local_name = f"mcp__{spec.name}__{tool_name}"
             schema = remote_tool.inputSchema or object_schema({})
-            annotations = getattr(remote_tool, "annotations", None)
-            read_only = bool(getattr(annotations, "readOnlyHint", False))
+            # ``annotations.readOnlyHint`` is the remote server advertising its
+            # own tool as read-only. An MCP server is an external process: the
+            # hint says nothing this codebase can trust, so it must never reach
+            # the security flags below — otherwise a "read-only" tool that
+            # deletes files sails through plan mode and skips the approval
+            # prompt in auto mode. It is kept for display only, as a suffix on
+            # the description the model and the user see.
+            read_only_hint = bool(
+                getattr(getattr(remote_tool, "annotations", None), "readOnlyHint", False)
+            )
+            description = remote_tool.description or f"MCP tool {tool_name}"
+            if read_only_hint:
+                description += (
+                    " (server advertises readOnlyHint; NexusCLI does not trust it "
+                    "and still requires approval)"
+                )
             required = _required_inputs(schema)
 
             async def handler(
@@ -275,13 +289,17 @@ class McpClientManager:
             wrapped.append(
                 Tool(
                     name=local_name,
-                    description=remote_tool.description or f"MCP tool {tool_name}",
+                    description=description,
                     parameters=schema,
                     handler=handler,
-                    is_read_only=read_only,
+                    # Remote tools are registered as side-effectful across the
+                    # board: not read-only (plan mode keeps refusing them),
+                    # approval required (auto/default still ask), medium danger
+                    # — regardless of what the server's annotations claim.
+                    is_read_only=False,
                     is_concurrency_safe=False,
-                    danger_level="safe" if read_only else "medium",
-                    requires_approval=not read_only,
+                    danger_level="medium",
+                    requires_approval=True,
                 )
             )
         return wrapped

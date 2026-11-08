@@ -189,8 +189,9 @@ function payloadSeq(data: Record<string, unknown>): number | null {
 /**
  * 应用一帧 SSE：seq 严格连续（new.seq === state.seq + 1）才前进。
  *
- * - 帧不带合法 seq（心跳注释行、data 非 JSON 的兜底帧）→ 原样返回（kitagent
- *   applyPatch 对无关帧原样返回的同位）。
+ * - 帧不带合法 seq → 不推进游标：text_delta 合帧与 approval_suspended/approval_resolved
+ *   审批帧追加语义事件（seq 记 0，见下方两处旁路注释）；其余（心跳注释行、data 非
+ *   JSON 的兜底帧、resync）原样返回（kitagent applyPatch 对无关帧原样返回的同位）。
  * - seq <= state.seq（重放/重复帧）→ 原样返回，不重复入库（kitagent state.ts:11 同款）。
  * - seq > state.seq + 1 → 抛 SequenceGap：调用方重建初始状态并从 since=0 全量回放。
  * - seq 恰好 +1 → 推进游标；事件名可映射则追加语义事件，未映射事件只推进游标。
@@ -209,6 +210,20 @@ export function applyEvent(state: WorkbenchState, frame: SseFrame): WorkbenchSta
     if (frame.event === "message.delta" || frame.event === "text_delta") {
       const merged = frameToEvent("text_delta", 0, frame.data);
       return { ...state, events: [...state.events, merged] };
+    }
+    // A10 审批帧旁路：approval_suspended 由服务端审批登记表快照对比产生（api.py
+    // _emit_approval_frames），payload 不含 per-thread seq，帧不写 id: 行（非 events
+    // 表行，登记表是内存态不落库）。approval_resolved 已改为落 events 表（带 id+seq，
+    // 走正常 seq 路径、回放/重建后仍计数）；此旁路对它保留无 seq 旧形状的宽松解析，
+    // 两形状互斥不双计。无 seq 不等于无关帧：approval_resolved 是 deriveReport
+    // 「人工决定」计数的唯一事件源（derive.ts approval_resolved 分支），此前无 seq
+    // 审批帧被本分支整体丢弃 → 计数恒 0、两个事件类型成死代码（2026-11-08 复审实证）。
+    // 与合帧旁路同款：追加语义事件（seq 记 0），不推进 seq 游标。重连后服务端 seen
+    // 集重建，仍挂起的卡会重发 suspended（无 id 行、无法按游标去重；该事件无计数/
+    // 展示消费方，重复条目无害）。
+    const approvalKind = mapEventName(frame.event);
+    if (approvalKind === "approval_suspended" || approvalKind === "approval_resolved") {
+      return { ...state, events: [...state.events, frameToEvent(approvalKind, 0, frame.data)] };
     }
     return state;
   }

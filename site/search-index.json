@@ -1,0 +1,112 @@
+[
+ {
+  "title": "权限规则",
+  "path": "docs/permissions.html",
+  "summary": "本文是 README「🔐 权限与会话模式」章节的完整版。 在 config.json 的 permissions 里声明 allow / deny / ask 三组规则，就能在 HITL 之前自动放行安全操作、追问可疑调用或直接拦截高危动作： 规则写法（工具(参数) 或裸工具名）： 写法 匹配逻辑 readfile 该工具的每次调用 bash(git dif"
+ },
+ {
+  "title": "Hooks 生命周期钩子",
+  "path": "docs/hooks.html",
+  "summary": "本文是 README 深入文档索引「Hooks 生命周期钩子」条目的完整版。 在 config.json 的 hooks 里给七个生命周期事件挂 shell 命令（事件键为 camelCase）： 七个事件：SessionStart、UserPromptSubmit、PreToolUse、PermissionRequest、PostToolUse、PostT"
+ },
+ {
+  "title": "MCP",
+  "path": "docs/mcp.html",
+  "summary": "本文是 README「🔌 MCP」章节的完整版。 NexusCLI 可以连接 MCP server，并把远端工具动态注册为： 初始化项目级 Chrome DevTools MCP 配置： 它会写入 .nexuscli/mcp.json，内容类似： 连接已有 remote-debugging Chrome： 查看已配置的 MCP server： 把 Nexus"
+ },
+ {
+  "title": "配置",
+  "path": "docs/config.html",
+  "summary": "本文是 README「🔧 配置」章节的完整版。 NexusCLI 的配置优先级如下： 1. 内置默认配置 2. ~/.nexuscli/config.json 3. 项目级 .nexuscli/config.json 4. 项目级 .env 5. CLI 参数 6. 当前进程环境变量 可以像 Java 项目一样，把 DeepSeek Key 写到项目 .en"
+ },
+ {
+  "title": "内置斜杠命令参考",
+  "path": "docs/repl-commands.html",
+  "summary": "本文是 README「💬 交互命令」章节的完整版。 进入 uv run nexuscli 后，可以使用这些 slash commands： /model 交互式模型选择器 /model 会打开交互式模型选择器：Tab 或左右方向键在 Default、Custom、API 拉取 之间切换，上下方向键选择模型，Enter 立即切换当前 Agent。Custom "
+ },
+ {
+  "title": "内置工具与输入面补充口径",
+  "path": "docs/tools.html",
+  "summary": "本文是 README「🧰 内置工具」章节的完整版。 NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具（速查表见 README「🧰 内置工具」节）。写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作，会经过 policy、HITL 和 audit 处理。saveskill 也必须经过 HITL；模型可以提议沉淀，但不会静默改变后续"
+ },
+ {
+  "title": "Skill 匹配与沉淀",
+  "path": "docs/skills.html",
+  "summary": "本文是 README 深入文档索引「Skill 匹配与沉淀」条目的完整版。 Skill 按 builtin -> user -> project 加载，同名时后层覆盖前层： builtin：产品默认能力 user：~/.nexuscli/skills//SKILL.md（原生格式，跨项目复用）；另扫描 Agent Skills 规范标准目录 ~/.agent"
+ },
+ {
+  "title": "记忆、动态 Prompt 与上下文压缩",
+  "path": "docs/memory-context.html",
+  "summary": "本文是 README 深入文档索引「记忆、动态 Prompt 与上下文压缩」条目的完整版。 NexusCLI 把记忆分成三层： 短期记忆：当前 thread/session 的原始消息、工具调用和工具结果 静态长期记忆：AGENTS.md、NEXUS.md、.nexuscli/NEXUS.md 及自定义 prompt 文件；人工维护、可版本控制；/init "
+ },
+ {
+  "title": "子代理 task 工具",
+  "path": "docs/subagents.html",
+  "summary": "本文是 README 深入文档索引「子代理 task 工具」条目的完整版。 task 工具把一个自包含任务委派给独立的子代理：子代理有自己的历史、Skill 缓冲和工具集，跑完后只把最终报告交回主会话。模型侧的调用形如 task(description=\"调研压缩实现\", prompt=\"...\", agenttype=\"explore\")。 内置两个代理，"
+ },
+ {
+  "title": "动态工作流与 /expert",
+  "path": "docs/workflows.html",
+  "summary": "本文是 README 深入文档索引「动态工作流与 /expert」条目的完整版。 NexusCLI 提供一个 JSON 步骤图引擎（实现：src/nexuscli/workflow/graph.py，纯 schema 层，无网络无执行）和 REPL 侧的依赖批次并行派发器（workflowcmds.runworkflowgraph）。两个入口共用同一引擎与提"
+ },
+ {
+  "title": "Runtime API",
+  "path": "docs/runtime-api.html",
+  "summary": "本文是 README「📡 Runtime API」章节的完整版。 NexusCLI 内置轻量 Runtime API，适合外部系统接入线程、turn、事件和后台任务。 启动服务： 创建线程： 发送 turn： 读取事件： 创建并查看后台任务： 也可以只启动队列消费者，不暴露 HTTP： 任务队列按项目目录隔离；worker 使用 SQLite 原子事务领取任"
+ },
+ {
+  "title": "工作台（Workbench）",
+  "path": "docs/workbench.html",
+  "summary": "本文是 README「🖥️ 可视化工作台」章节的完整版。 工作台是 NexusCLI 的浏览器入口：「一个 Core、多种入口」中的 Web 形态。服务端 = 现有 Runtime API（标准库 http.server，零新增 Python 依赖）+ SSE 事件流 + 静态资源托管； 前端 = frontend/（Vite + React + TypeS"
+ },
+ {
+  "title": "会话、恢复与快照",
+  "path": "docs/sessions.html",
+  "summary": "本文是 README「💾 会话与快照」章节的完整版。 快照 快照是按需的：features.autosnapshot 默认关闭，因为每回合两次全量复制在工作区大时能吃掉十几秒。打开后每次 Agent run 会尽力创建： pre-turn post-turn 快照保存在 ~/.nexuscli/snapshots/，不会写入项目 .git。无论开关如何，手动"
+ },
+ {
+  "title": "Plan-and-Execute 检查点与续跑",
+  "path": "docs/plan-execute.html",
+  "summary": "本文是 README 深入文档索引「Plan-and-Execute 检查点与续跑」条目的完整版。 /plan（Plan-and-Execute 模式）与 team 的嵌套 plan worker 默认开启图级 checkpoint：Planner 产出计划后、每个任务执行完成后、计划到达终态（完成/失败/停滞）后各落盘一次，文件在 ~/.nexuscli/"
+ },
+ {
+  "title": "插件系统（本地目录 + 工具组件）",
+  "path": "docs/plugins.html",
+  "summary": "本文是 README 深入文档索引「插件系统」条目的完整版。 插件是一个放在项目 .nexuscli/plugins/<name>/ 或用户级 ~/.nexuscli/plugins/<name>/ 下的目录：一个 plugin.json manifest 加最多四个组件子目录（实现：src/nexuscli/plugins/loader.py）。启动装配时"
+ },
+ {
+  "title": "自定义斜杠命令",
+  "path": "docs/slash-commands.html",
+  "summary": "本文是 README 深入文档索引「自定义斜杠命令」条目的完整版。 把 markdown 文件放进命令目录，文件名（去掉 .md）就是命令名： 用户级：~/.nexuscli/commands/<命令名>.md（跨项目可用） 项目级：.nexuscli/commands/<命令名>.md（同名时覆盖用户级；该目录默认被 gitignore，适合放个人常用命令"
+ },
+ {
+  "title": "可观测性与调试",
+  "path": "docs/observability.html",
+  "summary": "本文是 README 深入文档索引「可观测性与调试」条目的完整版。 本文覆盖四块彼此独立、可单独开关的观测能力：traceid 关联、OpenTelemetry 遥测、模型 IO 调试落盘、本地 usage 落库。 traceid：审计 ↔ LLM 请求关联 每个 REPL 进程会话有一条 16 位十六进制的 trace id（实现：src/nexuscli"
+ },
+ {
+  "title": "定时任务（cron）",
+  "path": "docs/cron.html",
+  "summary": "本文是 README 深入文档索引「定时任务（cron）」条目的完整版。 nexuscli cron 是离线形态的定时提示词注册表（实现：src/nexuscli/runtime/cron.py + entrypoints/cli.py 的 cronapp）：任务表就是一个 JSON 文件，CLI 只做解析与读取面，没有常驻守护进程、没有调度循环、模块内也不"
+ },
+ {
+  "title": "Eval — Task-Level Regression: Hermetic + Real-Model Tracks",
+  "path": "docs/eval.html",
+  "summary": "nexuscli eval is a two-track evaluation harness for task-level agent behavior. The default hermetic track guards the wiring you control: a scripted (fake) LLM client drives the rea"
+ },
+ {
+  "title": "Spec 任务包工作流（spec 技能详解）",
+  "path": "docs/spec-skill.html",
+  "summary": "spec 是一个规范驱动开发（spec-driven development）技能：把一次多步开发变成一个有边界、有验收、有留痕的「任务包」。本文介绍它的核心概念、命令体系、质量门禁与多代理编排模型，所有行为描述均以技能源码为准。 📚 目录 概述 核心概念：任务包（Development Record） 命令全景 执行模型与断点续跑 质量门禁体系 分支与提交"
+ },
+ {
+  "title": "功能测试矩阵：要测什么，谁来测，测过没有",
+  "path": "docs/testing-matrix.html",
+  "summary": "这份文档回答三个问题：产品有哪些面向用户的表面、每个表面一个真人会怎么用、这个表面到 2026-10-18 为止有没有被真实跑过。 判定口径只有两种： 机器验证：tests/ 里的自动化断言（可重复、进 CI） 真人模拟：用真实 pty / 真实网关 / 真实外部服务跑一遍用户会做的事（一次性、靠证据留痕） 只有机器验证不算\"测过\"——断言能证明代码路径通，"
+ },
+ {
+  "title": "NexusCLI 运行教程",
+  "path": "tutorial.html",
+  "summary": "本教程带你从零把 NexusCLI 跑起来：安装依赖 → 配置模型 API → 验证环境 → 真正跑通第一次 Agent 任务。配置示例以 OpenCodeGO 中转站（OpenAI-compatible / Chat Completions 格式）为准，同样适用于 DeepSeek、GLM 等官方直连。 所有命令默认在项目根目录 NexusCLI/（即本仓"
+ }
+]

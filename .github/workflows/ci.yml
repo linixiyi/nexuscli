@@ -5,10 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+# 最小权限：test/eval/frontend 只需 checkout 与 artifact 上传（artifact 走
+# runtime token，不需要 GITHUB_TOKEN 写权限），不继承仓库默认 GITHUB_TOKEN。
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Lint & Test (Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -18,10 +24,10 @@ jobs:
           - os: windows-latest
             python-version: "3.12"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -39,25 +45,80 @@ jobs:
       - name: Check endpoint docs sync
         run: uv run python scripts/check_endpoint_docs.py
 
-      # F13 mypy 渐进接入: 配置(含「只减不增」排除清单)见 pyproject.toml [tool.mypy]。
-      # 用 --with mypy 临时注入, 不动 uv.lock; 排除清单外任何文件出现新错误都会红。
-      - name: Mypy (progressive)
-        run: uv run --with mypy mypy src/nexuscli
+      # task_0023 mypy 棘轮: 脚本按 pyproject dev extras 钉定的 mypy==版本在隔离
+      # Python 3.11 env 跑 mypy, 对比 mypy-baseline.json 的错误数 / ignore_errors
+      # 模块数 / `# type: ignore` 行数, 任一变差即 exit 1; mypy 原始输出保留在日志
+      # 里便于定位。配置(含「只减不增」排除清单)见 pyproject.toml [tool.mypy]。
+      - name: Mypy ratchet
+        run: uv run python scripts/check_mypy_ratchet.py
+
+      # task_0022：ubuntu 3.11 这一个矩阵项用覆盖率棘轮替代普通测试步——全量
+      # 套件带 --cov 约需 7 分钟，只在单平台单版本跑一次，避免三平台重复；
+      # 低于 coverage-baseline.json 即 exit 1。baseline 记录生成时的 Python 与
+      # 平台；平台不一致只警告不失败（本机 macOS 生成的基线不因此让 ubuntu
+      # 首跑误红），数字系统性漂移时用 scripts/check_coverage.py --write-baseline 重新生成。
+      - name: Run tests with coverage ratchet (ubuntu 3.11 only)
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        run: uv run python scripts/check_coverage.py
 
       - name: Run tests
+        if: matrix.os != 'ubuntu-latest' || matrix.python-version != '3.11'
         run: uv run python -m pytest
 
-  frontend:
-    name: Build (Frontend)
+  # task_0025：hermetic eval 进 CI 门禁。脚本化 fake LLM、全程离线，不需要
+  # API key；任一场景失败时 eval run 退出 1，job 直接失败。故意不跑 --real：
+  # 需要真实 key 与预算，属 nightly/manual 证据（见 docs/eval.md「CI gate」）。
+  eval:
+    name: Hermetic eval gate
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Run hermetic eval
+        run: uv run nexuscli eval run --all
+
+      # 报告（last-report.json + history 快照）无论成败都上传，红 PR 可直接
+      # 从 artifact 看 regression/cost 信号；eval 之前失败则无报告，忽略即可。
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: eval-report
+          path: .nexuscli/evals
+          retention-days: 7
+          if-no-files-found: ignore
+
+  frontend:
+    name: Build & e2e (Frontend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      # e2e 用例会 spawn scripts/web_validation_server.py（真实 Core + 离线 demo
+      # provider，无网依赖），需要 Python 侧依赖就绪。
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          python-version: "3.12"
+
+      - name: Sync Python dependencies
+        run: uv sync --frozen
 
       - name: Install dependencies
         working-directory: frontend
@@ -69,3 +130,24 @@ jobs:
 
       - name: Check committed dist is in sync
         run: test -z "$(git status --porcelain -- frontend/dist)"
+
+      # task_0020：CI 中 e2e 不允许静默跳过——Chromium 必须装上（含系统依赖库），
+      # 缺失时用例会硬失败而不是 skip（见 frontend/e2e/workbench.spec.ts 顶部注释）。
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+
+      - name: Run e2e
+        working-directory: frontend
+        run: npm run test:e2e
+
+      # 失败时上传 Playwright 输出目录（错误上下文等失败附件；trace 需 retries>0
+      # 时才产生，见 frontend/playwright.config.ts 注释）。
+      - name: Upload Playwright results on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-results
+          path: frontend/test-results
+          retention-days: 7
+          if-no-files-found: ignore

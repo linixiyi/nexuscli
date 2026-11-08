@@ -9,6 +9,33 @@
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/plan-execute.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
+  <style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>
   <script>
     (function () {
       try {
@@ -28,6 +55,11 @@
         <a href="../index.html#docs">文档</a>
         <a href="../tutorial.html">教程</a>
       </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
+      </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
       <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
@@ -37,7 +69,9 @@
   <aside class="toc">
     <div class="toc-title">目录</div>
     <div class="toc">
-<ul></ul>
+<ul>
+<li><a href="#与---mode-plan--shifttab-只读态的区别">与 --mode plan / Shift+Tab 只读态的区别</a></li>
+</ul>
 </div>
 
   </aside>
@@ -55,13 +89,149 @@
 <li>checkpoint 存储对 plan id 做文件名安全校验（拒绝路径分隔符与 <code>..</code> 链），未知/损坏/非法 id 一律按「未找到」降级，不抛异常。</li>
 </ul>
 <p><strong>协作式中断</strong>：<code>PlanExecuteAgent.request_interrupt()</code> 置位后，执行循环在<strong>批次之间</strong>停机并落盘，产出 <code>plan_interrupted</code> 事件与续跑提示。如实边界：批内已派发的任务会跑完（检查点在批次间）；该 API 目前是 agent 编程接口，REPL 的 <code>Ctrl+C</code> 仍是中止回合而非协作式中断，team worker 侧的 interrupt 接线挂账。</p>
-<p><strong>如实边界</strong>：checkpoint JSON 以明文保存任务结果全文，普通 <code>/plan</code> 运行也会留下文件，目前<strong>没有 TTL/容量清理</strong>（体积敏感时手动清理 <code>~/.nexuscli/plan_runs</code>）；resume 语义是重入中断的运行而非新会话轮——不写入会话历史、不做 pre/post-turn 快照；<code>/workflow</code>（JSON 步骤图）与 plan 模式（Shift+Tab 只读态）是另外两套机制，均无断点续跑语义。</p><div class="pager"><a href="sessions.html" class="prev"><span class="dir">← 上一篇</span><span class="name">💾 会话、恢复与快照</span></a><a href="plugins.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧱 插件系统（本地目录 MVP）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/plan-execute.md" target="_blank" rel="noopener">docs/plan-execute.md</a> 构建生成 · 源文件与站点内容同步</p>
+<p><strong>如实边界</strong>：checkpoint JSON 以明文保存任务结果全文，普通 <code>/plan</code> 运行也会留下文件，目前<strong>没有 TTL/容量清理</strong>（体积敏感时手动清理 <code>~/.nexuscli/plan_runs</code>）；resume 语义是重入中断的运行而非新会话轮——不写入会话历史、不做 pre/post-turn 快照；<code>/workflow</code>（JSON 步骤图）与 plan 模式（Shift+Tab 只读态）是另外两套机制，均无断点续跑语义。</p>
+<h2 id="与---mode-plan--shifttab-只读态的区别"><a class="toclink" href="#与---mode-plan--shifttab-只读态的区别">与 <code>--mode plan</code> / Shift+Tab 只读态的区别</a></h2>
+<p>名字里带「plan」的机制有三套，别混用：</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>入口</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>只读规划</td>
+<td><code>nexuscli --mode plan -p "..."</code></td>
+<td>单次模式跑 Plan-and-Execute：只读闸门全程开启，不会执行任何写入；<code>--yes</code> 在该模式无效（启动时打印 warning 并忽略），计划被只读闸门拦下按失败收场（exit 1），也没有 <code>--resume</code> 续跑入口</td>
+</tr>
+<tr>
+<td>交互式 Plan-and-Execute</td>
+<td>REPL <code>/plan &lt;task&gt;</code>（<code>/plan --resume &lt;plan_id&gt;</code> 续跑）</td>
+<td>与 <code>--mode plan</code> 同一只读闸门口径，但在交互会话里流式执行，支持本文所述的图级 checkpoint、协作式中断与续跑</td>
+</tr>
+<tr>
+<td>REPL 只读态</td>
+<td>交互模式 <code>Shift+Tab</code> 切到 <code>plan (read-only)</code></td>
+<td>会话权限模式：把整个 REPL 会话（含普通对话）置于只读闸门下，不产出计划 DAG；审阅方案后切回 Default 再落地执行</td>
+</tr>
+</tbody>
+</table>
+<p><code>--mode plan</code> 与 <code>/plan</code> 都不执行写入；<code>plan (read-only)</code> 的权限语义见 <a href="permissions.html#会话权限模式default--auto--plan">permissions.md</a>。</p><div class="pager"><a href="sessions.html" class="prev"><span class="dir">← 上一篇</span><span class="name">💾 会话、恢复与快照</span></a><a href="plugins.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧱 插件系统（本地目录 + 工具组件）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/plan-execute.md" target="_blank" rel="noopener">docs/plan-execute.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>
   <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
 </footer><script src="../site.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "../";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {

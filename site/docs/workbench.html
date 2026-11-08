@@ -9,6 +9,33 @@
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/workbench.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
+  <style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>
   <script>
     (function () {
       try {
@@ -27,6 +54,11 @@
         <a href="../index.html#features">功能</a>
         <a href="../index.html#docs">文档</a>
         <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
       </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
@@ -88,7 +120,12 @@ bootstrap 口令，csrf 可取回且重签不轮换（多标签页互不影响�
   未确认请求走幂等恢复（查询而非重发）</li>
 <li><strong>任务面板</strong>：后台任务列表 2s 轮询、详情展开、取消（与 <code>/v1/tasks</code> 数据一致）</li>
 <li><strong>usage 统计</strong>：近 N 天回合数/Token/成本汇总卡与按模型、按来源两张拆分表</li>
-<li><strong>审批卡片</strong>：挂起审批在执行检查器出现（Reason 行 + 批准/拒绝），2s 轮询</li>
+<li><strong>审批卡片</strong>：挂起审批在执行检查器出现（Reason 行 + 四个决策动词：批准 /
+  本轮放行 / 切换自动模式 / 拒绝）。「本轮放行」= 批准本次调用并在本次 run 内
+  放行该工具的后续调用（同 REPL 的 <code>r</code>，ask 规则与 hook 询问仍保留否决权）；
+  「切换自动模式」= 会话切到 auto/full access，当前等待与后续调用自动允许
+  （同 REPL 的 <code>a</code>，换模式即清空单项撤销）。审批请求与解决由 SSE 推送
+  （<code>approval_suspended</code> / <code>approval_resolved</code> 帧），列表刷新以 2s 轮询兜底</li>
 <li><strong>慢等待与可辨识</strong>（2026-10-27 第二轮 UX）：执行中 30s 无新事件时聊天面板追加
   「仍在等待模型响应…」提示（不改变 busy 语义、不自动取消）；无标题 REPL 会话回放
   条目回退显示「会话 &lt;日期时间&gt;」；运行报告的「执行事实与来源」逐工具列出，点击
@@ -134,7 +171,7 @@ cookie → 变更请求（POST）另带 <code>x-csrf-token</code> 头 → Origin
 </tr>
 <tr>
 <td>POST <code>/v1/approvals/{id}/decision</code></td>
-<td>审批决策（仅 <code>approve</code>/<code>deny</code>）</td>
+<td>审批决策：<code>approve</code> / <code>deny</code> / <code>approve_run</code>（本次 run 内放行）/ <code>approve_auto</code>（切到 auto/full access 并即时重判挂起审批）</td>
 </tr>
 <tr>
 <td>GET <code>/</code> 与非 <code>/v1/*</code></td>
@@ -156,17 +193,26 @@ cookie → 变更请求（POST）另带 <code>x-csrf-token</code> 头 → Origin
 <li>SSE 的 <code>api_key</code> 查询参数会出现在本机浏览器历史（浏览器 <code>EventSource</code> 无法设置自定义
   请求头，这是唯一出口）；缓解是仅绑定 localhost 且该端点只读</li>
 <li>会话转录端点返回用户对话正文（本机敏感数据），与 <code>nexuscli sessions</code> CLI 同暴露级别</li>
-<li>审批挂起 300s 无决策按 deny 失败关闭；执行器把超时 deny 也记为 <code>approver="hitl"</code>
+<li>审批挂起超时按 deny 失败关闭：默认 300s，可用环境变量
+  <code>NEXUSCLI_APPROVAL_TIMEOUT_SECONDS</code>（或 <code>RuntimeApiServer</code> 的
+  <code>approval_timeout_seconds</code> 参数）调整；超时的卡由服务端看护线程统一收口为
+  expired（fail-closed deny），执行器把超时 deny 也记为 <code>approver="hitl"</code>
   （词表无 <code>approval-timeout</code> 值，桥在 <code>resolved_by</code> 里留存真相）</li>
 </ul>
 <h2 id="如实边界"><a class="toclink" href="#如实边界">如实边界</a></h2>
 <ul>
 <li>MVP 无前端单元测试（vitest 挂账）；质量门槛 = <code>tsc -b</code> 构建通过 + Python 侧端点测试 +
   真实进程 smoke</li>
-<li><code>frontend/dist</code> 已入库但未打进 wheel（检出仓库或设置 <code>NEXUSCLI_WORKBENCH_DIST</code> 使用）</li>
+<li><code>frontend/dist</code> 已随 wheel 分发（pyproject force-include），<code>NEXUSCLI_WORKBENCH_DIST</code>
+  仍可覆盖 dist 根</li>
 <li>Windows 下的前端构建不被 CI 覆盖（frontend job 仅 ubuntu）</li>
 <li>截图待补（README 章节内为 HTML 注释占位）</li>
-<li>审批挂起/解决的 SSE 推送未做（MVP 用轮询）；Web 端不提供 <code>approve_run</code> / <code>approve_auto</code></li>
+<li>审批卡片列表的刷新以 2s 轮询兜底：服务端已推送 <code>approval_suspended</code> /
+  <code>approval_resolved</code> SSE 帧（线程 scope）且前端事件流已折叠它们
+  （<code>approval_resolved</code> 在 api.py 收口点落线程 events 表，回放/重建后仍可见，
+  运行报告「人工决定」计数由它驱动），但「SSE 审批事件到达 → 立即刷新审批列表」
+  的接线在 <code>App.tsx</code>（2026-11-07 发布加固包 0021 boundary 之外）尚未补上；
+  任务 scope 的审批卡不在任何线程流内，本就依赖轮询</li>
 </ul><div class="pager"><a href="runtime-api.html" class="prev"><span class="dir">← 上一篇</span><span class="name">📡 Runtime API</span></a><a href="sessions.html" class="next"><span class="dir">下一篇 →</span><span class="name">💾 会话、恢复与快照</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/workbench.md" target="_blank" rel="noopener">docs/workbench.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
@@ -174,6 +220,113 @@ cookie → 变更请求（POST）另带 <code>x-csrf-token</code> 头 → Origin
   <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
 </footer><script src="../site.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "../";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {

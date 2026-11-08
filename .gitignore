@@ -6,9 +6,15 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+# coverage 原始数据（check_coverage.py 固定写入 .nexuscli/.coverage，防历史
+# 误留在仓库根的过期库被 git add . 提交）
+.coverage
+.coverage.*
 dist/
 !frontend/dist/
 build/
+# Playwright 本地运行残留（.last-run.json 曾被误提交，已从索引移除）
+frontend/test-results/
 .nexuscli/
 .mimosa/
 /.playwright-cli

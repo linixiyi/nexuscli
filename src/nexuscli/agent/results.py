@@ -31,6 +31,41 @@ class PlanCheckpointMissing(ValueError):
     """/plan --resume 找不到计划 checkpoint（取代裸 ValueError 的类型化升级）。"""
 
 
+# Task 0036：headless（-p）blocked 分类的标记表。审批/权限门的拒绝在
+# ToolExecutor（tools/executor.py，不在本合同模块的 import 可达范围）里以
+# is_error ToolResult 落地，事件流没有结构化标志可带——这些固定文案就是唯一
+# 跨流信号。按「发射点标注优先」的原则本不该做文案匹配，但发射点在本任务的
+# 可改边界之外，于是把标记收敛到这一处（一张表、一个谓词），由测试与执行器
+# 的拒绝返回值对齐。
+GATE_DENIAL_MARKERS: tuple[str, ...] = (
+    "was denied by permission rule",
+    "was denied by pre-tool-use hook",
+    "was denied by permission-request hook",
+    "is not allowed in plan mode",
+    "was denied by approval policy",
+    "was skipped by approval policy",
+    # bash 写域守卫（tools/builtins.py _reject_outside_write_scope）两条拒绝
+    # 文案——hitl_mode=never 无回调 fail closed 与审批 deny——共用的稳定
+    # reason 前缀（同模块 :726 的固定字面量）。
+    "Static analysis found a write target outside the workspace",
+)
+
+
+def gate_denial_reason(content: str) -> str | None:
+    """tool_result 文案是门拒绝时返回原文，否则 None。
+
+    单次模式（``-p``）没有交互审批人，执行器按失败关闭拒绝调用后 run 照常以
+    ``done`` 收场——拒绝唯一的机器可见痕迹就是这条 is_error tool_result 文案。
+    普通工具失败（execution error、loop guard 中止）不属于权限结果，返回 None，
+    让 headless 状态保持 ok 而不是 blocked。
+    """
+
+    text = str(content or "")
+    if not any(marker in text for marker in GATE_DENIAL_MARKERS):
+        return None
+    return text
+
+
 @dataclass(frozen=True, slots=True)
 class EngineErrorDetail:
     code: ErrorCode

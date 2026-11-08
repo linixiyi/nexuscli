@@ -20,6 +20,9 @@ from nexuscli.config import load_config
 from nexuscli.plan import ExecutionPlan, PlanStatus, Task, TaskStatus, TaskType
 from nexuscli.plan.checkpoint import PlanCheckpointStore, plan_runs_root
 from nexuscli.tools import ToolRegistry, get_builtin_tools
+from nexuscli.tools import journal as journal_module
+from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
+from nexuscli.tools.journal import ToolJournal
 
 
 @pytest.fixture
@@ -37,6 +40,108 @@ def checkpoint_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     return home
+
+
+@pytest.fixture
+def journal_home(checkpoint_home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Fresh tool journal under the redirected home, per test.
+
+    ``get_tool_journal()`` caches a process-level singleton; without the
+    reset a journal created for an earlier test's temp home would leak into
+    this test (and its rows into the next one). The teardown clears the
+    singleton again so later tests build their own.
+    """
+    monkeypatch.setattr(journal_module, "_journal", None)
+    yield checkpoint_home
+    journal_module._journal = None
+
+
+def _journal_registry(counter: dict[str, int]) -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(_journalled_write_tool(counter))
+    return registry
+
+
+class _CrashAfterToolResult(Exception):
+    """Simulated process death at the event consumer."""
+
+
+def _journalled_write_tool(counter: dict[str, int]) -> Tool:
+    """A fake ``write_file``: the executor's claim protocol covers it
+    (``_JOURNALED_TOOLS``) and every execution bumps the counter."""
+
+    async def handler(data: dict[str, Any], context: ToolContext) -> ToolResult:  # noqa: ARG001
+        counter["calls"] += 1
+        return ToolResult(content=f"wrote {data.get('path')}", is_error=False)
+
+    return Tool(
+        name="write_file",
+        description="Fake side-effectful write (journalled).",
+        parameters=object_schema(
+            {"path": {"type": "string"}, "content": {"type": "string"}},
+            required=["path", "content"],
+        ),
+        handler=handler,
+        is_read_only=False,
+        is_concurrency_safe=False,
+    )
+
+
+class JournalingChainClient:
+    """Planner returns the task_1 -> task_2 chain; task_1 issues one
+    write_file call before answering with text.
+
+    Each instance issues the tool call on its first task_1 chat, so a
+    resumed agent (fresh instance) re-issues the same call under a fresh
+    tool_use_id — exactly the shape the journal's hash-level dedup exists
+    for.
+    """
+
+    model_name = "fake-model"
+    provider_name = "fake-provider"
+    max_context_window = 1000
+
+    def __init__(self, tool_call_id: str = "call_orig_1"):
+        self.task_calls: list[str] = []
+        self.planner_calls = 0
+        self._task_1_rounds = 0
+        self._tool_call_id = tool_call_id
+
+    async def chat(self, messages, tools, *, system_prompt):  # noqa: ARG002
+        body = _message_text(messages[-1].content)
+        if "请为以下目标创建执行计划" in body:
+            self.planner_calls += 1
+            yield {"type": "text_delta", "text": _CHAIN_PLAN_JSON}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+        if "当前任务 [task_1]" in body:
+            if self._task_1_rounds == 0:
+                self.task_calls.append("task_1")
+            self._task_1_rounds += 1
+            if self._task_1_rounds == 1:
+                yield {
+                    "type": "tool_call_delta",
+                    "tool_call": {
+                        "index": 0,
+                        "id": self._tool_call_id,
+                        "function": {
+                            "name": "write_file",
+                            "arguments": '{"path":"resumed.txt","content":"v1"}',
+                        },
+                    },
+                }
+                yield {"type": "message_end", "stop_reason": "tool_use"}
+                return
+            yield {"type": "text_delta", "text": "A 的新结果"}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+        if "当前任务 [task_2]" in body:
+            self.task_calls.append("task_2")
+            yield {"type": "text_delta", "text": "B 的新结果"}
+            yield {"type": "message_end", "stop_reason": "end_turn"}
+            return
+        yield {"type": "text_delta", "text": "fallback"}
+        yield {"type": "message_end", "stop_reason": "end_turn"}
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +301,10 @@ def _message_text(content: Any) -> str:
     return str(content)
 
 
-def _make_agent(client, tmp_path, **kwargs) -> PlanExecuteAgent:
-    registry = ToolRegistry()
-    registry.register_all(get_builtin_tools())
+def _make_agent(client, tmp_path, registry: ToolRegistry | None = None, **kwargs):
+    if registry is None:
+        registry = ToolRegistry()
+        registry.register_all(get_builtin_tools())
     config = load_config(project_root=tmp_path)
     config.policy.hitl_mode = "never"
     return PlanExecuteAgent(
@@ -414,3 +520,119 @@ def test_store_rejects_unsafe_plan_ids(tmp_path):
     # Generated ids (timestamp + uuid suffix) and test ids stay filename-safe.
     for safe in ("plan_1760000000000_0a1b2c3d", "plan_resume_1", "plan_rt"):
         assert store.path_for(safe) == tmp_path / "runs" / f"{safe}.json"
+
+
+# ---------------------------------------------------------------------------
+# ⑥ Task 0015: task workers journal side effects under the plan's run_id,
+#    and a resumed run replays completed calls instead of repeating them.
+# ---------------------------------------------------------------------------
+
+
+def test_plan_run_journals_task_side_effect_under_plan_run_id(tmp_path, journal_home):
+    """The journal row is keyed on the plan's persisted run_id.
+
+    The plan inherits the creating run's run_id (F9) and hands it to every
+    task worker's query(); a resume reads the same run_id back from the
+    checkpoint, so that is the only key the dedup can be found under. A row
+    written under any other run_id would be invisible to the resume.
+    """
+    store = PlanCheckpointStore()
+    counter = {"calls": 0}
+    client = JournalingChainClient(tool_call_id="call_orig_1")
+    agent = _make_agent(
+        client,
+        tmp_path,
+        registry=_journal_registry(counter),
+        use_journal=True,
+    )
+    plan_ids: list[str] = []
+
+    async def crash_run():
+        async for event in agent.run("先写文件，然后执行任务 B"):
+            if event.get("type") == "plan_checkpointed":
+                plan_ids.append(event["plan_id"])
+            if event.get("type") == "tool_result":
+                raise _CrashAfterToolResult()
+
+    with pytest.raises(_CrashAfterToolResult):
+        asyncio.run(crash_run())
+
+    # The side effect ran exactly once, then the "process died".
+    assert counter["calls"] == 1
+    assert client.task_calls == ["task_1"]
+    plan = store.load(plan_ids[0])
+    assert plan is not None
+    assert plan.run_id == agent._run_id
+
+    journal = ToolJournal()
+    hit = journal.lookup_by_hash(
+        scope=str(tmp_path),
+        run_id=plan.run_id,
+        tool_name="write_file",
+        tool_input={"path": "resumed.txt", "content": "v1"},
+    )
+    assert hit is not None
+    assert hit.action == "reuse"
+    assert hit.serialized_result == {"content": "wrote resumed.txt", "is_error": False}
+
+    # The same call under a different run_id finds nothing: the row is
+    # keyed to the plan's run, not to the process or the plan id.
+    miss = journal.lookup_by_hash(
+        scope=str(tmp_path),
+        run_id="some-other-run",
+        tool_name="write_file",
+        tool_input={"path": "resumed.txt", "content": "v1"},
+    )
+    assert miss is None
+
+
+def test_resume_replays_completed_side_effect_instead_of_reexecuting(tmp_path, journal_home):
+    """Interrupt after a side effect, resume, same call again: it runs once.
+
+    Run 1 dies right after task_1's write_file completed; the checkpoint
+    still holds every task PENDING, so the resume re-executes task_1 and the
+    model re-issues the same write under a fresh tool_use_id. The journal's
+    hash-level dedup must answer it from the stored result — the tool handler
+    must not run a second time.
+    """
+    store = PlanCheckpointStore()
+    counter = {"calls": 0}
+    registry = _journal_registry(counter)
+
+    first = JournalingChainClient(tool_call_id="call_orig_1")
+    agent = _make_agent(first, tmp_path, registry=registry, use_journal=True)
+    plan_ids: list[str] = []
+
+    async def crash_run():
+        async for event in agent.run("先写文件，然后执行任务 B"):
+            if event.get("type") == "plan_checkpointed":
+                plan_ids.append(event["plan_id"])
+            if event.get("type") == "tool_result":
+                raise _CrashAfterToolResult()
+
+    with pytest.raises(_CrashAfterToolResult):
+        asyncio.run(crash_run())
+    assert counter["calls"] == 1
+
+    resumed = JournalingChainClient(tool_call_id="call_replay_1")
+    agent2 = _make_agent(resumed, tmp_path, registry=registry, use_journal=True)
+
+    async def run_resume():
+        return await _drain(agent2.run_resume(plan_ids[0]))
+
+    events, text = asyncio.run(run_resume())
+
+    # The replayed call was answered from the journal: still exactly one
+    # execution, and the tool_result carries the stored payload.
+    assert counter["calls"] == 1
+    assert resumed.task_calls == ["task_1", "task_2"]
+    assert [event["result"] for event in events if event.get("type") == "tool_result"] == [
+        "wrote resumed.txt"
+    ]
+    assert "已完成 [task_1]" in text and "已完成 [task_2]" in text
+    assert events[-1]["type"] == "done"
+
+    plan = store.load(plan_ids[0])
+    assert plan is not None
+    assert plan.is_all_completed()
+    assert plan.run_id == agent._run_id  # the resume ran under the original run_id

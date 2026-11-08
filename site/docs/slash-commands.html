@@ -9,6 +9,33 @@
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/slash-commands.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
+  <style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>
   <script>
     (function () {
       try {
@@ -27,6 +54,11 @@
         <a href="../index.html#features">功能</a>
         <a href="../index.html#docs">文档</a>
         <a href="../tutorial.html">教程</a>
+      </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
       </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
@@ -67,17 +99,124 @@ $ARGUMENTS
 <li>frontmatter 的 <code>description</code> 会显示在 <code>/help</code> 里，<code>argument-hint</code> 提示参数写法</li>
 <li><code>mode: react|plan|team</code> 让命令在指定模式下运行（如 <code>plan</code> 只读审阅），运行完恢复原模式</li>
 <li><code>allowed-tools</code> 逗号分隔，命令运行期间只保留白名单内的工具，结束后恢复</li>
-<li>正文支持 <code>!`cmd`</code> 注入：展开时先执行命令并把 stdout 替换进提示词（30 秒超时）。被命令守卫判为高危的命令会被拒绝，原片段替换为 <code>[refused: &lt;cmd&gt; — blocked by command guard]</code> 标记，不会静默执行也不会炸掉整个展开</li>
+<li>正文支持 <code>!`cmd`</code> 注入：展开时先执行命令并把 stdout 替换进提示词（30 秒超时）。注入不是绕过安全门的旁路——每个片段作为内部 <code>slash_injection</code> 工具走与 bash 相同的 ToolExecutor 门链（命令守卫 → 权限规则 → hooks → HITL 审批 → 审计日志），子进程环境经 <code>sanitize_environment</code> 清洗（秘钥形与 <code>NEXUSCLI_*</code> 变量不进入子进程；<code>policy.env_sanitization</code> 关闭时与 bash 同口径回全量环境）。命令来源决定审批：项目级命令（<code>.nexuscli/commands/</code>，仓库可控）的每次注入都要人工批准，无审批通道时 fail-closed 直接拒绝；用户级命令（<code>~/.nexuscli/commands/</code>，本人文件）自动执行。被命令守卫判为高危的命令在审批之前就被拒绝，原片段替换为 <code>[refused: &lt;cmd&gt; — blocked by command guard]</code>；被门链（审批/权限规则/hooks/plan 模式）拒绝的替换为 <code>[refused: &lt;cmd&gt; — &lt;原因&gt;]</code>，执行失败的替换为 <code>[failed: &lt;cmd&gt; — &lt;原因&gt;]</code>——不会静默执行，也不会炸掉整个展开</li>
 <li>REPL 输入 <code>/命令名</code> 或单次模式 <code>nexuscli -p "/命令名 参数"</code> 都会展开为提示词发给模型</li>
 <li>示例见仓库 <code>examples/commands/</code>，复制到命令目录即可使用</li>
 </ul>
-<p>注意：在 Git Bash 里调用 <code>-p "/命令名"</code> 时，MSYS 可能把开头的 <code>/</code> 当路径转换；加 <code>MSYS_NO_PATHCONV=1</code> 前缀即可。交互模式不受影响。</p><div class="pager"><a href="plugins.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🧱 插件系统（本地目录 MVP）</span></a><a href="observability.html" class="next"><span class="dir">下一篇 →</span><span class="name">🔭 可观测性与调试</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/slash-commands.md" target="_blank" rel="noopener">docs/slash-commands.md</a> 构建生成 · 源文件与站点内容同步</p>
+<p>注意：在 Git Bash 里调用 <code>-p "/命令名"</code> 时，MSYS 可能把开头的 <code>/</code> 当路径转换；加 <code>MSYS_NO_PATHCONV=1</code> 前缀即可。交互模式不受影响。</p><div class="pager"><a href="plugins.html" class="prev"><span class="dir">← 上一篇</span><span class="name">🧱 插件系统（本地目录 + 工具组件）</span></a><a href="observability.html" class="next"><span class="dir">下一篇 →</span><span class="name">🔭 可观测性与调试</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/slash-commands.md" target="_blank" rel="noopener">docs/slash-commands.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>
   <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
 </footer><script src="../site.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "../";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {

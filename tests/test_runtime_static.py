@@ -1,16 +1,31 @@
-"""Workbench 静态资源托管测试（spec 2026-10-25_add-workbench-mvp，F2/F3）。"""
+"""Workbench 静态资源托管测试（spec 2026-10-25_add-workbench-mvp，F2/F3）。
+
+task_0035 起 dist 根按 env → 仓库根 → 包内 → 旧 cwd 顺序解析（`--cwd` 只
+决定任务目录）；本文件用 monkeypatch 把仓库根/包内候选钉到不存在路径，
+隔离出旧 cwd 兜底与空态页的行为，真实仓库根候选由
+`test_committed_dist_served_from_real_repo_root` 覆盖。
+"""
 
 from __future__ import annotations
 
 import http.client
+import os
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
+import nexuscli.runtime.api as api_module
 from nexuscli.runtime.api import RuntimeApiServer
-from tests.test_runtime import _runtime_test_key
+
+
+def _runtime_test_key() -> str:
+    # 与 tests/test_runtime.py 的同名 helper 同语义。本文件不 `from tests.…`
+    # 导入：任务 verify 用裸 `pytest`（非 `python -m pytest`）跑单文件时，
+    # 仓库根不在 sys.path，`tests` 命名空间包不可导入（task_0035 verify 踩坑）。
+    return os.environ.get("NEXUSCLI_UNITTEST_RUNTIME_CREDENTIAL") or "unit-test-value"
+
 
 KEY = _runtime_test_key()
 
@@ -74,8 +89,17 @@ def test_no_workbench_flag_serves_404(tmp_path) -> None:
         thread.join(timeout=5)
 
 
-def test_empty_state_page_when_dist_missing(workbench_server) -> None:
-    _server, port, _tmp = workbench_server
+def _pin_repo_and_package_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """把仓库根/包内 dist 候选钉到不存在路径，隔离出旧 cwd 兜底（task_0035）。"""
+    monkeypatch.setattr(api_module, "_repo_workbench_dist", lambda: tmp_path / "no-repo-dist")
+    monkeypatch.setattr(
+        api_module, "_packaged_workbench_dist", lambda: tmp_path / "no-package-dist"
+    )
+
+
+def test_empty_state_page_when_dist_missing(workbench_server, monkeypatch) -> None:
+    _server, port, tmp = workbench_server
+    _pin_repo_and_package_missing(tmp, monkeypatch)
     status, headers, body = _request(port, "/")
     assert status == 200
     assert headers["content-type"] == "text/html; charset=utf-8"
@@ -83,10 +107,16 @@ def test_empty_state_page_when_dist_missing(workbench_server) -> None:
     assert "未构建" in text
     assert "npm" in text
     assert "/v1/*" in text
+    # task_0035：空态页列出已尝试候选路径与修复指引，不再只说"未构建"
+    assert "已尝试" in text
+    assert "no-repo-dist" in text
+    assert "no-package-dist" in text
+    assert "NEXUSCLI_WORKBENCH_DIST" in text
 
 
-def test_serves_dist_files_with_content_types(workbench_server) -> None:
+def test_serves_dist_files_with_content_types(workbench_server, monkeypatch) -> None:
     _server, port, tmp = workbench_server
+    _pin_repo_and_package_missing(tmp, monkeypatch)
     dist = tmp / "frontend" / "dist"
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("<!doctype html><html><body>workbench</body></html>")
@@ -123,8 +153,9 @@ def test_path_traversal_rejected(workbench_server) -> None:
         assert status == 404, path
 
 
-def test_spa_fallback_and_404(workbench_server) -> None:
+def test_spa_fallback_and_404(workbench_server, monkeypatch) -> None:
     _server, port, tmp = workbench_server
+    _pin_repo_and_package_missing(tmp, monkeypatch)
     dist = tmp / "frontend" / "dist"
     dist.mkdir(parents=True)
     (dist / "index.html").write_text("<!doctype html>")
@@ -137,14 +168,14 @@ def test_spa_fallback_and_404(workbench_server) -> None:
     assert status == 401  # 无鉴权头 → 走 API 鉴权门，不是静态
 
 
-def test_committed_dist_served_from_repo_root(workbench_server) -> None:
-    """F3 提交 dist 后：仓库根作为 cwd 时 GET / 托管真实构建产物（dist 缺失则 skip）。"""
+def test_legacy_cwd_dist_still_served(workbench_server, monkeypatch) -> None:
+    """task_0035 后旧 `cwd/frontend/dist` 降为最后兜底：仓库根/包内落空时仍托管。"""
 
     _server, port, tmp = workbench_server
-    repo_root = tmp
-    # 本用例在 tmp cwd 下验证「dist 在位即托管」；真实仓库 dist 的入库断言由
-    # frontend 构建 verify（npm run build + dist in sync）覆盖。
-    dist = repo_root / "frontend" / "dist"
+    _pin_repo_and_package_missing(tmp, monkeypatch)
+    # 本用例在 tmp cwd 下验证「旧 cwd 布局 dist 在位即托管」；真实仓库 dist 的
+    # 入库断言由 frontend 构建 verify（npm run build + dist in sync）覆盖。
+    dist = tmp / "frontend" / "dist"
     dist.mkdir(parents=True)
     (dist / "index.html").write_text("<!doctype html><title>committed</title>")
     status, _, body = _request(port, "/")

@@ -48,7 +48,12 @@ cd frontend && npm ci && npm run build
   未确认请求走幂等恢复（查询而非重发）
 - **任务面板**：后台任务列表 2s 轮询、详情展开、取消（与 `/v1/tasks` 数据一致）
 - **usage 统计**：近 N 天回合数/Token/成本汇总卡与按模型、按来源两张拆分表
-- **审批卡片**：挂起审批在执行检查器出现（Reason 行 + 批准/拒绝），2s 轮询
+- **审批卡片**：挂起审批在执行检查器出现（Reason 行 + 四个决策动词：批准 /
+  本轮放行 / 切换自动模式 / 拒绝）。「本轮放行」= 批准本次调用并在本次 run 内
+  放行该工具的后续调用（同 REPL 的 `r`，ask 规则与 hook 询问仍保留否决权）；
+  「切换自动模式」= 会话切到 auto/full access，当前等待与后续调用自动允许
+  （同 REPL 的 `a`，换模式即清空单项撤销）。审批请求与解决由 SSE 推送
+  （`approval_suspended` / `approval_resolved` 帧），列表刷新以 2s 轮询兜底
 - **慢等待与可辨识**（2026-10-27 第二轮 UX）：执行中 30s 无新事件时聊天面板追加
   「仍在等待模型响应…」提示（不改变 busy 语义、不自动取消）；无标题 REPL 会话回放
   条目回退显示「会话 <日期时间>」；运行报告的「执行事实与来源」逐工具列出，点击
@@ -70,7 +75,7 @@ cookie → 变更请求（POST）另带 `x-csrf-token` 头 → Origin 白名单�
 | GET `/v1/sessions/{id}/transcript` | 会话转录分页读取（id 仅 `[0-9a-zA-Z-]+`） |
 | GET `/v1/usage/summary?days=N` | usage 聚合（`UsageStore.stats` 原样形状） |
 | GET `/v1/approvals` | 挂起审批列表 |
-| POST `/v1/approvals/{id}/decision` | 审批决策（仅 `approve`/`deny`） |
+| POST `/v1/approvals/{id}/decision` | 审批决策：`approve` / `deny` / `approve_run`（本次 run 内放行）/ `approve_auto`（切到 auto/full access 并即时重判挂起审批） |
 | GET `/` 与非 `/v1/*` | 静态资源 / SPA 回退 / 空态页 |
 
 既有 threads / turns / tasks 端点见 [runtime-api.md](runtime-api.md)，不在此重复。
@@ -85,14 +90,23 @@ cookie → 变更请求（POST）另带 `x-csrf-token` 头 → Origin 白名单�
 - SSE 的 `api_key` 查询参数会出现在本机浏览器历史（浏览器 `EventSource` 无法设置自定义
   请求头，这是唯一出口）；缓解是仅绑定 localhost 且该端点只读
 - 会话转录端点返回用户对话正文（本机敏感数据），与 `nexuscli sessions` CLI 同暴露级别
-- 审批挂起 300s 无决策按 deny 失败关闭；执行器把超时 deny 也记为 `approver="hitl"`
+- 审批挂起超时按 deny 失败关闭：默认 300s，可用环境变量
+  `NEXUSCLI_APPROVAL_TIMEOUT_SECONDS`（或 `RuntimeApiServer` 的
+  `approval_timeout_seconds` 参数）调整；超时的卡由服务端看护线程统一收口为
+  expired（fail-closed deny），执行器把超时 deny 也记为 `approver="hitl"`
   （词表无 `approval-timeout` 值，桥在 `resolved_by` 里留存真相）
 
 ## 如实边界
 
 - MVP 无前端单元测试（vitest 挂账）；质量门槛 = `tsc -b` 构建通过 + Python 侧端点测试 +
   真实进程 smoke
-- `frontend/dist` 已入库但未打进 wheel（检出仓库或设置 `NEXUSCLI_WORKBENCH_DIST` 使用）
+- `frontend/dist` 已随 wheel 分发（pyproject force-include），`NEXUSCLI_WORKBENCH_DIST`
+  仍可覆盖 dist 根
 - Windows 下的前端构建不被 CI 覆盖（frontend job 仅 ubuntu）
 - 截图待补（README 章节内为 HTML 注释占位）
-- 审批挂起/解决的 SSE 推送未做（MVP 用轮询）；Web 端不提供 `approve_run` / `approve_auto`
+- 审批卡片列表的刷新以 2s 轮询兜底：服务端已推送 `approval_suspended` /
+  `approval_resolved` SSE 帧（线程 scope）且前端事件流已折叠它们
+  （`approval_resolved` 在 api.py 收口点落线程 events 表，回放/重建后仍可见，
+  运行报告「人工决定」计数由它驱动），但「SSE 审批事件到达 → 立即刷新审批列表」
+  的接线在 `App.tsx`（2026-11-07 发布加固包 0021 boundary 之外）尚未补上；
+  任务 scope 的审批卡不在任何线程流内，本就依赖轮询

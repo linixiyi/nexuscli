@@ -7,6 +7,10 @@ from typing import Any
 from nexuscli.types import Usage
 
 PER_MILLION_TOKENS = 1_000_000
+# `--json` surfaces this verbatim when a run resolves no price profile (model
+# absent from the built-in table and no llm.prices override): cost is null
+# with this note, never a fabricated 0.0.
+UNKNOWN_MODEL_PRICE_NOTE = "unknown model price; configure llm.prices"
 DEEPSEEK_PRICING_SOURCE = "https://api-docs.deepseek.com/quick_start/pricing"
 DEEPSEEK_PRICING_AS_OF = "2026-07-17"
 PRICE_CHANGE_NOTICE = (

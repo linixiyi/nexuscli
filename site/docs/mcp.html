@@ -9,6 +9,33 @@
   <meta property="og:url" content="https://linixiyi.github.io/nexuscli/docs/mcp.html">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%237c5cff'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='monospace' font-weight='bold'%3EN%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="../style.css">
+  <style>
+  .nav-search { position: relative; }
+  #siteSearch {
+    width: 200px; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  }
+  #siteSearch::placeholder { color: var(--faint); }
+  #siteSearch:focus { border-color: var(--accent); }
+  .search-results {
+    position: absolute; top: calc(100% + 8px); right: 0; width: 340px;
+    max-height: 60vh; overflow: auto; padding: 6px; z-index: 60;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow);
+  }
+  .sr-item { display: block; padding: 8px 10px; border-radius: 8px; }
+  .sr-item:hover { background: var(--surface-2); text-decoration: none; }
+  .sr-title { color: var(--text); font-weight: 600; font-size: 13.5px; }
+  .sr-path { color: var(--faint); font-size: 11.5px; font-family: var(--mono); margin-top: 1px; }
+  .sr-sum { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.5; }
+  .sr-empty { padding: 8px 10px; color: var(--faint); font-size: 13px; }
+  .search-results mark { background: none; color: var(--accent); font-weight: 700; }
+  @media (max-width: 640px) {
+    #siteSearch { width: 128px; }
+    .search-results { width: min(340px, 92vw); }
+  }
+</style>
   <script>
     (function () {
       try {
@@ -28,6 +55,11 @@
         <a href="../index.html#docs">文档</a>
         <a href="../tutorial.html">教程</a>
       </div>
+      <div class="nav-search">
+        <input id="siteSearch" type="search" placeholder="搜索文档… (Ctrl K)"
+               autocomplete="off" aria-label="搜索文档">
+        <div id="searchResults" class="search-results" hidden></div>
+      </div>
       <div class="nav-spacer"></div>
       <a class="nav-gh" href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">★ GitHub</a>
       <button class="theme-btn" id="themeToggle" aria-label="切换主题">☀</button>
@@ -39,6 +71,7 @@
     <div class="toc">
 <ul>
 <li><a href="#工具级过滤allowed_tools--blocked_tools">工具级过滤（allowed_tools / blocked_tools）</a></li>
+<li><a href="#readonlyhint-与只读语义">readOnlyHint 与只读语义</a></li>
 <li><a href="#oauth-20-授权http-类-server授权码--pkce">OAuth 2.0 授权（HTTP 类 server，授权码 + PKCE）</a></li>
 </ul>
 </div>
@@ -117,6 +150,22 @@ NEXUSCLI_MCP_API_KEY=&lt;your-key&gt; uv run nexuscli mcp serve --transport http
 <li><strong>virtual 工具不受过滤影响</strong>：每个 server 附带的 <code>list_resources</code> / <code>read_resource</code> / <code>list_prompts</code> / <code>get_prompt</code> 四个包装工具始终注册；远端工具全被过滤时只是没有远端工具入表，不报错。</li>
 <li><strong>与 <code>enabled</code> 开关叠加</strong>：<code>enabled: false</code> 的 server 整体跳过，过滤只对启用的 server 生效；不配置两个列表时行为与从前完全一致。</li>
 </ul>
+<h2 id="readonlyhint-与只读语义"><a class="toclink" href="#readonlyhint-与只读语义">readOnlyHint 与只读语义</a></h2>
+<p>MCP 协议允许 server 在工具的 <code>annotations.readOnlyHint</code> 里自述「只读」。MCP server
+是外部进程，这个字段是<strong>远端的自述，不是本地可信声明</strong>——一个被投毒或恶意的
+server 完全可以声明只读、然后删文件。因此 NexusCLI 不把 <code>readOnlyHint</code> 当作安全
+判定（实现：<code>src/nexuscli/mcp/client.py</code> 的 <code>_tools_for_server</code>）：</p>
+<ul>
+<li><strong>远端工具一律按有副作用注册</strong>：<code>is_read_only=False</code>、<code>requires_approval=True</code>、
+  <code>danger_level="medium"</code>，与 hint 真假无关。plan 模式拒绝执行远端 MCP 工具；
+  auto/default 模式照常走审批链询问；审计按非只读工具记录。</li>
+<li><strong><code>readOnlyHint=True</code> 只进展示面</strong>：作为附注追加到工具描述（"server advertises
+  readOnlyHint; NexusCLI does not trust it and still requires approval"），供模型与
+  用户参考，不参与 <code>is_read_only</code> / <code>requires_approval</code> / <code>danger_level</code> 的计算。</li>
+<li><strong>virtual 工具不受此策略影响</strong>：每个 server 附带的 <code>list_resources</code> /
+  <code>read_resource</code> / <code>list_prompts</code> / <code>get_prompt</code> 由 NexusCLI 本地包装、语义确实
+  只读，仍注册为 read-only。</li>
+</ul>
 <h2 id="oauth-20-授权http-类-server授权码--pkce"><a class="toclink" href="#oauth-20-授权http-类-server授权码--pkce">OAuth 2.0 授权（HTTP 类 server，授权码 + PKCE）</a></h2>
 <p><code>type: http</code> / <code>streamable_http</code> 的 server 支持 OAuth 2.0 public client 授权。在 <code>mcp.json</code> 的 server 条目里加 <code>auth</code> 段（实现：<code>src/nexuscli/mcp/config.py</code> 的 <code>McpAuthConfig</code>）：</p>
 <pre><code class="language-json">{
@@ -151,6 +200,113 @@ NEXUSCLI_MCP_API_KEY=&lt;your-key&gt; uv run nexuscli mcp serve --transport http
   <p>NexusCLI · <a href="https://github.com/linixiyi/nexuscli" target="_blank" rel="noopener">GitHub</a> · MIT License</p>
   <p><a href="../index.html">← 返回首页</a></p>
 </footer><script src="../site.js"></script>
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("siteSearch");
+  var box = document.getElementById("searchResults");
+  if (!input || !box) return;
+  var rel = "../";
+  var index = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function load(cb) {
+    if (index) { cb(); return; }
+    fetch(rel + "search-index.json")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) { index = Array.isArray(data) ? data : []; cb(); })
+      .catch(function () { index = []; cb(); });
+  }
+
+  function search(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    var items = [];
+    if (terms.length) {
+      items = index.filter(function (e) {
+        var hay = (e.title + " " + e.path + " " + e.summary).toLowerCase();
+        return terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      });
+      items.sort(function (a, b) {
+        var ta = a.title.toLowerCase(), tb = b.title.toLowerCase();
+        var sa = terms.some(function (t) { return ta.indexOf(t) !== -1; }) ? 0 : 1;
+        var sb = terms.some(function (t) { return tb.indexOf(t) !== -1; }) ? 0 : 1;
+        return sa - sb;
+      });
+      items = items.slice(0, 8);
+    }
+    return { items: items, terms: terms };
+  }
+
+  function highlight(text, terms) {
+    var safe = esc(text);
+    if (!terms.length) return safe;
+    var re = new RegExp("(" + terms.map(function (t) {
+      return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    return safe.replace(re, "<mark>$1</mark>");
+  }
+
+  function render(q) {
+    if (!q.trim()) { box.hidden = true; return; }
+    var r = search(q);
+    if (!r.items.length) {
+      box.innerHTML = '<div class="sr-empty">没有匹配「' + esc(q) + '」的结果</div>';
+    } else {
+      box.innerHTML = r.items.map(function (e) {
+        var sum = e.summary.slice(0, 110) + (e.summary.length > 110 ? "…" : "");
+        return '<a class="sr-item" href="' + rel + e.path + '">'
+          + '<div class="sr-title">' + highlight(e.title, r.terms) + '</div>'
+          + '<div class="sr-path">' + esc(e.path) + '</div>'
+          + '<div class="sr-sum">' + esc(sum) + '</div>'
+          + "</a>";
+      }).join("");
+    }
+    box.hidden = false;
+  }
+
+  input.addEventListener("input", function () {
+    load(function () { render(input.value); });
+  });
+  input.addEventListener("focus", function () {
+    load(function () { if (input.value) render(input.value); });
+  });
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      input.value = "";
+      box.hidden = true;
+      input.blur();
+    } else if (ev.key === "Enter") {
+      load(function () {
+        var r = search(input.value);
+        if (r.items.length) window.location.href = rel + r.items[0].path;
+      });
+    }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "k" || ev.key === "K")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (!box.hidden && !box.contains(ev.target) && ev.target !== input) box.hidden = true;
+  });
+  box.addEventListener("click", function () {
+    box.hidden = true;
+    input.value = "";
+  });
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
     (function () {

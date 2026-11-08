@@ -73,6 +73,7 @@
 **开发**
 
 - [🧪 开发](#-开发)
+- [🤝 贡献指南](CONTRIBUTING.md)
 - [📄 License](#-license)
 
 ## 📐 架构总览
@@ -94,12 +95,54 @@
 
 ## 🚀 快速开始
 
+### 📦 安装（三种路径）
+
+PyPI 渠道 0.2.1 起提供，按使用方式三选一；`uv tool` / `pip` 装完直接得到 `nexuscli` 命令。
+
+**① uv tool 安装（推荐）**——独立工具环境，不污染项目依赖，升级用 `uv tool upgrade nexuscli`：
+
+```bash
+uv tool install nexuscli
+```
+
+**② pip / pipx 安装**：
+
+```bash
+pip install nexuscli
+# 或
+pipx install nexuscli
+```
+
+**③ 源码安装**——开发或体验未发布特性（下文示例里的 `nexuscli` 换成 `uv run nexuscli`）：
+
 ```bash
 git clone https://github.com/linixiyi/nexuscli.git
 cd nexuscli
 uv sync --extra dev --frozen
 uv run nexuscli --help
 ```
+
+### ⏱️ 60 秒上手
+
+装好后两步：写一个模型 key，跑第一条命令。
+
+```bash
+# ① 在项目根写 .env 配置 provider（DeepSeek 示例，key 对照表见 docs/config.md）
+cat > .env <<'EOF'
+NEXUSCLI_PROVIDER=deepseek
+NEXUSCLI_MODEL=deepseek-v4-flash
+DEEPSEEK_API_KEY=your_key_here
+EOF
+
+# ② 单次查询（-p 模式没有审批弹窗，写盘动作默认失败关闭，需显式 --yes，见下文）
+nexuscli -p "帮我总结这个项目"
+
+# ③ 进交互模式，或先做环境诊断
+nexuscli
+nexuscli doctor --cwd .
+```
+
+模型 key 也可以放进 `~/.nexuscli/config.json`；完整优先级链与全部 provider 见 [docs/config.md](docs/config.md)。
 
 启动交互模式：
 
@@ -119,6 +162,8 @@ uv run nexuscli -p "帮我总结这个项目"
 uv run nexuscli --mode plan -p "先读取 README，再验证项目" --json
 uv run nexuscli --mode team --worker-mode plan -p "并行审计核心模块" --json
 ```
+
+三种名字里带「plan」的机制要区分开：`--mode plan`（单次 `-p`）是**只读规划**——只读闸门全程开启，不会执行任何写入，`--yes` 在该模式无效（启动时打印 warning 并忽略），计划被只读闸门拦下时按失败收场（exit 1）；REPL 的 `/plan <task>` 是交互式 Plan-and-Execute 入口，与 `--mode plan` 同一只读闸门口径，支持图级 checkpoint 与 `--resume` 续跑；交互模式 `Shift+Tab` 切到的 `plan (read-only)` 是会话只读态，作用于整个 REPL 会话（普通对话也硬拒写），不是计划入口。三者详见 [docs/plan-execute.md](docs/plan-execute.md) 与 [docs/permissions.md](docs/permissions.md#会话权限模式default--auto--plan)。
 
 `-p` 模式没有人工审批通道，默认按失败关闭：需要写文件、跑命令、`save_memory` 等落盘动作的调用会被拒绝（审计留痕），显式加 `--yes` 才放行；旗标在 `-p "prompt"` 之前或之后均可，没有 `--approve-all` 别名。`-p` 里也可以触发自定义斜杠命令（`uv run nexuscli -p "/命令名 参数"`）。完整口径见 [docs/permissions.md](docs/permissions.md#单次--p-模式下没有审批弹窗)。
 
@@ -358,6 +403,8 @@ uv sync --extra dev --frozen
 ```bash
 uv run ruff check .
 uv run ruff format --check .
+uv run python scripts/check_endpoint_docs.py
+uv run --with mypy mypy src/nexuscli
 uv run python -m pytest
 cd frontend && npm ci && npm run build
 ```
@@ -378,6 +425,8 @@ uv run nexuscli --help
 uv run nexuscli doctor --cwd .
 uv run nexuscli --plain -p hello
 ```
+
+参与贡献的流程与自查清单见 [CONTRIBUTING.md](CONTRIBUTING.md)；**安全漏洞不要开公开 issue**，走 [SECURITY.md](SECURITY.md) 的私有报告渠道。
 
 ## 📄 License
 

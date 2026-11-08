@@ -341,7 +341,9 @@ async def start_repl(
         sigint_armed = _arm_turn_sigint()
         try:
             if message.startswith("/"):
-                custom_match = await _match_custom_command(message, custom_commands, config)
+                custom_match = await _match_custom_command(
+                    message, custom_commands, config, approval_callback=agent.approval_callback
+                )
                 if custom_match is not None:
                     _queue_goal_reminder(agent, session_state.writer.meta.id)
                     await _run_custom_command(

@@ -35,6 +35,75 @@ def test_command_rule_matching() -> None:
     assert evaluate_permissions(perms, "bash", {"command": "git push"}) is None
 
 
+def test_command_prefix_rule_matches_token_boundary() -> None:
+    # ``prefix:*`` used to be a bare startswith, letting the longer command
+    # word ``git difftool`` ride the ``bash(git diff:*)`` allow rule. The
+    # prefix now has to end at a token boundary.
+    perms = PermissionsConfig(allow=["bash(git diff:*)"])
+    hit = evaluate_permissions(perms, "bash", {"command": "git diff"})
+    assert hit is not None and hit.action == "allow" and hit.rule == "bash(git diff:*)"
+    assert evaluate_permissions(perms, "bash", {"command": "git difftool"}) is None
+
+
+def test_command_prefix_rule_with_arguments() -> None:
+    perms = PermissionsConfig(allow=["bash(git diff:*)"])
+    hit = evaluate_permissions(perms, "bash", {"command": "git diff --stat"})
+    assert hit is not None and hit.action == "allow" and hit.rule == "bash(git diff:*)"
+    assert evaluate_permissions(perms, "bash", {"command": "git difftool --stat"}) is None
+
+
+def test_command_prefix_rule_with_quotes() -> None:
+    perms = PermissionsConfig(allow=["bash(git commit:*)"])
+    # Quoted arguments after the token boundary are ordinary payload.
+    hit = evaluate_permissions(perms, "bash", {"command": 'git commit -m "fix: typo"'})
+    assert hit is not None and hit.action == "allow" and hit.rule == "bash(git commit:*)"
+    # A quote glued to the prefix joins the word (shell quote removal), so
+    # ``git diff"tool"`` runs ``git difftool`` — no allow, the human is asked.
+    diff_perms = PermissionsConfig(allow=["bash(git diff:*)"])
+    assert evaluate_permissions(diff_perms, "bash", {"command": 'git diff"tool"'}) is None
+    hit = evaluate_permissions(diff_perms, "bash", {"command": 'git diff "--stat"'})
+    assert hit is not None and hit.action == "allow"
+
+
+def test_command_prefix_rule_rejects_compound_commands() -> None:
+    # A space after the prefix ends the rule's word, but the tail may still
+    # chain another command (`git diff --stat; touch /tmp/x`). A ``prefix:*``
+    # rule only speaks for its own segment, so any shell operator or command
+    # substitution keeps it silent and the call falls back to the approval
+    # chain instead of auto-approving the chained tail.
+    perms = PermissionsConfig(allow=["bash(git diff:*)"])
+    for command in (
+        "git diff --stat; touch /tmp/x; echo chained-ok",
+        "git diff --stat;touch /tmp/x",
+        "git diff --stat && git push --force",
+        "git diff --stat || git push --force",
+        "git diff --stat | tee /tmp/x",
+        "git diff --stat & rm -rf /tmp/x",
+        "git diff --stat\nrm -rf /tmp/x",
+        "git diff --stat\n",
+        "git diff --stat $(touch /tmp/x)",
+        "git diff --stat `touch /tmp/x`",
+        "git diff --stat > /tmp/x; cat /tmp/x",
+    ):
+        assert evaluate_permissions(perms, "bash", {"command": command}) is None, command
+
+
+def test_compound_command_cannot_dodge_deny_or_ride_allow() -> None:
+    # deny > allow used to be defeated by chaining: the allow rule matched the
+    # whole string, so the deny rule's target rode in as the second segment of
+    # `git diff --stat && git push --force`. A compound matches no prefix rule
+    # at all, so it falls to the approval chain (fail-closed with no approver)
+    # instead of being auto-allowed past the deny rule.
+    perms = PermissionsConfig(allow=["bash(git diff:*)"], deny=["bash(git push:*)"])
+    assert (
+        evaluate_permissions(perms, "bash", {"command": "git diff --stat && git push --force"})
+        is None
+    )
+    # Straight calls keep their exact semantics.
+    assert evaluate_permissions(perms, "bash", {"command": "git push --force"}).action == "deny"
+    assert evaluate_permissions(perms, "bash", {"command": "git diff --stat"}).action == "allow"
+
+
 def test_command_glob_rule_matching() -> None:
     perms = PermissionsConfig(ask=["bash(npm run *)"])
     hit = evaluate_permissions(perms, "bash", {"command": "npm run build"})
@@ -121,6 +190,61 @@ def test_allow_rule_skips_approval_prompt(tmp_path) -> None:
     )
     assert not result.is_error
     assert executed == ["ok"]
+
+
+def _registry_with_shell_tool(executed: list[str]) -> ToolRegistry:
+    registry = ToolRegistry()
+
+    async def run(payload, _context):
+        executed.append(str(payload["command"]))
+        return ToolResult(f"ran {payload['command']}")
+
+    registry.register(
+        Tool(
+            name="bash",
+            description="fake bash",
+            parameters=object_schema({"command": {"type": "string"}}, ["command"]),
+            required_keys=["command"],
+            handler=run,
+            is_read_only=False,
+            is_concurrency_safe=False,
+            danger_level="high",
+            requires_approval=True,
+        )
+    )
+    return registry
+
+
+def test_allow_prefix_rule_fails_closed_on_chained_bash_without_approver(tmp_path) -> None:
+    # The regression: allow=[bash(git diff:*)] used to auto-run
+    # `git diff --stat; touch /tmp/x; echo chained-ok` with no approver — the
+    # rule matched the whole compound and the chained segments never passed a
+    # gate. The rule now stays silent on the operators, and the executor
+    # denies the call exactly like any other unapproved write tool.
+    config = NexusCliConfig()
+    config.permissions.allow = ["bash(git diff:*)"]
+    executed: list[str] = []
+    executor = ToolExecutor(_registry_with_shell_tool(executed))
+    call = {
+        "id": "call-1",
+        "name": "bash",
+        "arguments": {"command": "git diff --stat; touch /tmp/x; echo chained-ok"},
+    }
+    result = asyncio.run(
+        executor.execute_all([call], ToolContext(cwd=str(tmp_path), config=config))
+    )[0]
+    assert result.is_error
+    assert executed == []
+
+    # The plain, un-chained command the rule actually named still auto-runs.
+    executed.clear()
+    executor = ToolExecutor(_registry_with_shell_tool(executed))
+    call = {"id": "call-2", "name": "bash", "arguments": {"command": "git diff --stat"}}
+    result = asyncio.run(
+        executor.execute_all([call], ToolContext(cwd=str(tmp_path), config=config))
+    )[0]
+    assert not result.is_error
+    assert executed == ["git diff --stat"]
 
 
 def test_deny_rule_blocks_execution_with_rule_text(tmp_path) -> None:

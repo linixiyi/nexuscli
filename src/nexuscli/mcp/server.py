@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -79,10 +80,12 @@ async def _handle_request(request: dict[str, Any], cwd: str) -> dict[str, Any]:
                 "id": request_id,
                 "error": {"message": f'Tool "{name}" not found'},
             }
-        config = load_config(project_root=cwd)
         # 无人值守服务器保留 never 语义（由 HTTP 鉴权补齐访问控制），但调用必须
         # 走与其他路径相同的 ToolExecutor 门序：此前直调 tool.execute 会静默
         # 跳过审计日志、PreToolUse hooks、permission 规则与写域守卫。
+        # never 改写只落在 deepcopy 出的局部副本上：就地改写 load_config 返回的
+        # 对象会把无人值守的 never 语义泄回持有同一 config 的调用方。
+        config = copy.deepcopy(load_config(project_root=cwd))
         config.policy.hitl_mode = "never"
         executor = ToolExecutor(registry)
         results = await executor.execute_all(

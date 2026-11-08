@@ -1,0 +1,49 @@
+name: Release
+
+# tag 触发的 PyPI 发布链（spec 2026-11-07_fix-nexuscli-release-hardening task_0005）。
+# 凭证走 PyPI Trusted Publishing（OIDC）：workflow 只申请 id-token 写权限，
+# 不在仓库里存放或引用任何 API token；所有 action 按 commit SHA pin 死
+# （注释保留版本号），不跟随浮动大版本 tag——上游 tag 被移动也无法在
+# 发布链注入代码。
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build & publish to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      # twine check 只验元数据不验包内容：发布前先跑 task_0004 的产物校验脚本，
+      # 断言 wheel 自带 workbench dist、sdist 不泄漏 node_modules/.spec——
+      # pyproject 的 sdist exclude 清单被未来改动绕开时，这一步必须红，
+      # 不能等发布出去才复现泄漏。
+      - name: Check release artifact contents
+        run: uv run python scripts/check_release_artifacts.py
+
+      # twine 不进 dev 依赖，按 CI 对 mypy 的同一套路临时注入，不动 uv.lock；
+      # 按精确版本号 pin 死（与 publish action 的 SHA pin 注释同一口径），
+      # 不随 PyPI 最新浮动。
+      - name: Check distributions
+        run: uv run --with twine==7.0.0 python -m twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

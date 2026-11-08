@@ -111,6 +111,28 @@ def test_match_custom_command_returns_expanded_prompt(tmp_path):
     assert asyncio.run(_match_custom_command("plain message", commands, config)) is None
 
 
+def test_match_custom_command_forwards_approval_callback(tmp_path):
+    project_dir = tmp_path / "proj" / ".nexuscli" / "commands"
+    _write_command(project_dir, "probe.md", "Out: !`echo injected-ran`")
+    commands = load_slash_commands(str(tmp_path / "proj"), home=tmp_path / "home")
+    config = NexusCliConfig()
+
+    # No callback (non-interactive caller): fail-closed refuse marker.
+    refused = asyncio.run(_match_custom_command("/probe", commands, config))
+    assert refused is not None
+    assert refused[1].prompt.startswith("Out: [refused: echo injected-ran")
+
+    # With the REPL's approval callback: the project injection executes.
+    def approve(_request):
+        return "approve"
+
+    approved = asyncio.run(
+        _match_custom_command("/probe", commands, config, approval_callback=approve)
+    )
+    assert approved is not None
+    assert approved[1].prompt == "Out: injected-ran"
+
+
 # ---------------------------------------------------------------------------
 # Frontmatter extension: mode / allowed-tools / argument-hint
 # ---------------------------------------------------------------------------

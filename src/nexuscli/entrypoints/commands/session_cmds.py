@@ -9,7 +9,8 @@ from rich.console import Console
 from rich.table import Table
 
 from nexuscli.agent import Agent
-from nexuscli.session import SessionStore, SessionUsageTotals
+from nexuscli.session import SessionMeta, SessionStore, SessionUsageTotals
+from nexuscli.session.store import tree_parent_id
 
 if TYPE_CHECKING:
     # Runtime import would be circular: repl imports this package for its
@@ -168,3 +169,84 @@ def _print_session_list(console: Console, store: SessionStore, cwd: str) -> None
         )
     console.print(grid)
     console.print("[dim]Resume with /resume <index-or-id>[/dim]")
+
+
+def _session_tree_line(meta: SessionMeta, prefix: str, current_id: str) -> str:
+    """One frameless tree row: connector prefix, id, title, branch, created."""
+    marker = "*" if meta.id == current_id else " "
+    line = f"{prefix}{marker} {meta.id}  {meta.title or '(untitled)'}"
+    if meta.branch:
+        line += f"  [dim](branch: {meta.branch})[/dim]"
+    if meta.id == current_id:
+        line += "  [dim](current)[/dim]"
+    if meta.created_at > 0:
+        created = time.strftime("%Y-%m-%d %H:%M", time.localtime(meta.created_at))
+        line += f"  [dim]{created}[/dim]"
+    return line
+
+
+def _tree_command(arg: str, console: Console, store: SessionStore, current_session_id: str) -> None:
+    """Handle ``/tree [id]``: render the parent/child/branch tree of a session.
+
+    Without an argument the tree anchors at the current session: ancestors up
+    to the root first, then every branch subtree below it. An optional id
+    (exact/prefix, same resolution as ``/resume``) anchors the tree at another
+    session instead. Sessions unrelated to the anchor are not part of the
+    tree. A session that was never persisted (no transcript on disk — the
+    fork/new-session laziness) renders as a lone root with a hint.
+
+    Frameless listing, same language as /history and the session list above.
+    """
+    anchor_id = current_session_id
+    if arg.strip():
+        record = store.resolve(arg.strip())
+        if record is None:
+            console.print(f"[red]Session not found:[/red] {arg.strip()}")
+            return
+        anchor_id = record.meta.id
+    metas = store.list(limit=10**6)
+    by_id = {meta.id: meta for meta in metas}
+    anchor = by_id.get(anchor_id)
+    console.print("[bold]NexusCLI Session Tree[/bold]")
+    if anchor is None:
+        # Never persisted: no transcript file, so no stored relatives to show.
+        console.print(f"* {anchor_id}  [dim](current)[/dim]")
+        console.print("[dim]Current session has no transcript yet — send a message first.[/dim]")
+        return
+    children: dict[str, list[SessionMeta]] = {}
+    for meta in metas:
+        parent_id = tree_parent_id(meta)
+        if parent_id in by_id:
+            children.setdefault(parent_id, []).append(meta)
+    for siblings in children.values():
+        siblings.sort(key=lambda meta: (meta.created_at, meta.id))
+    # Ancestor chain of the anchor, root first; the seen-set guards against
+    # a hand-edited transcript pointing two sessions at each other.
+    chain = [anchor]
+    seen = {anchor.id}
+    node = anchor
+    while True:
+        parent_id = tree_parent_id(node)
+        parent = by_id.get(parent_id) if parent_id else None
+        if parent is None or parent.id in seen:
+            break
+        seen.add(parent.id)
+        chain.append(parent)
+        node = parent
+    chain.reverse()
+    lines = [
+        _session_tree_line(meta, "  " * depth + ("└─ " if depth else ""), anchor_id)
+        for depth, meta in enumerate(chain)
+    ]
+
+    def walk(parent_id: str, prefix: str) -> None:
+        siblings = children.get(parent_id, [])
+        for index, child in enumerate(siblings):
+            last = index == len(siblings) - 1
+            lines.append(_session_tree_line(child, prefix + ("└─ " if last else "├─ "), anchor_id))
+            walk(child.id, prefix + ("   " if last else "│  "))
+
+    walk(anchor.id, "  " * (len(chain) - 1) + ("   " if len(chain) > 1 else ""))
+    for line in lines:
+        console.print(line)
+    console.print(f"[dim]{len(lines)} sessions · Resume with /resume <id>[/dim]")

@@ -322,7 +322,8 @@ previous report is read back and each scenario is marked:
 | no previous entry | `new` |
 
 The summary counts `regressions` and `fixed` separately, so
-`nexuscli eval run` doubles as a CI gate: nonzero exit on any failure, and
+`nexuscli eval run` doubles as a CI gate (wired up as CI's `eval` job — see
+[CI gate](#ci-gate-hermetic-track)): nonzero exit on any failure, and
 the `regressions` count tells you which failures are new. A corrupt previous
 report is an error, not a silent reset — silently dropping the baseline would
 turn real regressions into `new` verdicts.
@@ -416,6 +417,38 @@ total=9 passed=9 failed=0 regressions=0 fixed=0 cost_increased=0 cost_decreased=
 difficulty: short total=0 passed=0 failed=0 regressions=0 | medium total=8 passed=8 failed=0 regressions=0 | long total=1 passed=1 failed=0 regressions=0
 Report written to <cwd>/.nexuscli/evals/last-report.json
 ```
+
+## CI gate (hermetic track)
+
+CI gates on this track (`.github/workflows/ci.yml`, job `eval`): every push
+and PR runs `uv run nexuscli eval run --all` — scripted fake LLM, fully
+offline, no API key needed — and the job fails whenever any scenario fails
+(the command exits `1`). The report directory `.nexuscli/evals/`
+(`last-report.json` plus the `history/hermetic/` snapshot) is uploaded as a
+workflow artifact (`eval-report`) on every run, pass or fail, so a red PR
+can be triaged straight from the report. The `--real` track is deliberately
+**not** part of the gate — it needs API keys and bills real tokens — and
+stays nightly/manual evidence (see
+[Real-model track](#real-model-track---real)).
+
+Reproduce the gate locally with the two commands CI runs:
+
+```bash
+uv sync --frozen
+uv run nexuscli eval run --all
+```
+
+Reading a regression: the runner diffs each scenario against the previous
+`last-report.json`, so run the command **twice** — the first run baselines
+(every verdict `new`), the second compares. A `regression` verdict
+(`pass → fail`) is what you bisect; the summary's `regressions` count says
+how many failures are new, the per-tier `difficulty:` line says *which*
+tier degraded, and the `COST` lines flag scenarios that got more expensive
+(advisory only). A fresh checkout has no baseline, so a CI run always
+reports every scenario as `new` — there the gate is the exit code, while
+the `pass → fail` diff is what you read locally, where the baseline
+persists between runs. `nexuscli eval history` (next section) keeps every
+run's report for the longer view.
 
 ## History snapshots (`eval history`)
 

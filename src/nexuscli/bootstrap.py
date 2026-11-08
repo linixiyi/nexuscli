@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from nexuscli.config import NexusCliConfig
 from nexuscli.mcp import McpClientManager
-from nexuscli.plugins import load_plugins
+from nexuscli.plugins import load_plugins, register_plugin_tools
 from nexuscli.tools import ToolRegistry, get_builtin_tools
 from nexuscli.vfs import vfs_tools
 
@@ -24,6 +24,15 @@ async def build_tool_registry(
     # Read-only snapshot views (vfs_ls / vfs_read): main-agent path only —
     # subagents, sdk.py and mcp/server.py build their registries elsewhere.
     registry.register_all(vfs_tools())
+    # Task 0030 wiring: plugin tool components join the same registry so every
+    # production consumer (REPL, -p, runtime) sees ``<plugin>.<tool>``. This
+    # is the only step that executes plugin code — each handler is imported
+    # here (discovery above stayed read-only); a broken handler warns through
+    # the loader's ``[nexuscli:plugins]`` channel and skips its own tool only.
+    # Tools keep the loader's fail-closed defaults (requires_approval=True,
+    # non-read-only) and ride the same ToolExecutor approval chain as
+    # builtins; an explicit permissions.allow rule stays the exemption.
+    register_plugin_tools(registry, cwd)
     manager: McpClientManager | None = None
     if config.features.mcp:
         manager = McpClientManager(cwd)

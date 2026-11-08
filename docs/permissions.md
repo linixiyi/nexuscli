@@ -57,6 +57,24 @@ interactive REPL for approval prompts.
 
 这条边界和 `ask` 在 `hitl_mode: "never"` 下的处理是同一姿态：**无人可问时按失败关闭，而不是静默放行**。注意 `permissions.allow` 只是放行审批层，`path_guard` 仍在生效——工作区外的写入依旧会被 `path escapes workspace` 拒绝。
 
+### headless 状态与退出码（`status` / `--fail-on-blocked`）
+
+`-p` 的每次 run 都以 `status` 收场，供脚本与 CI 机读（`nexuscli.agent.results.gate_denial_reason` 负责把执行器的拒绝文案归类）：
+
+| status | 含义 |
+|---|---|
+| `ok` | 正常完成；门拒绝过的调用不存在 |
+| `blocked` | 审批拒绝 / 权限规则、hook 拦截 / plan 只读闸拦下任务——run 已结束但目标未达成，`blocked_reason` 带第一条拒绝原文 |
+| `failed` | run 中途抛异常 |
+
+读取方式：
+
+- `-p --json`：payload 增加 `status` 字段（`ok` 时没有 `blocked_reason`）；异常路径也照常吐一个 JSON 对象（`status: "failed"`，`error` 字段带异常文本，usage/cost 归零或 `null`）。
+- 非 JSON 模式：stderr 打印一行 `status: ok` / `status: blocked (<拒绝原文>)` / `status: failed (<异常>)`，stdout 仍保持纯回答文本。
+- 退出码默认**保持兼容**：`ok` 与 react 门拒绝（过去就静默通过）为 0，异常为 1，被 plan 只读闸拦下的计划按 0034 口径为 1；新增 `--fail-on-blocked` 后，`blocked` / `failed` 一律 exit 2（会覆盖上述 1），适合 CI 直接以退出码判失败。
+
+注意边界：`status: "blocked"` 是「run 结束了但有门拒绝」——模型收到拒绝后仍可能给出正常文本回答。`team` 模式下 worker 的原始 `tool_result` 不出 SubAgent 折叠层，由编排器把门拒绝（同一张 `gate_denial_reason` 标记表归类）以 `gate_denial` 事件转发到外层流，因此 `-p --mode team` 与 react 一样报 `blocked` 并带拒绝原文；react 门拒绝与 team 门拒绝的默认退出码同为 0（过去就静默通过），`--fail-on-blocked` 时为 2。
+
 ## 只读 bash 直通
 
 `bash` / `execute_command` 的命令串会先做一次 argv 级只读静态判定。判定是保守的：只认单条简单命令（含 `;`、`|`、重定向、命令替换等元字符时一律视为不只读），并基于内置白名单——`ls`、`cat`、`grep`、`head` 等检查类命令，不带写动作参数的 `find`，只读子命令的 `git`（`status`、`log`、`diff`、`show` 等，`branch` / `tag` / `remote` / `config` 另有参数限制），以及 `python` / `node` / `npm` 的 `--version` / `--help` 式自述调用与 `uv` / `pip` 的列表类子命令；白名单之外的命令一律视为不只读，回落到正常审批链。
@@ -100,6 +118,37 @@ config.json 的 `policy.env_sanitization` 开关（默认 `true`）控制该护�
 
 OS 级沙箱（容器、受限令牌）是更大体量的外部依赖，同样挂账；在它落地之前，不要把宿主机上不可泄露的机密放在子进程可读取的环境里并放开 HITL。
 
+## OS 级沙箱（sandbox.backend）
+
+`config.json` 的 `sandbox` 段为命令执行提供 OS 级围栏（实现：`src/nexuscli/policy/os_sandbox.py`，协议为 `SandboxBackend`——`available` / `probe` / `wrap` 三动词）：
+
+```json
+{
+  "sandbox": {
+    "backend": "seatbelt",
+    "writable_paths": ["/opt/shared-data"],
+    "allow_network": false
+  }
+}
+```
+
+| `backend` | 行为 |
+|---|---|
+| `none`（默认） | 不做 OS 级围栏，行为与没有该模块时完全一致（仅保留 env 清洗等既有护栏） |
+| `seatbelt` | macOS 上用 `sandbox-exec -p` 包装命令：写域限制在命令 cwd、系统临时目录、`/dev/null` 与显式 `writable_paths` 之内；`allow_network: false`（默认）时整网拒绝，`true` 时仅放行出站（bind/入站仍拒绝） |
+| `bubblewrap` | Linux 上用 `bwrap` 挂载命名空间包装命令：根文件系统只读绑定，另挂全新 `/dev`、`/proc` 与 `/dev/shm`，仅 cwd、系统临时目录与显式 `writable_paths` 可写；`allow_network: false`（默认）时 `--unshare-net` 整网拒绝（含 loopback），`true` 时完全放开（bind 也放行，粒度比 seatbelt 粗）。需要非特权的 user namespaces（或 setuid `bwrap`），容器里常见两者皆无——probe 会如实报错。安装提示：Debian/Ubuntu `apt install bubblewrap`、Fedora `dnf install bubblewrap`、Arch `pacman -S bubblewrap` |
+| `landlock` | Linux 上用内核 Landlock（实现：`src/nexuscli/policy/linux_sandbox.py`）包装命令：内置 helper 先对自身 `restrict_self` 再 exec 命令，写域与 seatbelt 相同（`/dev/null`、临时目录、cwd、显式 `writable_paths`），读保持开放；网络拒绝需要内核 ABI ≥ 4（Linux ≥ 6.7），仅覆盖 TCP（UDP 自 ABI 10 起），内核达不到时按 fail-closed 直接报错而非裸跑。ABI 探测是纯查询（`landlock_create_ruleset` 的 VERSION 标志），不会限制调用方本身；restrict 在一次性子进程里完成 |
+
+**Linux 后端优先级**：两个 Linux 后端**优先 bubblewrap**（覆盖更完整、网络粒度更明确），`nexuscli.policy.linux_sandbox.preferred_linux_backend` 返回本机可用的首选后端；任一后端不可用时，typed 错误信息会带上安装提示，并在对方可用时提示切换 `sandbox.backend`。
+
+**fail-closed 语义**：请求了本机不可用的后端（非 macOS 请求 seatbelt、`sandbox-exec` 不在 PATH、probe 试运行失败；非 Linux 或 `bwrap` 缺失/不可用时请求 bubblewrap；非 Linux 或内核 Landlock ABI 不足时请求 landlock）或未知后端名时，抛类型化错误 `nexuscli.policy.os_sandbox.OperationUnsupported`，命令**不执行**——绝不会静默退回 `none` 继续裸跑。`CommandExecutor` 在构造时完成解析，坏配置在任何命令 spawn 之前就失败。
+
+`writable_paths` 追加可写子域；cwd 与系统临时目录始终可写。`sandbox-exec` 已被 Apple 标记废弃但仍是官方策略机制；后端不可用会以 `OperationUnsupported` 显式报错，而不是产生一个坏掉的 spawn。bubblewrap 会丢弃本机不存在的可写路径（无物可写、也无法绑定）；landlock helper 对打不开的规则路径跳过并在 stderr 告警。
+
+**如实边界：这是「最小可用」围栏，不是硬安全边界。** 文件读与 Mach lookup 保持开放（加载解释器、site-packages、launchd 服务必须能工作），所以恶意子进程仍能读走用户可读的一切、与 XPC 服务通信；围栏的目标是**写域与网络**。按最小可用原则枚举 mach 服务不可维护，profile 据此取舍。Linux 后端同理：环境变量、IPC、TTY ioctl、路径 UNIX socket 解析（Landlock `RESOLVE_UNIX`）等仍开放，landlock 的网络开关在 ABI 4–9 内核上不覆盖 UDP。
+
+**接入现状**：`CommandExecutor`（`!` 注入执行器的执行引擎、库内嵌调用方）已支持——构造时传入 `sandbox` 配置即生效；模型面 `bash` 工具（含 `execute_command` 别名）已接线——从 `context.config.sandbox` 读取配置，在命令守卫之后、spawn 之前经 `wrap_command` 包装，`run_in_background` 后台任务与前台进程同路径生效，后端不可用时在 spawn 之前 fail-closed 报错（`Command rejected. ...`，命令不执行），默认 `backend="none"` 行为与接线前完全一致。仍未接的调用方：slash 命令注入的 `CommandExecutor` 构造未传 sandbox 配置（交互式用户直接执行的路径），属后续任务。
+
 ## 会话权限模式（Default / Auto / plan）
 
 交互模式下按 `Shift+Tab` 可在三种会话权限模式间循环切换（`Default → Auto (full access) → plan (read-only) → Default`）：
@@ -116,3 +165,12 @@ plan 态不是免审批态：它会恢复启动时的 HITL 与安全策略，同
 - 被拒绝的调用不产生审批决策、不写审计、不触发 Hooks
 
 典型用法：先切到 plan 态让 Agent 只读地调研并给出方案，审阅满意后再切回 Default 让它落地执行。
+
+### 与 `--mode plan`、`/plan` 的区别
+
+Shift+Tab 的 `plan (read-only)` 是**交互 REPL 的会话权限模式**；另外两套名字带「plan」的机制语义不同，别混用：
+
+- `nexuscli --mode plan -p "..."`（单次模式）：Plan-and-Execute 代理做只读规划——只读闸门全程开启，不会执行任何写入；`--yes` 在该模式无效（打印 warning 并忽略），被闸门拦下的计划按失败收场（exit 1；`--fail-on-blocked` 时 exit 2，`--json` 的 `status` 为 `blocked`）。
+- REPL `/plan <task>`（交互式 Plan-and-Execute）：与 `--mode plan` 同一只读闸门口径，在交互会话里流式执行，支持 checkpoint 与 `--resume` 续跑。
+
+两者的 checkpoint 与续跑口径见 [plan-execute.md](plan-execute.md)。

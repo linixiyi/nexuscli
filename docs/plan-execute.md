@@ -16,3 +16,15 @@
 **协作式中断**：`PlanExecuteAgent.request_interrupt()` 置位后，执行循环在**批次之间**停机并落盘，产出 `plan_interrupted` 事件与续跑提示。如实边界：批内已派发的任务会跑完（检查点在批次间）；该 API 目前是 agent 编程接口，REPL 的 `Ctrl+C` 仍是中止回合而非协作式中断，team worker 侧的 interrupt 接线挂账。
 
 **如实边界**：checkpoint JSON 以明文保存任务结果全文，普通 `/plan` 运行也会留下文件，目前**没有 TTL/容量清理**（体积敏感时手动清理 `~/.nexuscli/plan_runs`）；resume 语义是重入中断的运行而非新会话轮——不写入会话历史、不做 pre/post-turn 快照；`/workflow`（JSON 步骤图）与 plan 模式（Shift+Tab 只读态）是另外两套机制，均无断点续跑语义。
+
+## 与 `--mode plan` / Shift+Tab 只读态的区别
+
+名字里带「plan」的机制有三套，别混用：
+
+| 机制 | 入口 | 语义 |
+|---|---|---|
+| 只读规划 | `nexuscli --mode plan -p "..."` | 单次模式跑 Plan-and-Execute：只读闸门全程开启，不会执行任何写入；`--yes` 在该模式无效（启动时打印 warning 并忽略），计划被只读闸门拦下按失败收场（exit 1），也没有 `--resume` 续跑入口 |
+| 交互式 Plan-and-Execute | REPL `/plan <task>`（`/plan --resume <plan_id>` 续跑） | 与 `--mode plan` 同一只读闸门口径，但在交互会话里流式执行，支持本文所述的图级 checkpoint、协作式中断与续跑 |
+| REPL 只读态 | 交互模式 `Shift+Tab` 切到 `plan (read-only)` | 会话权限模式：把整个 REPL 会话（含普通对话）置于只读闸门下，不产出计划 DAG；审阅方案后切回 Default 再落地执行 |
+
+`--mode plan` 与 `/plan` 都不执行写入；`plan (read-only)` 的权限语义见 [permissions.md](permissions.md#会话权限模式default--auto--plan)。
