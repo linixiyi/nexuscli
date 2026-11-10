@@ -34,6 +34,6 @@
 plan 模式（`--mode plan` 与 REPL `/plan`）对任务 worker 是**双重约束**：
 
 1. **planner 指令白名单**：规划阶段注入只读指令，计划任务只允许安排 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具对应的读、检索、分析类任务，禁止安排 bash/execute_command 与写盘类任务；
-2. **worker 运行时 registry 过滤**：每个任务 worker 的工具 registry 被过滤成 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具的子集——bash/write_file/edit_file 等写入与命令工具根本不进 worker 的工具列表与系统提示词，worker 想调也调不到。
+2. **worker 运行时 registry 过滤**：每个任务 worker 的工具 registry 被过滤成 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具的子集——bash/write_file/edit_file 等写入与命令工具根本不进 worker 的工具列表与系统提示词；worker 若仍尝试调用越权工具，调用会被执行层只读闸拒绝并按 blocked 收场。
 
 两层之后仍有**执行层只读闸**兜底：`tools/executor.py` 的 plan 只读闸继续拒绝任何漏网的写入/命令调用（含被白名单隐藏后仍被尝试调用的工具），对应任务按 blocked 收场、绝不标 COMPLETED。`--yes` 只影响审批、不能绕过这只读闸。写入动作请切回默认模式（`Shift+Tab`，或 `-p` 时去掉 `--mode plan`）后再执行。

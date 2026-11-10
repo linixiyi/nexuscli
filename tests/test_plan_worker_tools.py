@@ -1,11 +1,14 @@
 """Task 0001（spec 2026-11-10 fix-plan-worker-readonly）：plan 模式 worker 只读工具白名单。
 
-plan 模式（``config.policy.plan_mode``）下，任务 worker 不再面对完整 registry：
+plan 模式（``config.policy.plan_mode``）下，任务 worker 只暴露六个只读工具：
 
-1. ``filter_registry_for_plan_mode()`` 只保留六个只读工具
-   （read_file/glob/grep/search_code/vfs_ls/vfs_read），bash/write_file/
-   edit_file/list_dir 等一律不进 worker 的工具列表；registry 里没有的白名单
-   工具静默跳过，不报错；输入 registry 不被原地修改；
+1. ``filter_registry_for_plan_mode()`` 产出暴露层过滤的 registry 视图：
+   ``list_names()``/``definitions()`` 只含 read_file/glob/grep/search_code/
+   vfs_ls/vfs_read，bash/write_file/edit_file/list_dir 等一律不进 worker 的
+   工具列表；registry 里没有的白名单工具静默跳过；输入 registry 不被原地
+   修改。越权调用经 ``get()`` 落到非只读诱饵 stub，被执行层 plan 只读闸以
+   标准措辞拒绝（blocked 语义走原路径）；全 registry 都没有的幻觉名字仍是
+   普通 unknown-tool 错误；
 2. 非 plan 模式 ``_worker_registry()`` 返回完整 registry（原对象），行为不变；
 3. ``_task_system_prompt()`` 在 plan 模式追加只读约束：点名六个只读工具、
    明确禁止 bash/execute_command/write_file/edit_file、任务描述要求只读时
@@ -185,7 +188,16 @@ def test_plan_mode_filter_keeps_only_six_readonly_tools():
     filtered = filter_registry_for_plan_mode(registry)
     assert filtered.list_names() == sorted(PLAN_MODE_WORKER_TOOLS)
     for banned in (*_BANNED, "list_dir"):
-        assert filtered.get(banned) is None
+        # 越权名字不在暴露列表里；get() 落到闸诱饵 stub（非只读），
+        # 让执行层 plan 只读闸以标准措辞拒绝
+        assert banned not in filtered.list_names()
+        stub = filtered.get(banned)
+        assert stub is not None
+        assert stub.name == banned
+        assert stub.is_read_only is False
+        assert stub.description == ""
+    # 全 registry 都没有的幻觉名字仍是 None（普通 unknown-tool 错误）
+    assert filtered.get("definitely_not_a_tool") is None
     # 输入 registry 不被原地修改
     assert "bash" in registry.list_names()
     assert "write_file" in registry.list_names()
@@ -217,6 +229,9 @@ def test_worker_registry_is_filtered_subset_in_plan_mode(tmp_path):
     assert filtered.list_names() == sorted(PLAN_MODE_WORKER_TOOLS)
     for banned in _BANNED:
         assert banned not in filtered.list_names()
+        # get() 不再返回真工具：落到闸诱饵 stub，逼调用进执行层只读闸
+        assert filtered.get(banned) is not registry.get(banned)
+        assert filtered.get(banned).is_read_only is False
 
 
 # ---------------------------------------------------------------------------

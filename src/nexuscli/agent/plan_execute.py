@@ -15,6 +15,7 @@ from nexuscli.plan import ExecutionPlan, PlanCheckpointStore, Planner, Task, Tas
 from nexuscli.prompt import PromptAssembler
 from nexuscli.skill import SkillContextBuffer
 from nexuscli.snapshot import SnapshotService
+from nexuscli.tools.base import Tool, ToolResult, object_schema
 from nexuscli.tools.registry import ToolRegistry
 from nexuscli.types import Message, Usage
 
@@ -55,11 +56,11 @@ _PLAN_MODE_FOOTER = (
 # Task 0001 (2026-11-10 plan-worker-readonly): the read-only tools a plan-mode
 # task worker may see. This is the runtime half of the double constraint — the
 # planner directive (above) narrows what gets scheduled, this whitelist narrows
-# what a worker can even attempt. Defense in depth in front of the executor's
-# plan-mode read-only gate (tools/executor.py), which stays untouched as the
-# safety net: anything that slips through (e.g. a hallucinated tool name, a
-# task type that smuggles in a command) is still rejected there and reported
-# as blocked, never COMPLETED.
+# what a worker can even see: hidden tools never appear in its tool schemas or
+# runtime context. The executor's plan-mode read-only gate (tools/executor.py)
+# stays untouched as the enforcement backstop: a worker that nevertheless
+# attempts a hidden tool is rejected there and the task is reported as
+# blocked, never COMPLETED.
 PLAN_MODE_WORKER_TOOLS: frozenset[str] = frozenset(
     {"read_file", "glob", "grep", "search_code", "vfs_ls", "vfs_read"}
 )
@@ -77,67 +78,77 @@ _PLAN_MODE_WORKER_CONSTRAINT = (
 )
 
 
-def filter_registry_for_plan_mode(registry: ToolRegistry) -> ToolRegistry:
-    """A worker registry holding only the plan-mode whitelisted read-only tools.
+class PlanWorkerToolRegistry(ToolRegistry):
+    """Registry view for plan-mode task workers: whitelisted exposure only.
 
-    Whitelisted names missing from the input registry simply do not carry
-    over (degrades gracefully instead of erroring); every other tool — write,
-    command, or unknown — is dropped. Returns a fresh registry; the input is
-    never mutated (non-plan-mode callers share the original object).
+    ``list_names()`` / ``definitions()`` see exactly what was registered into
+    the view (the six whitelisted read-only tools), so hidden tools never
+    reach the model's tool schemas or runtime context. ``get()`` falls back to
+    the base registry: a hidden tool resolves to a non-read-only stub whose
+    only job is to land the attempt in the executor's plan-mode read-only
+    gate; an unknown name resolves to None (plain unknown-tool error).
     """
-    filtered = ToolRegistry()
+
+    def __init__(self, base: ToolRegistry):
+        super().__init__()
+        self._base = base
+
+    def get(self, name: str) -> Tool | None:
+        tool = super().get(name)
+        if tool is not None:
+            return tool
+        if self._base.get(name) is not None:
+            return _hidden_tool_stub(name)
+        return None
+
+
+def _hidden_tool_stub(name: str) -> Tool:
+    """Stand-in for a whitelisted-hidden tool the worker attempted anyway.
+
+    ``is_read_only=False`` routes the call into the executor's plan-mode
+    read-only gate, which rejects it with the canonical refusal before any
+    permission rule, hook, approval or execution can run — the gate stays the
+    enforcement backstop (blocked semantics unchanged), and the refusal is
+    what the model sees so it can react instead of guessing. The handler is a
+    defensive backstop only: on the plan worker's plan-mode config the gate
+    always fires first, so it is unreachable.
+    """
+
+    async def handler(payload, context):
+        _ = payload, context
+        return ToolResult(f'Tool "{name}" is not allowed in plan mode.', is_error=True)
+
+    return Tool(
+        name=name,
+        description="",
+        parameters=object_schema({}),
+        handler=handler,
+        is_read_only=False,
+        requires_approval=False,
+    )
+
+
+def filter_registry_for_plan_mode(registry: ToolRegistry) -> ToolRegistry:
+    """A plan-mode worker registry view exposing only the whitelisted tools.
+
+    The model-facing face — ``list_names()`` / ``definitions()`` — is the
+    six-tool whitelist, so bash/write_file and every other non-whitelisted
+    tool never appear in the request's tool schemas or the runtime "Available
+    tools" context. ``get()`` still resolves any tool the base registry
+    carries: a worker that nevertheless attempts a hidden tool reaches the
+    executor's plan-mode read-only gate and is refused there (canonical
+    message, task blocked) — the double constraint the docs describe, with
+    the gate as the second layer. A name the base registry does not know
+    either is a plain unknown-tool error the worker may recover from.
+    Whitelisted names missing from the base registry simply do not show up
+    (degrades gracefully); the input registry is never mutated.
+    """
+    view = PlanWorkerToolRegistry(registry)
     for name in sorted(PLAN_MODE_WORKER_TOOLS):
         tool = registry.get(name)
         if tool is not None:
-            filtered.register(tool)
-    return filtered
-
-
-# The executor's unknown-tool message (tools/executor.py _execute_single)
-# that a plan-mode worker hits when it calls a tool the whitelist hid: the
-# call dies one gate earlier than the read-only stop, so the gate's own
-# snippet never reaches the tool_result stream.
-_PLAN_MODE_NOT_FOUND_SNIPPET = "not found. Available tools:"
-
-
-def _plan_tool_rejection_reason(
-    content: str,
-    tool_name: str,
-    worker_registry: ToolRegistry,
-    full_registry: ToolRegistry,
-) -> str | None:
-    """The plan-mode rejection reason for one erroring tool_result, if any.
-
-    Two shapes count as a plan-gate rejection:
-
-    - the executor gate's own message (the worker's registry still carried
-      the tool and the read-only stop rejected it — the pre-whitelist path,
-      kept working so the gate stays the safety net);
-    - the executor's "not found" message for a tool that exists in the full
-      registry but was hidden from this worker by the whitelist: the model
-      attempted a banned tool and the call died one gate earlier (unknown
-      tool). Same violation, same blocked outcome — reported in the gate's
-      own wording so blocked accounting stays uniform and a worker cannot
-      launder a rejected write attempt into a COMPLETED status by claiming
-      success in text.
-
-    A not-found name the full registry does not know either is a
-    hallucinated or typo'd tool: a plain recoverable error the worker may
-    retry, not a gate rejection. Everything else returns None.
-    """
-    if PLAN_MODE_REJECTION_SNIPPET in content:
-        return content
-    if (
-        _PLAN_MODE_NOT_FOUND_SNIPPET in content
-        and worker_registry.get(tool_name) is None
-        and full_registry.get(tool_name) is not None
-    ):
-        return (
-            f'Tool "{tool_name}" is not allowed in plan mode. '
-            "Only read-only tools are permitted. "
-            "Press Shift+Tab to switch back to default mode and run the plan."
-        )
-    return None
+            view.register(tool)
+    return view
 
 
 @dataclass(slots=True)
@@ -616,15 +627,8 @@ class PlanExecuteAgent:
                     content = str(event.get("result") or "")
                     if content:
                         tool_results.append(content)
-                    if event.get("is_error"):
-                        rejection = _plan_tool_rejection_reason(
-                            content,
-                            str(event.get("name") or ""),
-                            worker_registry,
-                            self.tool_registry,
-                        )
-                        if rejection:
-                            gate_rejections.append(rejection)
+                    if event.get("is_error") and PLAN_MODE_REJECTION_SNIPPET in content:
+                        gate_rejections.append(content)
                     yield _with_task_context(event, task)
                 elif event.get("type") in {
                     "thinking_delta",
@@ -668,10 +672,11 @@ class PlanExecuteAgent:
 
         Task 0001: outside plan mode this is the full registry, unchanged (the
         very same object, so non-plan behavior is bit-identical). In plan mode
-        it is the filtered read-only subset — the worker never sees write or
-        command tools at request time, in its tool schemas, or in its runtime
-        context. The executor's plan-mode read-only gate stays as the second
-        layer behind this.
+        it is the whitelisted view — the worker only ever SEES the six
+        read-only tools (schemas, runtime context, system prompt), while an
+        attempted hidden tool still resolves through ``get()`` into the
+        executor's plan-mode read-only gate and is refused there. The gate
+        stays the second layer behind the exposure filter.
         """
         if not self.config.policy.plan_mode:
             return self.tool_registry
