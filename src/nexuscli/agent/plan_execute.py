@@ -15,6 +15,7 @@ from nexuscli.plan import ExecutionPlan, PlanCheckpointStore, Planner, Task, Tas
 from nexuscli.prompt import PromptAssembler
 from nexuscli.skill import SkillContextBuffer
 from nexuscli.snapshot import SnapshotService
+from nexuscli.tools.base import Tool, ToolResult, object_schema
 from nexuscli.tools.registry import ToolRegistry
 from nexuscli.types import Message, Usage
 
@@ -51,6 +52,103 @@ _PLAN_MODE_PLANNING_DIRECTIVE = (
 _PLAN_MODE_FOOTER = (
     "plan 模式是只读模式：请切回默认模式（Shift+Tab，或 -p 时去掉 --mode plan）后重新运行该计划。"
 )
+
+# Task 0001 (2026-11-10 plan-worker-readonly): the read-only tools a plan-mode
+# task worker may see. This is the runtime half of the double constraint — the
+# planner directive (above) narrows what gets scheduled, this whitelist narrows
+# what a worker can even see: hidden tools never appear in its tool schemas or
+# runtime context. The executor's plan-mode read-only gate (tools/executor.py)
+# stays untouched as the enforcement backstop: a worker that nevertheless
+# attempts a hidden tool is rejected there and the task is reported as
+# blocked, never COMPLETED.
+PLAN_MODE_WORKER_TOOLS: frozenset[str] = frozenset(
+    {"read_file", "glob", "grep", "search_code", "vfs_ls", "vfs_read"}
+)
+
+# Task 0001: the per-worker read-only constraint appended to the worker system
+# prompt in plan mode. Names the whitelisted tools explicitly (the filtered
+# registry's names also ride the runtime context inside query()), bans the
+# write/command tools by name, and tells the worker not to escalate a
+# read-only task description into writes or shell commands on its own.
+_PLAN_MODE_WORKER_CONSTRAINT = (
+    "当前是 plan 只读模式，只能使用上述只读工具"
+    "（read_file、glob、grep、search_code、vfs_ls、vfs_read）；"
+    "不要调用 bash/execute_command/write_file/edit_file；"
+    "任务描述要求只读时不要自行改成写入或命令。"
+)
+
+
+class PlanWorkerToolRegistry(ToolRegistry):
+    """Registry view for plan-mode task workers: whitelisted exposure only.
+
+    ``list_names()`` / ``definitions()`` see exactly what was registered into
+    the view (the six whitelisted read-only tools), so hidden tools never
+    reach the model's tool schemas or runtime context. ``get()`` falls back to
+    the base registry: a hidden tool resolves to a non-read-only stub whose
+    only job is to land the attempt in the executor's plan-mode read-only
+    gate; an unknown name resolves to None (plain unknown-tool error).
+    """
+
+    def __init__(self, base: ToolRegistry):
+        super().__init__()
+        self._base = base
+
+    def get(self, name: str) -> Tool | None:
+        tool = super().get(name)
+        if tool is not None:
+            return tool
+        if self._base.get(name) is not None:
+            return _hidden_tool_stub(name)
+        return None
+
+
+def _hidden_tool_stub(name: str) -> Tool:
+    """Stand-in for a whitelisted-hidden tool the worker attempted anyway.
+
+    ``is_read_only=False`` routes the call into the executor's plan-mode
+    read-only gate, which rejects it with the canonical refusal before any
+    permission rule, hook, approval or execution can run — the gate stays the
+    enforcement backstop (blocked semantics unchanged), and the refusal is
+    what the model sees so it can react instead of guessing. The handler is a
+    defensive backstop only: on the plan worker's plan-mode config the gate
+    always fires first, so it is unreachable.
+    """
+
+    async def handler(payload, context):
+        _ = payload, context
+        return ToolResult(f'Tool "{name}" is not allowed in plan mode.', is_error=True)
+
+    return Tool(
+        name=name,
+        description="",
+        parameters=object_schema({}),
+        handler=handler,
+        is_read_only=False,
+        requires_approval=False,
+    )
+
+
+def filter_registry_for_plan_mode(registry: ToolRegistry) -> ToolRegistry:
+    """A plan-mode worker registry view exposing only the whitelisted tools.
+
+    The model-facing face — ``list_names()`` / ``definitions()`` — is the
+    six-tool whitelist, so bash/write_file and every other non-whitelisted
+    tool never appear in the request's tool schemas or the runtime "Available
+    tools" context. ``get()`` still resolves any tool the base registry
+    carries: a worker that nevertheless attempts a hidden tool reaches the
+    executor's plan-mode read-only gate and is refused there (canonical
+    message, task blocked) — the double constraint the docs describe, with
+    the gate as the second layer. A name the base registry does not know
+    either is a plain unknown-tool error the worker may recover from.
+    Whitelisted names missing from the base registry simply do not show up
+    (degrades gracefully); the input registry is never mutated.
+    """
+    view = PlanWorkerToolRegistry(registry)
+    for name in sorted(PLAN_MODE_WORKER_TOOLS):
+        tool = registry.get(name)
+        if tool is not None:
+            view.register(tool)
+    return view
 
 
 @dataclass(slots=True)
@@ -500,10 +598,11 @@ class PlanExecuteAgent:
         usage = Usage()
         turns = 0
         task_messages: list[Message] = []
+        worker_registry = self._worker_registry()
         try:
             async for event in query(
                 llm_client=self.llm_client,
-                tool_registry=self.tool_registry,
+                tool_registry=worker_registry,
                 system_prompt=self._task_system_prompt(plan, task),
                 user_message=task_user_message,
                 history=history_snapshot,
@@ -568,21 +667,40 @@ class PlanExecuteAgent:
                 ),
             }
 
+    def _worker_registry(self) -> ToolRegistry:
+        """The registry one task worker runs against.
+
+        Task 0001: outside plan mode this is the full registry, unchanged (the
+        very same object, so non-plan behavior is bit-identical). In plan mode
+        it is the whitelisted view — the worker only ever SEES the six
+        read-only tools (schemas, runtime context, system prompt), while an
+        attempted hidden tool still resolves through ``get()`` into the
+        executor's plan-mode read-only gate and is refused there. The gate
+        stays the second layer behind the exposure filter.
+        """
+        if not self.config.policy.plan_mode:
+            return self.tool_registry
+        return filter_registry_for_plan_mode(self.tool_registry)
+
     def _task_system_prompt(self, plan: ExecutionPlan, task: Task) -> str:
+        worker_registry = self._worker_registry()
         base = PromptAssembler(
             config=self.config,
             cwd=self.cwd,
-            tool_names=self.tool_registry.list_names(),
+            tool_names=worker_registry.list_names(),
             model=self.llm_client.model_name,
             provider=self.llm_client.provider_name,
         ).build_static()
-        return (
+        prompt = (
             base
             + "\n\n你正在执行 Plan-and-Execute DAG 中的一个任务。\n"
             + f"任务 id：{task.id}\n任务类型：{task.type.value}\n"
             + "请具体完成任务，并在需要时使用工具。"
             + _task_language_instruction(plan.goal)
         )
+        if self.config.policy.plan_mode:
+            prompt += f"\n\n{_PLAN_MODE_WORKER_CONSTRAINT}"
+        return prompt
 
 
 def _with_task_context(event: dict[str, Any], task: Task) -> dict[str, Any]:

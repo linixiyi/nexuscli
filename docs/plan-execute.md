@@ -23,8 +23,17 @@
 
 | 机制 | 入口 | 语义 |
 |---|---|---|
-| 只读规划 | `nexuscli --mode plan -p "..."` | 单次模式跑 Plan-and-Execute：只读闸门全程开启，不会执行任何写入；规划指令按白名单收紧——计划任务只允许 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具，禁止安排 bash/execute_command 任务（即使命令看似只读），也禁止安排 pytest、npm、uv run、安装依赖、构建、写盘类任务；`--yes` 在该模式无效（启动时打印 warning 并忽略），计划被只读闸门拦下按失败收场（exit 1），也没有 `--resume` 续跑入口 |
+| 只读规划 | `nexuscli --mode plan -p "..."` | 单次模式跑 Plan-and-Execute：只读闸门全程开启，不会执行任何写入；双重约束收紧——planner 收到只读规划指令，计划任务只允许 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具，禁止安排 bash/execute_command 任务（即使命令看似只读），也禁止安排 pytest、npm、uv run、安装依赖、构建、写盘类任务；worker 运行时只看到这六个只读工具（registry 白名单过滤，bash/write_file 等写入与命令工具不进 worker 的工具列表）；即使有漏网的写入/命令调用，执行层只读闸仍会拒绝并按 blocked 收场；`--yes` 在该模式无效（启动时打印 warning 并忽略）、不能绕过只读闸，计划被只读闸门拦下按失败收场（exit 1），也没有 `--resume` 续跑入口 |
 | 交互式 Plan-and-Execute | REPL `/plan <task>`（`/plan --resume <plan_id>` 续跑） | 与 `--mode plan` 同一只读闸门口径，但在交互会话里流式执行，支持本文所述的图级 checkpoint、协作式中断与续跑 |
 | REPL 只读态 | 交互模式 `Shift+Tab` 切到 `plan (read-only)` | 会话权限模式：把整个 REPL 会话（含普通对话）置于只读闸门下，不产出计划 DAG；审阅方案后切回 Default 再落地执行 |
 
 `--mode plan` 与 `/plan` 都不执行写入；`plan (read-only)` 的权限语义见 [permissions.md](permissions.md#会话权限模式default--auto--plan)。
+
+## plan 模式下的 worker 只读约束
+
+plan 模式（`--mode plan` 与 REPL `/plan`）对任务 worker 是**双重约束**：
+
+1. **planner 指令白名单**：规划阶段注入只读指令，计划任务只允许安排 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具对应的读、检索、分析类任务，禁止安排 bash/execute_command 与写盘类任务；
+2. **worker 运行时 registry 过滤**：每个任务 worker 的工具 registry 被过滤成 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具的子集——bash/write_file/edit_file 等写入与命令工具根本不进 worker 的工具列表与系统提示词；worker 若仍尝试调用越权工具，调用会被执行层只读闸拒绝并按 blocked 收场。
+
+两层之后仍有**执行层只读闸**兜底：`tools/executor.py` 的 plan 只读闸继续拒绝任何漏网的写入/命令调用（含被白名单隐藏后仍被尝试调用的工具），对应任务按 blocked 收场、绝不标 COMPLETED。`--yes` 只影响审批、不能绕过这只读闸。写入动作请切回默认模式（`Shift+Tab`，或 `-p` 时去掉 `--mode plan`）后再执行。
