@@ -10,3 +10,4 @@
 {"cmd": "uv run pytest -q tests/test_security_docs.py", "duration": 0.146, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0010", "ts": "2026-11-12T16:33:00+00:00"}
 {"cmd": "uv run pytest -q tests/test_project_trust_e2e.py", "duration": 0.147, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0011", "ts": "2026-11-12T16:33:01+00:00"}
 {"dirty": [], "head": "4a6a8bf26a76e0d57e8a068cb6169590d7a53aac", "kind": "baseline", "task": "package", "ts": "2026-11-12T16:33:01+00:00"}
+{"attempt": 1, "checkpoint": "f53534279c685c84e632d5409fdbf36b5ad04537", "cmd": "uv run pytest -q tests/test_project_trust.py", "duration": 0.946, "exit": 0, "final": false, "head": "4a6a8bf26a76e0d57e8a068cb6169590d7a53aac", "kind": "run", "sig": "a3a1778cf490ebe0", "task": "task-0001", "tree_fp": "66f951023790a7e37069d0c823fe54ffed222d9b930f990a24c704425edfe190", "ts": "2026-11-12T17:33:42+00:00"}

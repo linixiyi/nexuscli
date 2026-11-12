@@ -18,6 +18,7 @@ from pydantic import AnyUrl
 
 from nexuscli.mcp import auth as mcp_auth
 from nexuscli.mcp.config import McpServerSpec, load_mcp_server_specs
+from nexuscli.policy import sanitize_environment
 from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 
 
@@ -395,10 +396,14 @@ class McpClientManager:
         if spec.type in {"stdio", "local"}:
             if not spec.command:
                 raise ValueError(f"MCP server {spec.name} is missing command")
+            # The child must not inherit the parent's secret-shaped variables
+            # ({**os.environ, ...} handed every API key to the server process);
+            # sanitize_environment drops them, keeps the essential keys, and
+            # applies spec.env verbatim on top (caller-configured, trusted).
             params = StdioServerParameters(
                 command=spec.command,
                 args=spec.args,
-                env={**os.environ, **spec.env},
+                env=sanitize_environment(overrides=spec.env),
                 cwd=spec.cwd or self.project_root,
             )
             with self._stderr_log(spec) as errlog:

@@ -19,7 +19,7 @@
   - tests: 新增 `tests/test_project_trust.py`：① 恶意项目 config 不能改 hitl/guards/base_url；② 项目 `.env` 的 `NEXUSCLI_HITL`/`NEXUSCLI_BASE_URL` 不能生效；③ 无 TTY 时无信任一律忽略；④ 信任后同一键可生效；⑤ 非安全键不受影响。
   - verify: `uv run pytest -q tests/test_project_trust.py`
 
-- [ ] task-0002 项目 MCP server 信任门与环境清洗
+- [x] task-0002 项目 MCP server 信任门与环境清洗
   - id: task-0002
   - boundary: src/nexuscli/mcp/config.py, src/nexuscli/mcp/client.py, new:tests/test_mcp_project_trust.py
   - origin: planned
