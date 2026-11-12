@@ -99,7 +99,7 @@
 
 ## 阶段 D：文档与端到端
 
-- [ ] task-0010 文档同步信任边界
+- [x] task-0010 文档同步信任边界
   - id: task-0010
   - boundary: README.md, docs/permissions.md, docs/mcp.md, docs/tools.md, new:tests/test_security_docs.py
   - depends-on: task-0001, task-0002, task-0003, task-0004, task-0005, task-0006, task-0007, task-0008, task-0009

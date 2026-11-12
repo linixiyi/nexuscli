@@ -4,6 +4,14 @@
 
 NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具（速查表见 README「🧰 内置工具」节）。写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作，会经过 policy、HITL 和 audit 处理。`save_skill` 也必须经过 HITL；模型可以提议沉淀，但不会静默改变后续行为。本文记录 README 速查表之外的补充说明与如实边界（均以实现为准）。
 
+## 命令主体与审批边界
+
+`bash` 与 `execute_command` 共享同一条守卫链（CommandGuard → 写域守卫 → 权限规则 → hooks → HITL → 审计），但权限规则与内层写域提示按**调用方的真实工具名**评估：`deny: ["bash"]` 不拦 `execute_command`（反之亦然），`allow: ["execute_command"]` 也不会让同一次调用再弹内层写域提示。写域守卫的 `--flag=value` 长选项口径与路径规则归一化见 [permissions.md](permissions.md#写域守卫与命令路径扫描)。
+
+自定义斜杠命令的 `` !`cmd` `` 注入以内部工具名 `slash_injection` 进 registry（不占模型的工具列表），但权限规则与 PreToolUse hook 按**命令主体**评估（`bash`，`execute_command` 等价）：`deny: ["bash"]` 会拒绝注入片段，匹配 `bash` 的 PreToolUse hook 能阻断它；审计记录同时带内部名（`tool_name`）与真实主体（`tool_subject`）。逐条口径见 [slash-commands.md](slash-commands.md) 与 [permissions.md](permissions.md)。
+
+MCP server 附带的 `read_resource` / `get_prompt` 不是本地免审批工具：返回内容来自外部 server 进程，与远端 MCP 工具同样需要审批并进审计，plan 模式拒绝执行；纯列目录的 `list_resources` / `list_prompts` 保持只读。详见 [mcp.md](mcp.md#readonlyhint-与只读语义)。
+
 ## read_file 的 PDF 支持
 
 `read_file` 对 `.pdf` 后缀走 pypdf 整篇文本提取（不做分页范围），再套用与文本文件相同的行窗口。pypdf 是可选依赖，缺失时返回带安装指引的错误：`uv sync --extra pdf`（或 `pip install "nexuscli[pdf]"`）。
