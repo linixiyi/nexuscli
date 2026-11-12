@@ -78,7 +78,7 @@
   - tests: 新增 `tests/test_audit_attribution.py`：① never + write_file → policy-never；② auto 无回调直通 → 非 hitl；③ `--yes` 仍 hitl；④ run-scope 仍 run-scope；⑤ readonly 仍 readonly-rule。
   - verify: `uv run pytest -q tests/test_audit_attribution.py`
 
-- [ ] task-0008 只读分类 secret 路径与 git rev:path
+- [x] task-0008 只读分类 secret 路径与 git rev:path
   - id: task-0008
   - boundary: src/nexuscli/policy/bash_readonly.py, new:tests/test_bash_readonly_exfil.py
   - origin: planned

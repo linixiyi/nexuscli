@@ -17,12 +17,15 @@ front, then the string is split with ``shlex`` and dispatched on the basename
 of ``argv[0]``:
 
 - inspection commands (``ls``, ``cat``, ``grep``...) are read-only in any
-  argument shape, except three entries with known side-effecting uses that
-  get a narrow guard: ``env`` executes a command argument, ``rg --pre`` runs
-  a preprocessor command, ``date -s`` sets the system clock;
+  argument shape, except entries with known side-effecting uses that get a
+  narrow guard: ``env`` executes a command argument, ``rg --pre`` runs a
+  preprocessor command, ``date`` sets the system clock via ``-s`` or a bare
+  numeric positional, ``file -C`` compiles a magic database;
 - ``find`` only without any write-action flag (``-delete``, ``-exec``, ...);
-- ``git`` only for read-only subcommands; ``branch``/``tag``/``remote``/
-  ``config`` additionally restrict their flags and positionals;
+- ``git`` only for read-only subcommands — and even those fall back when a
+  ``<rev>:<path>`` argument names a credential path or ``--output`` writes a
+  file; ``branch``/``tag``/``remote``/``config`` additionally restrict their
+  flags and positionals;
 - interpreters and package managers (``python``, ``node``, ``npm``, ``uv``,
   ``pip``) only for version/help-style invocations or listing subcommands —
   never with a script or other positional argument.
@@ -71,11 +74,12 @@ UNCONDITIONAL_READONLY_COMMANDS = frozenset(
 
 # ``env CMD`` executes CMD, so env is read-only only while every argument is
 # either a flag or a NAME=VALUE assignment (a bare word would be the command).
-# ``rg --pre`` runs a preprocessor command and ``date -s`` sets the clock;
-# both flags are rejected in any spelling.
+# ``rg --pre`` runs a preprocessor command, ``date -s`` sets the clock and
+# ``file -C`` compiles a magic database (writes magic.mgc) — all rejected.
 _ENV_ASSIGNMENT_HINT = "="
 _RG_PREPROCESSOR_FLAGS = ("--pre",)
 _DATE_SET_CLOCK_FLAGS = ("-s", "--set")
+_FILE_COMPILE_FLAGS = ("-C",)
 
 # find is read-only only when no write-action flag appears anywhere.
 FIND_WRITE_FLAGS = frozenset(
@@ -85,7 +89,8 @@ FIND_WRITE_FLAG_PREFIX = "-fprint"  # covers -fprint, -fprint0, -fprintf
 
 # git: subcommands that never mutate anything, regardless of their flags —
 # except that --output writes a file (log/show/diff support it, reflog show
-# inherits it) and reflog expire/delete rewrite the reflog.
+# inherits it), a <rev>:<path> naming a credential path reads that file out of
+# the tree, and reflog expire/delete rewrite the reflog.
 GIT_READONLY_SUBCOMMANDS = frozenset(
     {
         "status",
@@ -156,6 +161,12 @@ SECRET_PATH_SEGMENTS = frozenset(
         "secrets.json",
         "secrets.yaml",
         "secrets.yml",
+        # token stores and credential files of common dev/cloud CLIs. The
+        # dotted two-segment entries also match directories (ls ~/.config/gh).
+        ".git-credentials",
+        ".config/gh",
+        ".config/gcloud",
+        ".azure",
     }
 )
 
@@ -233,8 +244,30 @@ def _inspection_readonly(program: str, args: list[str]) -> bool:
     if program == "rg":
         return not _has_flag(args, _RG_PREPROCESSOR_FLAGS)
     if program == "date":
-        return not _has_flag(args, _DATE_SET_CLOCK_FLAGS)
+        # -s/--set set the clock explicitly; a bare numeric positional is the
+        # BSD clock-set form without any flag. Judging digit tokens wherever
+        # they appear also turns flag-value digits (`date -r 1234567890`,
+        # `date -d 20200101`) into a prompt — a cheap false "no" in exchange
+        # for never mis-judging a set form.
+        return not _has_flag(args, _DATE_SET_CLOCK_FLAGS) and not _date_positional_sets_clock(
+            args
+        )
+    if program == "file":
+        return not _has_flag(args, _FILE_COMPILE_FLAGS)
     return True
+
+
+def _date_positional_sets_clock(args: list[str]) -> bool:
+    """True when any argument is the BSD numeric clock-set form.
+
+    ``date [[[[[cc]yy]mm]dd]hh]mm[.ss]`` — digits, optionally with a trailing
+    ``.ss`` seconds part. Output formats (``+%Y``) never start with a digit.
+    """
+    for token in args:
+        head, _, tail = token.partition(".")
+        if head.isdigit() and (not tail or tail.isdigit()):
+            return True
+    return False
 
 
 def _find_readonly(args: list[str]) -> bool:
@@ -263,6 +296,11 @@ def _git_readonly(args: list[str]) -> bool:
             # any spelling of it disqualifies the command — same guard as
             # diff had from the start, now covering every whitelisted reader.
             return False
+        if any(_rev_path_token_secret(token) for token in rest):
+            # <rev>:<path> reads a file out of a revision tree: the colon
+            # hides the path from the plain token scan, so `git show
+            # HEAD:.env` used to pass while `cat .env` could not.
+            return False
         if subcommand == "reflog":
             # expire/delete rewrite the reflog — every other form is read.
             return not any(token in _GIT_REFLOG_WRITE_SUBCOMMANDS for token in rest)
@@ -277,6 +315,18 @@ def _git_readonly(args: list[str]) -> bool:
         flags = [token for token in rest if token.startswith("-")]
         return bool(flags) and all(token in GIT_CONFIG_READONLY_FLAGS for token in flags)
     return False
+
+
+def _rev_path_token_secret(token: str) -> bool:
+    """True when a ``<rev>:<path>`` argument names a credential location.
+
+    The path lives after the colon, but index forms (``:0:.env``) put stage
+    numbers in between, so every colon-separated piece is judged with the same
+    ``_looks_secret`` table as plain paths; flags never carry a rev:path.
+    """
+    if token.startswith("-") or ":" not in token:
+        return False
+    return any(_looks_secret(piece) for piece in token.split(":"))
 
 
 def _branch_flag_readonly(token: str) -> bool:
