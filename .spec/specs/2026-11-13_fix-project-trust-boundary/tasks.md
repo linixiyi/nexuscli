@@ -109,7 +109,7 @@
   - tests: 新增 `tests/test_security_docs.py`，断言上述关键词与链接存在；不依赖网络。
   - verify: `uv run pytest -q tests/test_security_docs.py`
 
-- [ ] task-0011 端到端攻击 fixture
+- [x] task-0011 端到端攻击 fixture
   - id: task-0011
   - boundary: new:tests/test_project_trust_e2e.py
   - depends-on: task-0001, task-0002, task-0003, task-0004, task-0005, task-0006, task-0007, task-0008, task-0009
