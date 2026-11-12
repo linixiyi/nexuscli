@@ -19,9 +19,10 @@ Honest boundaries:
 - Tokenization is best-effort ``shlex`` plus a curated command table. Command
   substitution anywhere, or a variable / glob / tilde / ``%VAR%`` in a *write
   position*, is reported as unresolvable and classified ``"outside"`` (fail
-  closed); ``--flag=value`` spellings lose their values, and a path hidden
-  behind an interpreter or an unmodelled construct can still shrink the
-  verdict to ``"workspace"``.
+  closed); ``--flag=value`` spellings of unknown or non-path flags lose their
+  values (known target-taking flags' values are queued as targets), and a
+  path hidden behind an interpreter or an unmodelled construct can still
+  shrink the verdict to ``"workspace"``.
 - Multi-line commands are cut at newlines the way bash cuts at ``;``, but
   backslash-newline continuations are not joined: a write whose command word
   ends one line and whose argument starts the next is invisible to the
@@ -114,9 +115,10 @@ _CMD_SWITCH_COMMANDS: frozenset[str] = frozenset(
 
 # Flags whose separate value is not a path (sizes, modes, suffixes, dates):
 # without this table the value would leak into the target list as a bogus
-# relative path. Flags whose value IS a write target (``cp -t DIR``) are
-# deliberately absent — the value then falls through as an ordinary
-# positional and is classified like any other target.
+# relative path. This is the SKIP table — it never queues a target. Flags
+# whose value IS a write target (``cp -t DIR``) are deliberately absent —
+# the value then falls through as an ordinary positional and is classified
+# like any other target.
 _VALUE_FLAGS: dict[str, frozenset[str]] = {
     "mkdir": frozenset({"-m", "--mode"}),
     "md": frozenset({"-m", "--mode"}),
@@ -127,6 +129,21 @@ _VALUE_FLAGS: dict[str, frozenset[str]] = {
     "mv": frozenset({"-S", "--suffix"}),
     "move": frozenset({"-S", "--suffix"}),
     "ln": frozenset({"-S", "--suffix"}),
+}
+
+# The TARGET table: flags whose value IS a written-to path. The separate
+# value form needs no entry (the value falls through as a positional), but
+# the glued ``--target-directory=/etc`` spelling starts with ``-`` and used
+# to be swallowed whole — losing the out-of-workspace write. ``_scan_paths``
+# splits such tokens and queues the value only for flags listed here; the
+# skip table above keeps its values out of the target list in both forms.
+# cmd.exe's copy/move take no ``--target-directory``, but listing them is
+# fail-closed-correct and matches their POSIX siblings.
+_TARGET_VALUE_FLAGS: dict[str, frozenset[str]] = {
+    "mv": frozenset({"-t", "--target-directory"}),
+    "cp": frozenset({"-t", "--target-directory"}),
+    "copy": frozenset({"-t", "--target-directory"}),
+    "move": frozenset({"-t", "--target-directory"}),
 }
 
 # Same idea for git's write subcommands (pathspec modifiers).
@@ -317,6 +334,7 @@ def _scan_words(words: list[str], targets: list[str]) -> None:
             args,
             targets,
             _VALUE_FLAGS.get(program, frozenset()),
+            target_flags=_TARGET_VALUE_FLAGS.get(program, frozenset()),
             skip_cmd_switches=program in _CMD_SWITCH_COMMANDS,
         )
 
@@ -341,6 +359,7 @@ def _scan_paths(
     targets: list[str],
     value_flags: frozenset[str],
     *,
+    target_flags: frozenset[str] = frozenset(),
     skip_cmd_switches: bool = False,
 ) -> None:
     """Queue every positional path argument, skipping flags and their values.
@@ -348,6 +367,15 @@ def _scan_paths(
     ``/X``-shaped tokens are skipped only when *skip_cmd_switches* says the
     command actually takes cmd.exe slash switches; otherwise they queue as
     paths (a POSIX absolute path must not be swallowed).
+
+    ``--flag=value`` tokens are split: only when *flag* is in *target_flags*
+    (its value is a written-to path) does the value join the targets —
+    ``--target-directory=/etc`` queues ``/etc``. Values of *value_flags*
+    members and of unknown flags are not paths: the token is skipped
+    wholesale. The separate-value form is untouched — a *target_flags*
+    member's value falls through as an ordinary positional (``mv -t /etc``),
+    and a *value_flags* member still swallows its next token (``mkdir -m
+    755``).
     """
     skip_next = False
     for token in args:
@@ -357,7 +385,12 @@ def _scan_paths(
         if token == "--" or (skip_cmd_switches and _CMD_SWITCH.match(token)):
             continue
         if token.startswith("-") and token != "-":
-            if "=" not in token and token in value_flags:
+            if "=" in token:
+                flag, _, value = token.partition("=")
+                if flag in target_flags and value:
+                    targets.append(value)
+                continue
+            if token in value_flags:
                 skip_next = True
             continue
         targets.append(token)

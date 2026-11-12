@@ -236,7 +236,7 @@ def get_builtin_tools() -> list[Tool]:
                 ["command"],
             ),
             required_keys=["command"],
-            handler=_bash,
+            handler=_execute_command,
             is_read_only=False,
             is_concurrency_safe=False,
             danger_level="high",
@@ -681,14 +681,19 @@ def _child_environment(context: ToolContext) -> dict[str, str]:
     return sanitize_environment()
 
 
-async def _reject_outside_write_scope(command: str, context: ToolContext) -> ToolResult | None:
+async def _reject_outside_write_scope(
+    command: str, context: ToolContext, *, tool_name: str = "bash"
+) -> ToolResult | None:
     """FSScopeGuard gate: ask before writing outside the workspace.
 
     Runs right after CommandGuard. When :class:`FSScopeGuard` classifies the
     command's write targets as outside the workspace (and the system temp
     directory), the call is routed through the same HITL approval channel
     the tool executor uses — ``context.approval_callback`` — with the same
-    request shape; no separate mechanism.
+    request shape; no separate mechanism. *tool_name* is the caller's real
+    registry name (``bash`` or the ``execute_command`` alias): the allow
+    rule is evaluated under that subject and the approval request carries
+    it, matching the executor's own evaluation.
 
     Fail closed where the existing flow fails closed: with
     ``hitl_mode == "never"`` or without an approval callback no human can be
@@ -711,9 +716,14 @@ async def _reject_outside_write_scope(command: str, context: ToolContext) -> Too
         return None
     # An explicit allow rule for this tool is the user's standing trust
     # decision — the executor's chain treats it as auto-approve — so the
-    # inner write-scope prompt must not re-ask for the same call. hitl_mode
-    # "always" keeps asking, mirroring the executor.
-    permission = evaluate_permissions(context.config.permissions, "bash", {"command": command})
+    # inner write-scope prompt must not re-ask for the same call. The rule
+    # is evaluated under the caller's real tool name: allow:
+    # ["execute_command"] covers an execute_command call the same way
+    # allow: ["bash"] covers bash. hitl_mode "always" keeps asking,
+    # mirroring the executor.
+    permission = evaluate_permissions(
+        context.config.permissions, tool_name, {"command": command}
+    )
     if permission and permission.action == "allow" and context.config.policy.hitl_mode != "always":
         return None
     # Full-access mode (REPL "Auto") disables the command guard as the user's
@@ -733,7 +743,7 @@ async def _reject_outside_write_scope(command: str, context: ToolContext) -> Too
         )
     decision = context.approval_callback(
         {
-            "tool_name": "bash",
+            "tool_name": tool_name,
             "input": {"command": command},
             "danger_level": "high",
             "description": reason,
@@ -749,13 +759,27 @@ async def _reject_outside_write_scope(command: str, context: ToolContext) -> Too
     return None
 
 
-async def _bash(payload: dict[str, Any], context: ToolContext) -> ToolResult:
+async def _execute_command(payload: dict[str, Any], context: ToolContext) -> ToolResult:
+    """``execute_command`` alias of :func:`_bash` under its own policy subject.
+
+    The alias tool shares bash's handler chain, but permission rules and the
+    inner write-scope prompt must evaluate under the name the caller used —
+    a hardcoded ``bash`` subject would never match
+    ``allow: ["execute_command"]``, so the guard re-asked after the
+    executor's chain had already auto-approved the call.
+    """
+    return await _bash(payload, context, tool_name="execute_command")
+
+
+async def _bash(
+    payload: dict[str, Any], context: ToolContext, tool_name: str = "bash"
+) -> ToolResult:
     command = str(payload["command"])
     if context.config.policy.command_guard_enabled:
         CommandGuard(context.config.policy.command_blacklist).validate(command)
     # FS write-scope guard: statically detect writes outside the workspace and
     # route them through the same HITL approval channel the executor uses.
-    blocked = await _reject_outside_write_scope(command, context)
+    blocked = await _reject_outside_write_scope(command, context, tool_name=tool_name)
     if blocked is not None:
         return blocked
     # Task 0026 wiring: the production sandbox config rides the run's config

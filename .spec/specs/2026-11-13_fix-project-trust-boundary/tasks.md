@@ -58,7 +58,7 @@
   - tests: 新增 `tests/test_permission_path_normalization.py`：`./.env`、`a/../.env`、`.//AGENTS.md`、`src/./x.py` 均被同一条 deny 命中；合法 `src/x.py` 不被误伤；绝对路径与 symlink 行为不回退。
   - verify: `uv run pytest -q tests/test_permission_path_normalization.py`
 
-- [ ] task-0006 写域长选项 `--flag=value`
+- [x] task-0006 写域长选项 `--flag=value`
   - id: task-0006
   - boundary: src/nexuscli/policy/fs_scope.py, src/nexuscli/tools/builtins.py, new:tests/test_fs_scope_long_flags.py
   - origin: planned
