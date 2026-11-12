@@ -28,7 +28,7 @@
   - tests: 新增 `tests/test_mcp_project_trust.py`：① 无信任的项目 mcp.json 不 spawn；② 信任后可加载；③ 用户层 server 不受影响；④ 子进程 env 不含 `*_API_KEY`/token 形态；⑤ 非 dict/坏配置行为不回归。
   - verify: `uv run pytest -q tests/test_mcp_project_trust.py`
 
-- [ ] task-0003 headless hooks 接入信任门
+- [x] task-0003 headless hooks 接入信任门
   - id: task-0003
   - boundary: src/nexuscli/entrypoints/cli.py, src/nexuscli/runtime/api.py, src/nexuscli/hooks/trust.py, new:tests/test_hooks_headless_trust.py
   - origin: planned

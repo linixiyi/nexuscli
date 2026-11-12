@@ -20,10 +20,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
+import warnings
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from nexuscli.config import NexusCliConfig, user_level_hooks
 
 TRUST_STORE: Path = Path.home() / ".nexuscli" / "hooks-trust.json"
 
@@ -108,3 +113,80 @@ class HookTrustStore:
         # not secrets, so the degraded protection is acceptable.
         with suppress(OSError):
             os.chmod(self.path, 0o600)
+
+
+class WorkspaceHooksWarning(UserWarning):
+    """Warned (via ``warnings.warn``) when untrusted project hooks are disabled."""
+
+
+def _warning_message(workspace: str, fingerprint: str) -> str:
+    return (
+        f"Untrusted project hooks at {workspace} (fingerprint {fingerprint[:16]}): "
+        "project-layer hooks are disabled for this run (user-level hooks unaffected). "
+        "Start nexuscli interactively to review and trust this project."
+    )
+
+
+def _interactive_confirm(description: str) -> bool:
+    """Prompt once on the TTY; a closed or unread stdin refuses (fail-closed).
+
+    Mirrors ``policy.project_trust._interactive_confirm``: the notice goes to
+    stderr so headless entrypoints that own stdout (``-p`` plain/``--json``)
+    stay machine-clean even in the interactive branch.
+    """
+    print(f"[hooks trust] Project-layer hooks detected: {description}", file=sys.stderr)
+    try:
+        answer = input("Trust workspace hooks? [y/N] ")
+    except (EOFError, OSError):
+        return False
+    return answer.strip().lower() in {"y", "yes"}
+
+
+def gate_project_hooks(
+    config: NexusCliConfig,
+    cwd: str | Path,
+    *,
+    confirm: Callable[[str], bool] | None = None,
+) -> bool:
+    """Require one-time sha256 trust before project-layer hooks take effect.
+
+    Headless extraction of the REPL gate (``hooks_cmds._gate_workspace_hooks``,
+    whose REPL behavior is unchanged): the project layer of ``config.hooks``
+    was merged in at load time with no confirmation, so the one-shot ``-p`` and
+    serve/worker startup paths must fingerprint the project layer's ``hooks``
+    section (canonical JSON + sha256, shared :class:`HookTrustStore`) before
+    any of those hooks can fire. On refusal the merged config is swapped back
+    to :func:`user_level_hooks` — user matchers first, project matchers
+    appended, so the swap strips exactly the project layer — and one
+    :class:`WorkspaceHooksWarning` is emitted. User-level hooks are never
+    touched. Returns ``True`` when the project layer may stay, ``False`` when
+    it was stripped.
+
+    The ``confirm`` parameter is the injection seam for tests and embedders;
+    the default prompts on a TTY (remembering the fingerprint on yes, same
+    store as the REPL) and refuses without one, which is what makes headless
+    ``-p`` / serve fail closed. A refusal is never remembered.
+    """
+    section = workspace_hooks_section(cwd)
+    if not section:
+        return True
+    fingerprint = hooks_fingerprint(section)
+    store = HookTrustStore()
+    workspace = str(Path(cwd).resolve())
+    if store.is_trusted(workspace, fingerprint):
+        return True
+    description = f"{workspace} (fingerprint {fingerprint[:16]})"
+    if confirm is not None:
+        trusted = confirm(description)
+    elif sys.stdin.isatty():
+        trusted = _interactive_confirm(description)
+    else:
+        # Non-interactive: refuse conservatively, same posture as the REPL
+        # gate's no-TTY branch and policy.project_trust's headless default.
+        trusted = False
+    if trusted:
+        store.trust(workspace, fingerprint)
+        return True
+    config.hooks = user_level_hooks()
+    warnings.warn(_warning_message(workspace, fingerprint), WorkspaceHooksWarning, stacklevel=2)
+    return False

@@ -25,6 +25,7 @@ from nexuscli.agent.agent import Agent
 from nexuscli.agent.turn_checkpoint import TurnCheckpointStore, _checkpoint_id_for_run
 from nexuscli.bootstrap import build_tool_registry
 from nexuscli.config import NexusCliConfig
+from nexuscli.hooks import trust
 from nexuscli.llm import create_llm_client
 from nexuscli.net_guards import is_loopback_origin
 from nexuscli.prompt import PromptAssembler
@@ -234,6 +235,11 @@ class RuntimeApiServer:
     ):
         self.cwd = str(Path(cwd).resolve())
         self.config = config
+        # Project-layer hooks merged at load time must be trusted before any
+        # turn/task can fire them (same sha256 trust store as the REPL gate);
+        # serve is headless, so an untrusted project layer is disabled with a
+        # warning and the user layer is kept untouched.
+        trust.gate_project_hooks(config, self.cwd)
         self.api_key = api_key
         self.port = port
         self.workbench = workbench
