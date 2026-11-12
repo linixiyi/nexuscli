@@ -125,7 +125,11 @@ class ToolExecutor:
         deny/ask rules and hook hints keep their priority. The audit record
         names ``readonly-rule`` as approver when the static judgment bypassed
         the prompt (no human was involved) and ``hitl`` only when a person
-        actually decided.
+        actually decided. Under ``hitl_mode=never`` no human can be asked at
+        all: the unconditional pass-through is the policy's decision, not a
+        person's, and is audited as ``policy-never``. An auto-mode
+        pass-through for a tool that does not require approval (no callback
+        consulted) stays ``none``.
 
         A per-run approval ("approve_run" returned by the approval callback,
         the prompt's "r" option) stores the tool name in
@@ -304,6 +308,12 @@ class ToolExecutor:
                 # The static read-only judgment bypassed the prompt: no human
                 # approved, so the audit must not attribute the call to "hitl".
                 approver = "readonly-rule"
+            elif context.config.policy.hitl_mode == "never":
+                # hitl_mode=never: no human can ever be asked, so the
+                # unconditional pass-through is the policy's decision, not a
+                # person's — "hitl" would claim a human approval that never
+                # happened. Rule/hook bypasses above keep their attribution.
+                approver = "policy-never"
             elif tool.requires_approval or context.config.policy.hitl_mode == "always":
                 approver = "hitl"
 

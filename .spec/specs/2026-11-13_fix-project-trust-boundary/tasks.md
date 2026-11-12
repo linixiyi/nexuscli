@@ -69,7 +69,7 @@
 
 ## 阶段 C：审计/只读/MCP 审批
 
-- [ ] task-0007 审计归因 never/auto
+- [x] task-0007 审计归因 never/auto
   - id: task-0007
   - boundary: src/nexuscli/tools/executor.py, new:tests/test_audit_attribution.py
   - origin: planned
