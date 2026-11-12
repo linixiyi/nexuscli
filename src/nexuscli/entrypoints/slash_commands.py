@@ -11,6 +11,10 @@ runs through the same ToolExecutor gate chain as every tool — CommandGuard
 refusal, permission rules, hooks, HITL approval, audit — and spawns with a
 sanitized child environment (project-scope commands require a human
 approval and fail closed without one; user-scope commands auto-execute).
+The fragment registers under the internal ``slash_injection`` name, but it
+is a shell command, so permission rules and PreToolUse hooks evaluate it
+under its real subject (``bash``; ``execute_command`` rules are equivalent)
+and the audit record names both the internal name and the subject.
 When no placeholder is present, arguments are appended to the prompt. The
 expanded prompt is sent to the agent as a normal message.
 
@@ -27,14 +31,17 @@ import os
 import re
 import shlex
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from nexuscli import observability
 from nexuscli.config import NexusCliConfig
+from nexuscli.hooks import HookOutcome, fire_event, has_hooks
 from nexuscli.plugins import load_plugins
-from nexuscli.policy import CommandGuard
+from nexuscli.policy import AuditLog, CommandGuard, evaluate_permissions
 from nexuscli.policy.command_guard import CommandPolicyError
+from nexuscli.policy.permission_rules import INJECTION_POLICY_SUBJECT, SLASH_INJECTION_TOOL
 from nexuscli.tools.base import Tool, ToolContext, ToolDecision, ToolResult, object_schema
 from nexuscli.tools.commands import CommandExecutor
 from nexuscli.tools.executor import ToolExecutor
@@ -53,10 +60,9 @@ _SHELL_INJECTION_PATTERN = re.compile(r"!`([^`]+)`")
 # ``$1`` .. ``$9`` positional argument placeholders.
 _POSITIONAL_PATTERN = re.compile(r"\$([1-9])")
 
-# Internal tool name the ``!`cmd` `` fragments execute as (see
-# :func:`_slash_injection_tool`): one registry entry per expansion, never
-# exposed to the model's own tool list.
-SLASH_INJECTION_TOOL = "slash_injection"
+# SLASH_INJECTION_TOOL and the policy-subject constants (INJECTION_POLICY_
+# SUBJECT et al.) live in nexuscli.policy.permission_rules, next to the rule
+# evaluation that maps the fragment onto the shell tools it actually is.
 
 # Same contract as ToolContext.approval_callback: a sync or async callable
 # receiving the approval request dict and returning a ToolDecision.
@@ -274,6 +280,11 @@ def _slash_injection_tool(guard: CommandGuard, *, requires_approval: bool) -> To
     :func:`_run_injection`: success returns the raw stdout, an attempted but
     failed execution returns ``error_type="command_failed"`` with the reason
     as content, and a gate rejection never reaches the handler at all.
+
+    Call arguments carry ``tool_subject`` (the shell tool the fragment is
+    policy-equivalent to): it rides the validated payload into every audit
+    record and approval request, which keep the internal registry name in
+    ``tool_name`` — both names stay answerable from one record.
     """
 
     async def _handler(payload: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -306,6 +317,10 @@ def _slash_injection_tool(guard: CommandGuard, *, requires_approval: bool) -> To
             {
                 "command": {"type": "string", "description": "Shell command to run"},
                 "timeout": {"type": "number", "description": "Timeout in seconds"},
+                "tool_subject": {
+                    "type": "string",
+                    "description": "Policy subject the fragment evaluates as (audit annotation)",
+                },
             },
             ["command"],
         ),
@@ -323,6 +338,7 @@ def _injection_chain(
     *,
     requires_approval: bool,
     approval_callback: ApprovalCallback | None,
+    hook_ask: bool = False,
 ) -> tuple[CommandGuard, ToolExecutor, ToolContext]:
     """Guard + ToolExecutor + ToolContext for one command expansion.
 
@@ -331,30 +347,76 @@ def _injection_chain(
     internal ``slash_injection`` adapter, and a ToolContext carrying the
     caller's approval callback (``None`` = no human available; project-scope
     injections fail closed on it, exactly like the executor's other gates).
+
+    PreToolUse hooks never fire from the executor for injections: the
+    fragments fire them under the real command subject in
+    :func:`_pre_tool_use_outcome`, so the executor's config copy has the
+    ``PreToolUse`` matchers stripped — a matcher matching both the subject
+    and the internal name would otherwise run one hook command twice. A hook
+    ``ask`` hint arrives as *hook_ask* and is expressed as a synthetic ask
+    rule on the same copy, so the executor's own ask semantics decide the
+    fragment (ask beats allow; fail closed without an approver).
     """
+    config = config if config is not None else NexusCliConfig()
+    if has_hooks(config, "PreToolUse"):
+        config = replace(config, hooks=replace(config.hooks, pre_tool_use=[]))
+        if hook_ask:
+            config = replace(
+                config,
+                permissions=replace(
+                    config.permissions, ask=[*config.permissions.ask, INJECTION_POLICY_SUBJECT]
+                ),
+            )
     guard = _injection_guard(config)
     registry = ToolRegistry()
     registry.register(_slash_injection_tool(guard, requires_approval=requires_approval))
     context = ToolContext(
         cwd=os.getcwd(),
-        config=config if config is not None else NexusCliConfig(),
+        config=config,
         approval_callback=approval_callback,
     )
     return guard, ToolExecutor(registry), context
 
 
+async def _pre_tool_use_outcome(
+    config: NexusCliConfig, call_arguments: dict[str, Any]
+) -> HookOutcome:
+    """PreToolUse outcome for one injection, evaluated under the real subject.
+
+    The executor fires PreToolUse with the internal registry name, which a
+    hook matcher written for ``bash`` would never match; injection fragments
+    therefore fire the hooks here as the shell tool they are. The payload
+    mirrors the executor's contract (``tool_name`` + ``tool_input``) so hook
+    scripts see a bash-shaped call; ``tool_subject`` inside ``tool_input``
+    is the one marker that the call came from a command body.
+    """
+    if not has_hooks(config, "PreToolUse"):
+        return HookOutcome()
+    return await fire_event(
+        config,
+        "PreToolUse",
+        {"tool_name": INJECTION_POLICY_SUBJECT, "tool_input": dict(call_arguments)},
+        os.getcwd(),
+    )
+
+
 async def _run_injection(
     command: str,
-    guard: CommandGuard,
-    executor: ToolExecutor,
-    context: ToolContext,
+    config: NexusCliConfig,
+    *,
+    requires_approval: bool,
+    approval_callback: ApprovalCallback | None,
 ) -> tuple[str, str | None]:
     """Run one ``!`cmd` `` fragment through CommandGuard + the ToolExecutor gate chain.
 
     Order mirrors the bash tool: the CommandGuard refuses destructive
     commands outright (unchanged marker, nothing is spawned, no gate is
-    consulted), then the command executes as the internal ``slash_injection``
-    tool so permission rules, hooks, HITL approval and the audit log all
+    consulted); a deny rule is left to the executor so its audit attribution
+    stays the single implementation; PreToolUse hooks fire under the real
+    command subject (a matcher written for ``bash`` must hit the fragment —
+    see :func:`_pre_tool_use_outcome`) with an ``ask`` hint forcing the
+    human gate via the synthetic ask rule; then the command executes as the
+    internal ``slash_injection`` tool so HITL approval and the audit log all
     apply. Gate rejections (no approver, denied, plan mode) become
     ``[refused: ...]`` markers and the command is never spawned; execution
     failures keep the ``[failed: ...]`` marker. Returns ``(replacement,
@@ -362,15 +424,50 @@ async def _run_injection(
     command was refused or failed. Every failure is swallowed — one bad
     command must not break the whole expansion.
     """
+    guard = _injection_guard(config)
     try:
         guard.validate(command)
     except CommandPolicyError:
         reason = "blocked by command guard"
         return f"[refused: {command} — {reason}]", reason
+    call_arguments = {
+        "command": command,
+        "timeout": INJECTION_TIMEOUT_SECONDS,
+        # The real policy subject: audit records keep the internal registry
+        # name in tool_name and name the shell tool the fragment evaluates
+        # as here (task-0004: audit carries internal name + real subject).
+        "tool_subject": INJECTION_POLICY_SUBJECT,
+    }
+    hook_ask = False
+    permission = evaluate_permissions(config.permissions, SLASH_INJECTION_TOOL, call_arguments)
+    if (permission is None or permission.action != "deny") and not config.policy.plan_mode:
+        # Rules precede hooks (executor gate order), and the plan-mode stop
+        # fires no hooks at all: only a call that would reach the executor's
+        # hook pass may run hook commands here.
+        pre = await _pre_tool_use_outcome(config, call_arguments)
+        if pre.blocked:
+            if config.features.audit_log:
+                AuditLog(config.policy.audit_log_path).record(
+                    tool_name=SLASH_INJECTION_TOOL,
+                    input_data=call_arguments,
+                    outcome="deny",
+                    approver="hook",
+                    cwd=os.getcwd(),
+                    trace_id=observability.get_trace_id(),
+                )
+            reason = pre.reason or "blocked by pre-tool-use hook"
+            return f"[refused: {command} — {reason}]", reason
+        hook_ask = pre.permission_hint == "ask"
+    _, executor, context = _injection_chain(
+        config,
+        requires_approval=requires_approval,
+        approval_callback=approval_callback,
+        hook_ask=hook_ask,
+    )
     call = {
         "id": "slash-injection",
         "name": SLASH_INJECTION_TOOL,
-        "arguments": {"command": command, "timeout": INJECTION_TIMEOUT_SECONDS},
+        "arguments": call_arguments,
     }
     try:
         result = (await executor.execute_all([call], context))[0]
@@ -389,16 +486,23 @@ async def _run_injection(
 
 async def _expand_shell_injections(
     prompt: str,
-    guard: CommandGuard,
-    executor: ToolExecutor,
-    context: ToolContext,
+    config: NexusCliConfig,
+    *,
+    requires_approval: bool,
+    approval_callback: ApprovalCallback | None,
 ) -> tuple[str, tuple[str, ...]]:
     """Replace every ``!`cmd` `` fragment; collect refused/failed markers."""
+    config = config if config is not None else NexusCliConfig()
     rejections: list[str] = []
     pieces: list[str] = []
     cursor = 0
     for match in _SHELL_INJECTION_PATTERN.finditer(prompt):
-        replacement, rejection = await _run_injection(match.group(1), guard, executor, context)
+        replacement, rejection = await _run_injection(
+            match.group(1),
+            config,
+            requires_approval=requires_approval,
+            approval_callback=approval_callback,
+        )
         if rejection is not None:
             rejections.append(replacement)
         pieces.append(prompt[cursor : match.start()])
@@ -436,18 +540,14 @@ async def expand_command(
     (the operator's own file) auto-executes. Both are audited and both spawn
     with the sanitized child environment. When *config* is given, injected
     commands are validated against the configured ``policy.command_blacklist``
-    just like the bash tool.
+    just like the bash tool, and permission rules / PreToolUse hooks written
+    for the shell tools evaluate every fragment under its real subject.
     """
-    guard, executor, context = _injection_chain(
+    prompt, rejected_injections = await _expand_shell_injections(
+        command.body,
         config,
         requires_approval=command.source == "project",
         approval_callback=approval_callback,
-    )
-    prompt, rejected_injections = await _expand_shell_injections(
-        command.body,
-        guard,
-        executor,
-        context,
     )
     has_placeholder = bool(_POSITIONAL_PATTERN.search(prompt)) or ARGUMENTS_PLACEHOLDER in prompt
     prompt = _fill_positional_args(prompt, split_positional_args(args))

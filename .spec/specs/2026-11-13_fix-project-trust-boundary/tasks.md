@@ -39,7 +39,7 @@
 
 ## 阶段 B：权限/路径/执行链
 
-- [ ] task-0004 slash 注入权限主体映射
+- [x] task-0004 slash 注入权限主体映射
   - id: task-0004
   - boundary: src/nexuscli/entrypoints/slash_commands.py, src/nexuscli/policy/permission_rules.py, new:tests/test_slash_injection_policy.py
   - origin: planned

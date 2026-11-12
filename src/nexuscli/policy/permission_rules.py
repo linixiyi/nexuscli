@@ -28,6 +28,21 @@ from urllib.parse import urlsplit
 ACTION_PRECEDENCE = ("deny", "ask", "allow")
 
 _COMMAND_TOOLS = {"bash", "execute_command"}
+
+# ``!`cmd` `` fragments inside custom slash command bodies enter the registry
+# under this internal tool name (see nexuscli.entrypoints.slash_commands), but
+# the call IS a shell command: rules and hooks written for the shell tools
+# must evaluate it (spec 2026-11-13_fix-project-trust-boundary task-0004 /
+# F3 — keep the internal name, map the policy subject).
+SLASH_INJECTION_TOOL = "slash_injection"
+# The shell tools an injection fragment is policy-equivalent to. Both are
+# ``_COMMAND_TOOLS`` members, so command rules (``bash(git push:*)``) speak
+# the fragment's language either way.
+INJECTION_SHELL_TOOLS = ("bash", "execute_command")
+# The subject PreToolUse hooks see for an injection fragment: the canonical
+# shell tool name, so a hook matcher written for ``bash`` matches fragments.
+INJECTION_POLICY_SUBJECT = "bash"
+
 _PATH_TOOLS = {
     "read_file",
     "write_file",
@@ -73,6 +88,21 @@ def parse_rule(raw: str) -> PermissionRule | None:
     return PermissionRule(raw=text, tool=text, spec="")
 
 
+def policy_tool_names(tool_name: str) -> tuple[str, ...]:
+    """Tool names a call's permission rules are matched against.
+
+    Most calls evaluate under their own registry name. A ``slash_injection``
+    fragment additionally evaluates under the shell tools it actually is
+    (``bash`` / ``execute_command``) — and keeps matching rules written for
+    the internal name, so an existing ``deny: ["slash_injection"]`` retains
+    its force. The candidates only widen what a rule can hit; the deny > ask
+    > allow precedence below is applied over the same rule lists as before.
+    """
+    if tool_name == SLASH_INJECTION_TOOL:
+        return (*INJECTION_SHELL_TOOLS, SLASH_INJECTION_TOOL)
+    return (tool_name,)
+
+
 def subject_for(tool_name: str, payload: dict[str, Any]) -> tuple[str, str]:
     """Return ``(kind, value)`` the rule spec is matched against for this call.
 
@@ -80,7 +110,7 @@ def subject_for(tool_name: str, payload: dict[str, Any]) -> tuple[str, str]:
     spec only match kinds they can speak about; a bare or ``*`` spec matches
     any kind.
     """
-    if tool_name in _COMMAND_TOOLS:
+    if tool_name in _COMMAND_TOOLS or tool_name == SLASH_INJECTION_TOOL:
         return "command", str(payload.get("command") or "")
     if tool_name in _PATH_TOOLS:
         raw_path = str(payload.get("path") or "")
@@ -162,13 +192,20 @@ def _tool_name_matches(pattern: str, tool_name: str) -> bool:
 def evaluate_permissions(
     permissions: Any, tool_name: str, payload: dict[str, Any]
 ) -> PermissionDecision | None:
-    """First match under deny > ask > allow precedence; None when no rule hits."""
+    """First match under deny > ask > allow precedence; None when no rule hits.
+
+    A rule matches when its tool pattern hits any of the call's policy names
+    (see :func:`policy_tool_names`) and its spec matches the subject — so an
+    injection fragment is denied/asked/allowed by the same ``bash`` rules
+    that would govern an ordinary shell call.
+    """
     subject_kind, subject = subject_for(tool_name, payload)
+    names = policy_tool_names(tool_name)
     for action in ACTION_PRECEDENCE:
         for raw in getattr(permissions, action, None) or []:
             rule = parse_rule(raw)
             if rule is None:
                 continue
-            if rule_matches(rule, tool_name, subject_kind, subject):
+            if any(rule_matches(rule, name, subject_kind, subject) for name in names):
                 return PermissionDecision(action=action, rule=rule.raw)
     return None
