@@ -8,7 +8,9 @@ in config.json and use one syntax::
     bash(git diff:*)         # command rules: ``prefix:*`` matches the prefix at a token
                              # boundary on a single un-chained command (no shell operators)
     bash(npm run *)          # other command specs are fnmatch globs on the command string
-    write_file(src/**)       # path rules: fnmatch glob on the payload path
+    write_file(src/**)       # path rules: fnmatch glob on the payload path,
+                             # matched against the raw and POSIX-normalized
+                             # spellings (either hitting counts as a hit)
     web_fetch(domain:github.com)  # domain rules: exact host or subdomain match
     mcp__github__*           # tool names support fnmatch globs when they contain glob chars
 
@@ -21,6 +23,7 @@ determines the reported rule text.
 from __future__ import annotations
 
 import fnmatch
+import posixpath
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -140,7 +143,11 @@ def rule_matches(rule: PermissionRule, tool_name: str, subject_kind: str, subjec
             return _command_prefix_matches(subject, rule.spec[:-2])
         return fnmatch.fnmatchcase(subject, rule.spec)
     if subject_kind == "path":
-        return fnmatch.fnmatchcase(subject, rule.spec)
+        return any(
+            fnmatch.fnmatchcase(path_form, spec_form)
+            for path_form in _path_variants(subject)
+            for spec_form in _path_variants(rule.spec)
+        )
     if subject_kind == "domain":
         if rule.spec.startswith("domain:"):
             expected = rule.spec[len("domain:") :].lower().strip("/")
@@ -148,6 +155,36 @@ def rule_matches(rule: PermissionRule, tool_name: str, subject_kind: str, subjec
         return fnmatch.fnmatchcase(subject, rule.spec)
     # "any": a spec'd rule cannot match a tool without a matchable subject.
     return False
+
+
+def _path_variants(path: str) -> tuple[str, ...]:
+    """Spellings of a path-matching operand (subject or rule spec).
+
+    Path rules used to fnmatch the raw string only, so ``./.env``,
+    ``a/../.env``, ``.//AGENTS.md`` and ``src/./x.py`` dodged deny rules
+    written for the clean spellings. Matching now considers every form:
+
+    - the raw spelling first — existing rules keep their exact semantics
+      (spec 2026-11-13_fix-project-trust-boundary task-0005 keeps the raw
+      form for backward compatibility), and
+    - the POSIX-normalized spelling (``posixpath.normpath``): collapses
+      ``./`` segments, ``a/../`` steps and repeated slashes — for a
+      relative path this *is* its resolved relative form.
+
+    The category never changes: a relative path stays relative and an
+    absolute path stays absolute (``normpath`` preserves the leading
+    ``/``), so an absolute payload can never match a relative rule or vice
+    versa. No filesystem access happens here: symlinks are not resolved
+    (that is path_guard/FSScopeGuard's job on the real path), so rule
+    matching stays lexical.
+    """
+    if not path:
+        return (path,)
+    variants = [path]
+    normalized = posixpath.normpath(path)
+    if normalized != path:
+        variants.append(normalized)
+    return tuple(variants)
 
 
 # Shell metacharacters that turn the text after a matched prefix into another

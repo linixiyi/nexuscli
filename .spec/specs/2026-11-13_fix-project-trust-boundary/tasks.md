@@ -48,7 +48,7 @@
   - tests: 新增 `tests/test_slash_injection_policy.py`：① `deny:["bash"]` 时片段返回 refused 且不执行；② `deny:["execute_command"]` 同样；③ 匹配 `bash` 的 PreToolUse hook 能阻断；④ allow 规则仍能放行；⑤ 审计含真实主体。
   - verify: `uv run pytest -q tests/test_slash_injection_policy.py`
 
-- [ ] task-0005 路径权限规则归一化
+- [x] task-0005 路径权限规则归一化
   - id: task-0005
   - boundary: src/nexuscli/policy/permission_rules.py, new:tests/test_permission_path_normalization.py
   - depends-on: task-0004
