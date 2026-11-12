@@ -87,7 +87,7 @@
   - tests: 新增 `tests/test_bash_readonly_exfil.py`：`cat ~/.git-credentials`、`cat ~/.config/gh/hosts.yml`、`git show HEAD:.env`、`date 010100002026`、`file -C -m /tmp/m` 均 False；正常 `git show HEAD:README.md`、`date`、`file x` 仍 True。
   - verify: `uv run pytest -q tests/test_bash_readonly_exfil.py`
 
-- [ ] task-0009 MCP resource/prompt 审批
+- [x] task-0009 MCP resource/prompt 审批
   - id: task-0009
   - boundary: src/nexuscli/mcp/client.py, new:tests/test_mcp_resource_approval.py
   - depends-on: task-0002
