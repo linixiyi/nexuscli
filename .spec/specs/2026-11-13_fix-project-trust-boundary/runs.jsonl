@@ -1,0 +1,12 @@
+{"cmd": "uv run pytest -q tests/test_project_trust.py", "duration": 0.189, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0001", "ts": "2026-11-12T16:32:59+00:00"}
+{"cmd": "uv run pytest -q tests/test_mcp_project_trust.py", "duration": 0.171, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0002", "ts": "2026-11-12T16:32:59+00:00"}
+{"cmd": "uv run pytest -q tests/test_hooks_headless_trust.py", "duration": 0.164, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0003", "ts": "2026-11-12T16:32:59+00:00"}
+{"cmd": "uv run pytest -q tests/test_slash_injection_policy.py", "duration": 0.159, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0004", "ts": "2026-11-12T16:33:00+00:00"}
+{"cmd": "uv run pytest -q tests/test_permission_path_normalization.py", "duration": 0.148, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0005", "ts": "2026-11-12T16:33:00+00:00"}
+{"cmd": "uv run pytest -q tests/test_fs_scope_long_flags.py", "duration": 0.15, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0006", "ts": "2026-11-12T16:33:00+00:00"}
+{"cmd": "uv run pytest -q tests/test_audit_attribution.py", "duration": 0.146, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0007", "ts": "2026-11-12T16:33:00+00:00"}
+{"cmd": "uv run pytest -q tests/test_bash_readonly_exfil.py", "duration": 0.145, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0008", "ts": "2026-11-12T16:33:00+00:00"}
+{"cmd": "uv run pytest -q tests/test_mcp_resource_approval.py", "duration": 0.153, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0009", "ts": "2026-11-12T16:33:00+00:00"}
+{"cmd": "uv run pytest -q tests/test_security_docs.py", "duration": 0.146, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0010", "ts": "2026-11-12T16:33:00+00:00"}
+{"cmd": "uv run pytest -q tests/test_project_trust_e2e.py", "duration": 0.147, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0011", "ts": "2026-11-12T16:33:01+00:00"}
+{"dirty": [], "head": "4a6a8bf26a76e0d57e8a068cb6169590d7a53aac", "kind": "baseline", "task": "package", "ts": "2026-11-12T16:33:01+00:00"}
