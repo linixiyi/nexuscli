@@ -71,6 +71,7 @@
     <div class="toc">
 <ul>
 <li><a href="#与---mode-plan--shifttab-只读态的区别">与 --mode plan / Shift+Tab 只读态的区别</a></li>
+<li><a href="#plan-模式下的-worker-只读约束">plan 模式下的 worker 只读约束</a></li>
 </ul>
 </div>
 
@@ -104,7 +105,7 @@
 <tr>
 <td>只读规划</td>
 <td><code>nexuscli --mode plan -p "..."</code></td>
-<td>单次模式跑 Plan-and-Execute：只读闸门全程开启，不会执行任何写入；<code>--yes</code> 在该模式无效（启动时打印 warning 并忽略），计划被只读闸门拦下按失败收场（exit 1），也没有 <code>--resume</code> 续跑入口</td>
+<td>单次模式跑 Plan-and-Execute：只读闸门全程开启，不会执行任何写入；双重约束收紧——planner 收到只读规划指令，计划任务只允许 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具，禁止安排 bash/execute_command 任务（即使命令看似只读），也禁止安排 pytest、npm、uv run、安装依赖、构建、写盘类任务；worker 运行时只看到这六个只读工具（registry 白名单过滤，bash/write_file 等写入与命令工具不进 worker 的工具列表）；即使有漏网的写入/命令调用，执行层只读闸仍会拒绝并按 blocked 收场；<code>--yes</code> 在该模式无效（启动时打印 warning 并忽略）、不能绕过只读闸，计划被只读闸门拦下按失败收场（exit 1），也没有 <code>--resume</code> 续跑入口</td>
 </tr>
 <tr>
 <td>交互式 Plan-and-Execute</td>
@@ -118,7 +119,14 @@
 </tr>
 </tbody>
 </table>
-<p><code>--mode plan</code> 与 <code>/plan</code> 都不执行写入；<code>plan (read-only)</code> 的权限语义见 <a href="permissions.html#会话权限模式default--auto--plan">permissions.md</a>。</p><div class="pager"><a href="sessions.html" class="prev"><span class="dir">← 上一篇</span><span class="name">💾 会话、恢复与快照</span></a><a href="plugins.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧱 插件系统（本地目录 + 工具组件）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/plan-execute.md" target="_blank" rel="noopener">docs/plan-execute.md</a> 构建生成 · 源文件与站点内容同步</p>
+<p><code>--mode plan</code> 与 <code>/plan</code> 都不执行写入；<code>plan (read-only)</code> 的权限语义见 <a href="permissions.html#会话权限模式default--auto--plan">permissions.md</a>。</p>
+<h2 id="plan-模式下的-worker-只读约束"><a class="toclink" href="#plan-模式下的-worker-只读约束">plan 模式下的 worker 只读约束</a></h2>
+<p>plan 模式（<code>--mode plan</code> 与 REPL <code>/plan</code>）对任务 worker 是<strong>双重约束</strong>：</p>
+<ol>
+<li><strong>planner 指令白名单</strong>：规划阶段注入只读指令，计划任务只允许安排 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具对应的读、检索、分析类任务，禁止安排 bash/execute_command 与写盘类任务；</li>
+<li><strong>worker 运行时 registry 过滤</strong>：每个任务 worker 的工具 registry 被过滤成 read_file/glob/grep/search_code/vfs_ls/vfs_read 六个只读工具的子集——bash/write_file/edit_file 等写入与命令工具根本不进 worker 的工具列表与系统提示词；worker 若仍尝试调用越权工具，调用会被执行层只读闸拒绝并按 blocked 收场。</li>
+</ol>
+<p>两层之后仍有<strong>执行层只读闸</strong>兜底：<code>tools/executor.py</code> 的 plan 只读闸继续拒绝任何漏网的写入/命令调用（含被白名单隐藏后仍被尝试调用的工具），对应任务按 blocked 收场、绝不标 COMPLETED。<code>--yes</code> 只影响审批、不能绕过这只读闸。写入动作请切回默认模式（<code>Shift+Tab</code>，或 <code>-p</code> 时去掉 <code>--mode plan</code>）后再执行。</p><div class="pager"><a href="sessions.html" class="prev"><span class="dir">← 上一篇</span><span class="name">💾 会话、恢复与快照</span></a><a href="plugins.html" class="next"><span class="dir">下一篇 →</span><span class="name">🧱 插件系统（本地目录 + 工具组件）</span></a></div><p class="edit-link">本页由 <a href="https://github.com/linixiyi/nexuscli/blob/main/docs/plan-execute.md" target="_blank" rel="noopener">docs/plan-execute.md</a> 构建生成 · 源文件与站点内容同步</p>
   </div>
 </div>
 <footer>
