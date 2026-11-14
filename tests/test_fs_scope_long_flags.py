@@ -34,7 +34,6 @@ from nexuscli.policy import FSScopeGuard
 from nexuscli.tools import ToolRegistry, get_builtin_tools
 from nexuscli.tools.base import ToolContext
 
-
 # ---------------------------------------------------------------------------
 # policy/fs_scope.py: --name=value long flags
 # ---------------------------------------------------------------------------

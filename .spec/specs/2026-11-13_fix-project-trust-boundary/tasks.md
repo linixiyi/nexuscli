@@ -138,7 +138,7 @@
   - tests: 上述 11 个文件（含新增 sandbox 配置用例）全部通过；`tests/test_project_trust.py` 继续锁定 fail-closed。
   - verify: `uv run pytest -q tests/test_api_key_command.py tests/test_lane_e_mcp_sdk.py tests/test_lane_f_observability.py tests/test_mcp.py tests/test_mcp_filter.py tests/test_mcp_oauth.py tests/test_mcp_security.py tests/test_permissions.py tests/test_sandbox_guard.py tests/test_os_sandbox.py tests/test_linux_sandbox.py`
 
-- [ ] task-0014 静态门收口（ruff / format / mypy）
+- [x] task-0014 静态门收口（ruff / format / mypy）
   - id: task-0014
   - boundary: src/nexuscli/entrypoints/slash_commands.py, src/nexuscli/policy/bash_readonly.py, src/nexuscli/tools/builtins.py, tests/test_fs_scope_long_flags.py, tests/test_mcp_project_trust.py, tests/test_project_trust_e2e.py
   - origin: emergent

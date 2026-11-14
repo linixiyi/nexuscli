@@ -486,7 +486,7 @@ async def _run_injection(
 
 async def _expand_shell_injections(
     prompt: str,
-    config: NexusCliConfig,
+    config: NexusCliConfig | None,
     *,
     requires_approval: bool,
     approval_callback: ApprovalCallback | None,

@@ -109,9 +109,7 @@ class _FakeRemoteSession:
         return SimpleNamespace(tools=[])
 
 
-def _capture_stdio_params(
-    monkeypatch: pytest.MonkeyPatch, captured: dict[str, object]
-) -> None:
+def _capture_stdio_params(monkeypatch: pytest.MonkeyPatch, captured: dict[str, object]) -> None:
     """Replace the SDK stdio transport with one that records StdioServerParameters."""
 
     @asynccontextmanager
@@ -386,9 +384,7 @@ def test_broken_configs_raise_or_skip_unchanged(
         read_mcp_config_entries(project)
 
     # 非 dict 条目：不合并、进 skipped，坏条目不设门也不告警。
-    config_path.write_text(
-        json.dumps({"mcpServers": {"srv": "not-an-object"}}), encoding="utf-8"
-    )
+    config_path.write_text(json.dumps({"mcpServers": {"srv": "not-an-object"}}), encoding="utf-8")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         specs, skipped = read_mcp_config_entries(project)

@@ -249,9 +249,7 @@ def _inspection_readonly(program: str, args: list[str]) -> bool:
         # they appear also turns flag-value digits (`date -r 1234567890`,
         # `date -d 20200101`) into a prompt — a cheap false "no" in exchange
         # for never mis-judging a set form.
-        return not _has_flag(args, _DATE_SET_CLOCK_FLAGS) and not _date_positional_sets_clock(
-            args
-        )
+        return not _has_flag(args, _DATE_SET_CLOCK_FLAGS) and not _date_positional_sets_clock(args)
     if program == "file":
         return not _has_flag(args, _FILE_COMPILE_FLAGS)
     return True

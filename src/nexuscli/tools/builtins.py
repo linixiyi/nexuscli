@@ -721,9 +721,7 @@ async def _reject_outside_write_scope(
     # ["execute_command"] covers an execute_command call the same way
     # allow: ["bash"] covers bash. hitl_mode "always" keeps asking,
     # mirroring the executor.
-    permission = evaluate_permissions(
-        context.config.permissions, tool_name, {"command": command}
-    )
+    permission = evaluate_permissions(context.config.permissions, tool_name, {"command": command})
     if permission and permission.action == "allow" and context.config.policy.hitl_mode != "always":
         return None
     # Full-access mode (REPL "Auto") disables the command guard as the user's
