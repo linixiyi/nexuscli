@@ -28,6 +28,7 @@ from nexuscli.policy.sandbox import ESSENTIAL_KEYS
 from nexuscli.tools import ToolRegistry, get_builtin_tools
 from nexuscli.tools.background import background_registry
 from nexuscli.tools.base import ToolContext
+from tests.project_trust_support import trust_project_config
 
 # Placeholder values: deliberately not usable credentials.
 _DUMMY = "dummy-value-not-a-credential"
@@ -179,6 +180,9 @@ def test_env_sanitization_reads_from_project_config_json(tmp_path: Path, sandbox
     (project_config / "config.json").write_text(
         json.dumps({"policy": {"env_sanitization": False}}), encoding="utf-8"
     )
+    # policy.* is a security-sensitive project section: this test asserts the
+    # trusted-project merge, so record the trust decision explicitly.
+    trust_project_config(tmp_path)
 
     config = load_config(project_root=tmp_path, env={})
 

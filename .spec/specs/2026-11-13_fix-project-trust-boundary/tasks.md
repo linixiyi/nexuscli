@@ -129,7 +129,7 @@
   - tests: `tests/test_project_trust.py` 新增 untrusted/trusted 与 `load_telemetry_config` 用例；`tests/test_project_trust_e2e.py` 恶意项目 config 增加 sandbox/telemetry 攻击面；`tests/test_telemetry_otlp.py` 的 project 层用例显式写信任记录。
   - verify: `uv run pytest -q tests/test_project_trust.py tests/test_telemetry_otlp.py tests/test_project_trust_e2e.py`
 
-- [ ] task-0013 既有测试对齐新信任模型
+- [x] task-0013 既有测试对齐新信任模型
   - id: task-0013
   - boundary: tests/test_api_key_command.py, tests/test_lane_e_mcp_sdk.py, tests/test_lane_f_observability.py, tests/test_mcp.py, tests/test_mcp_filter.py, tests/test_mcp_oauth.py, tests/test_mcp_security.py, tests/test_permissions.py, tests/test_sandbox_guard.py, tests/test_os_sandbox.py, tests/test_linux_sandbox.py, new:tests/project_trust_support.py
   - origin: emergent

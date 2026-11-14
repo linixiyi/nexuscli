@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from nexuscli.config import load_config
+from tests.project_trust_support import trust_project_config
 
 # The resolver runs commands without a shell, so the test exercises it with
 # a plain executable + arguments. sys.executable is spelled with forward
@@ -51,6 +52,9 @@ def _load(project: Path, tmp_path, monkeypatch, env: dict[str, str] | None = Non
     monkeypatch.setattr("nexuscli.config._home", lambda: home)
     for var in (_ENV_NAME, "DEEPSEEK_API_KEY"):
         monkeypatch.delenv(var, raising=False)
+    # llm.api_key / llm.provider are project security-sensitive keys: exercise
+    # the trusted-project branch explicitly instead of re-testing fail-closed.
+    trust_project_config(project)
     return load_config(project_root=project, env=env or {})
 
 

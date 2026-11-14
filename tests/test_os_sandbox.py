@@ -41,6 +41,7 @@ from nexuscli.tools import get_builtin_tools
 from nexuscli.tools.base import ToolContext
 from nexuscli.tools.commands import CommandExecutor
 from nexuscli.tools.registry import ToolRegistry
+from tests.project_trust_support import trust_project_config
 
 FAKE_SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
@@ -326,6 +327,9 @@ def test_sandbox_config_loads_from_project_json(tmp_path: Path):
         ),
         encoding="utf-8",
     )
+    # sandbox.* is a project security-sensitive section: assert the trusted
+    # branch explicitly (fail-closed is covered by test_project_trust.py).
+    trust_project_config(tmp_path)
 
     config = load_config(project_root=tmp_path, env={})
 

@@ -31,6 +31,7 @@ from nexuscli.mcp.auth import (
 )
 from nexuscli.mcp.client import McpClientManager
 from nexuscli.mcp.config import McpAuthConfig, McpServerSpec, load_mcp_server_specs
+from tests.project_trust_support import trust_project_mcp
 
 
 def _fake_access_token(mark: str = "") -> str:
@@ -281,6 +282,8 @@ def test_http_transport_attaches_header_and_retries_once_on_401(tmp_path, monkey
         ),
         encoding="utf-8",
     )
+    # Project-layer MCP servers require an explicit trust decision first.
+    trust_project_mcp(tmp_path)
     TokenStore().save(
         "graph",
         OAuthTokens(
@@ -360,6 +363,7 @@ def test_spec_auth_parsing_and_unknown_type_ignored(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
+    trust_project_mcp(tmp_path)
     specs = load_mcp_server_specs(tmp_path)
     assert specs["graph"].auth is not None
     assert specs["graph"].auth.client_id == "nexuscli"  # ${VAR} expanded

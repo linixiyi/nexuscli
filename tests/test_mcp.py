@@ -8,6 +8,7 @@ from nexuscli.config import load_config
 from nexuscli.mcp import McpClientManager
 from nexuscli.mcp.server import _handle_request
 from nexuscli.tools.base import ToolContext
+from tests.project_trust_support import trust_project_mcp
 
 
 def test_mcp_tools_list(tmp_path, monkeypatch):
@@ -61,6 +62,7 @@ if __name__ == "__main__":
         ),
         encoding="utf-8",
     )
+    trust_project_mcp(tmp_path)
 
     async def run():
         manager = McpClientManager(tmp_path)
@@ -116,6 +118,7 @@ if __name__ == "__main__":
         ),
         encoding="utf-8",
     )
+    trust_project_mcp(tmp_path)
 
     async def run():
         manager = McpClientManager(tmp_path)
