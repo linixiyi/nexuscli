@@ -44,7 +44,7 @@
 
 ## 项目层信任门（config 安全键 / MCP / hooks）
 
-上一节的「按层拼接」对**安全敏感键**不成立：项目 `.nexuscli/config.json` 与项目 `.env` 来自可能被克隆的仓库，其中的安全键不再无条件合并（实现：`src/nexuscli/policy/project_trust.py` 的 `gate_project_layer`）。安全键范围：`policy.*` 整节（含 `hitl_mode`、`path_guard_enabled`、`command_guard_enabled`）、`permissions.allow`、`features.audit_log`、`llm.base_url` / `llm.api_key` / `llm.provider`，以及 `.env` 里落到这些键的名字（`NEXUSCLI_HITL`、`NEXUSCLI_PROVIDER`、`*_API_KEY`、`*_BASE_URL`）。它们需要通过**项目信任指纹**（对安全键投影做 canonical JSON + sha256，同一形态复用 hooks 的指纹模式）才生效：
+上一节的「按层拼接」对**安全敏感键**不成立：项目 `.nexuscli/config.json` 与项目 `.env` 来自可能被克隆的仓库，其中的安全键不再无条件合并（实现：`src/nexuscli/policy/project_trust.py` 的 `gate_project_layer`）。安全键范围：`policy.*` 整节（含 `hitl_mode`、`path_guard_enabled`、`command_guard_enabled`）、`permissions.allow`、`features.audit_log`、`llm.base_url` / `llm.api_key` / `llm.provider`、`sandbox.*` 整节（后端可被改成 `none`、可放开 `allow_network`）、`telemetry.*` 整节（`otlp.endpoint` 可把 trace 元数据发往外部端点），以及 `.env` 里落到这些键的名字（`NEXUSCLI_HITL`、`NEXUSCLI_PROVIDER`、`*_API_KEY`、`*_BASE_URL`）。它们需要通过**项目信任指纹**（对安全键投影做 canonical JSON + sha256，同一形态复用 hooks 的指纹模式）才生效：
 
 - 未信任时安全键被剔除，保留用户层/默认值，并给出一次可见 warning（`ProjectTrustWarning`）——不静默合并，也不拒绝启动
 - 交互式启动（REPL）对检测到的安全键确认一次（`Trust this project's security-sensitive config? [y/N]`），确认后按工作区记忆指纹到 `~/.nexuscli/project-trust.json`；安全内容变化会重新武装信任门，良性编辑（模型、渲染、提示词）不会

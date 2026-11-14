@@ -57,7 +57,14 @@ def test_project_config_security_keys_require_trust() -> None:
     assert any("项目" in s and "信任指纹" in s for s in sentences), (
         "permissions.md 缺项目层安全键信任指纹的说明"
     )
-    for key in ("policy.*", "permissions.allow", "features.audit_log", "llm.base_url"):
+    for key in (
+        "policy.*",
+        "permissions.allow",
+        "features.audit_log",
+        "llm.base_url",
+        "sandbox.*",
+        "telemetry.*",
+    ):
         assert key in text, f"permissions.md 缺安全键 {key!r}"
     assert "project-trust.json" in text, "permissions.md 缺信任存储路径 project-trust.json"
     assert any(
