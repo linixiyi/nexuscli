@@ -468,6 +468,12 @@ def _run_propose_in_repl(
         os.close(master)
         os.close(slave)
 
+    if failure is not None:
+        # The driver can only see the pty; a REPL thread that died (crash or
+        # clean early return) must surface its cause instead of the generic
+        # "thread exited" stall. Full-suite ordering made this flake opaque.
+        detail = repl_error or f"REPL returned early ({outcome.get('done', 'unknown')})"
+        failure = f"{failure}\nREPL thread: {detail}"
     assert failure is None, failure
     assert not thread_alive, (
         f"REPL thread still alive after /exit (driver events: {driver.events})\n"

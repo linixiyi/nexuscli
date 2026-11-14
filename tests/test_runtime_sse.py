@@ -119,6 +119,24 @@ def _stream_lines(port: int, path: str, *, seconds: float, use_header: bool = Tr
     return lines
 
 
+def _stop_server(server: RuntimeApiServer, thread: threading.Thread) -> None:
+    """Stop serve_forever deterministically.
+
+    ``serve_forever`` blocks in ``socketServer``'s selector loop; setting
+    ``_stop`` alone does not wake it, so every fixture teardown used to leak a
+    live server thread (and its listening socket) and then wait the full 5s
+    join timeout. In a full-suite run those leaked threads accumulate and make
+    later tests flaky; ``shutdown()`` is the documented wake-up.
+    """
+    server._stop.set()
+    http_server = server._server
+    if http_server is not None:
+        http_server.shutdown()
+        http_server.server_close()
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "SSE test server thread did not stop"
+
+
 def _create_thread(server: RuntimeApiServer, port: int) -> str:
     status, _, body = _request(port, "POST", "/v1/threads", headers={"x-api-key": KEY})
     assert status == 200
@@ -209,8 +227,7 @@ def sse_server(tmp_path):
     port = int(server._server.server_address[1])
     time.sleep(0.1)
     yield server, port
-    server._stop.set()
-    thread.join(timeout=5)
+    _stop_server(server, thread)
 
 
 def test_sse_replays_existing_events(sse_server) -> None:
@@ -572,8 +589,13 @@ def test_sse_gate_denial_frame_forwarded_with_monotonic_seq(sse_server, monkeypa
     )
     assert status == 200
 
+    # The turn runs asynchronously after POST returns: wait for BOTH the
+    # gate_denial frame and the terminal done frame before asserting frame
+    # order. Waiting only for gate_denial made the order assertion race the
+    # tail of the turn (full-suite flake: "done is not in list").
     assert _wait_for(
-        lambda: any(event == "gate_denial" for _fid, event, _data in _frames(collected))
+        lambda: {"gate_denial", "done"} <= {event for _fid, event, _data in _frames(collected)},
+        timeout=7.0,
     ), collected
     frames = _frames(collected)
     events = [event for _fid, event, _data in frames]
@@ -621,8 +643,7 @@ def short_timeout_server(tmp_path):
     port = int(server._server.server_address[1])
     time.sleep(0.1)
     yield server, port
-    server._stop.set()
-    thread.join(timeout=5)
+    _stop_server(server, thread)
 
 
 def _register_thread_suspension(server: RuntimeApiServer, thread_id: str) -> str:

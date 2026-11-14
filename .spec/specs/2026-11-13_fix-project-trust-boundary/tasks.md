@@ -146,7 +146,7 @@
   - behavior: 修 `_expand_shell_injections` 的 `NexusCliConfig | None` 收窄（mypy 8>7 的唯一新增错误），补 6 处 ruff（I001/F401/E501）与 4 个格式文件的 `ruff format`。不改变行为。
   - verify: `uv run ruff check . && uv run ruff format --check . && uv run python scripts/check_mypy_ratchet.py`
 
-- [ ] task-0015 SSE 顺序依赖与全量回归
+- [x] task-0015 SSE 顺序依赖与全量回归
   - id: task-0015
   - boundary: tests/test_runtime_sse.py, tests/test_skill_propose_pty.py
   - origin: emergent
