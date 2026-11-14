@@ -118,6 +118,42 @@
   - behavior: 在一个临时 HOME + 临时仓库里同时放置恶意项目 config（hitl never/guards off/base_url evil）、恶意项目 mcp.json（enabled /bin/sh）、项目 hooks、用户级 slash `!`cmd``；用 fake LLM/无网络路径启动 `-p` 与 serve，断言：权限不降级、MCP 不 spawn、hooks 不执行、slash deny 生效、无副作用、无敏感 env 进入子进程。测试必须可离线重复运行。
   - verify: `uv run pytest -q tests/test_project_trust_e2e.py`
 
+## 阶段 E：验收整改（用户 2026-11-14 授权，D5）
+
+- [x] task-0012 项目层 sandbox/telemetry 信任门
+  - id: task-0012
+  - boundary: src/nexuscli/config.py, src/nexuscli/policy/project_trust.py, tests/test_project_trust.py, tests/test_telemetry_otlp.py, new:tests/project_trust_support.py
+  - origin: emergent
+  - expect: green
+  - behavior: 把 `sandbox`（可关 OS 沙箱、放开网络）与 `telemetry`（可把 trace 元数据发往外部 OTLP 端点）整节加入项目敏感键投影 `sensitive_config_section` 与 `strip_sensitive`；`load_telemetry_config` 的 cwd fallback 也接同一 `gate_project_layer`（fail-closed，不二次弹 TTY）。未信任时保留用户层/默认值并在一次 warning 里点名 `sandbox.*` / `telemetry.*`；信任后原样生效。补单测与端到端 attack fixture 断言。
+  - tests: `tests/test_project_trust.py` 新增 untrusted/trusted 与 `load_telemetry_config` 用例；`tests/test_project_trust_e2e.py` 恶意项目 config 增加 sandbox/telemetry 攻击面；`tests/test_telemetry_otlp.py` 的 project 层用例显式写信任记录。
+  - verify: `uv run pytest -q tests/test_project_trust.py tests/test_telemetry_otlp.py tests/test_project_trust_e2e.py`
+
+- [ ] task-0013 既有测试对齐新信任模型
+  - id: task-0013
+  - boundary: tests/test_api_key_command.py, tests/test_lane_e_mcp_sdk.py, tests/test_lane_f_observability.py, tests/test_mcp.py, tests/test_mcp_filter.py, tests/test_mcp_oauth.py, tests/test_mcp_security.py, tests/test_permissions.py, tests/test_sandbox_guard.py, tests/test_os_sandbox.py, tests/test_linux_sandbox.py, new:tests/project_trust_support.py
+  - origin: emergent
+  - expect: green
+  - behavior: 编码旧信任模型（项目层 config/mcp.json 未信任直接生效）的既有测试改为「显式写入 ProjectTrustStore / MCP trust 记录」或改用用户层配置；不得通过放宽 `gate_project_layer` / MCP 门来让测试变绿。新增 `tests/project_trust_support.py` 统一指纹与 store 接线。
+  - tests: 上述 11 个文件（含新增 sandbox 配置用例）全部通过；`tests/test_project_trust.py` 继续锁定 fail-closed。
+  - verify: `uv run pytest -q tests/test_api_key_command.py tests/test_lane_e_mcp_sdk.py tests/test_lane_f_observability.py tests/test_mcp.py tests/test_mcp_filter.py tests/test_mcp_oauth.py tests/test_mcp_security.py tests/test_permissions.py tests/test_sandbox_guard.py tests/test_os_sandbox.py tests/test_linux_sandbox.py`
+
+- [ ] task-0014 静态门收口（ruff / format / mypy）
+  - id: task-0014
+  - boundary: src/nexuscli/entrypoints/slash_commands.py, src/nexuscli/policy/bash_readonly.py, src/nexuscli/tools/builtins.py, tests/test_fs_scope_long_flags.py, tests/test_mcp_project_trust.py, tests/test_project_trust_e2e.py
+  - origin: emergent
+  - expect: green
+  - behavior: 修 `_expand_shell_injections` 的 `NexusCliConfig | None` 收窄（mypy 8>7 的唯一新增错误），补 6 处 ruff（I001/F401/E501）与 4 个格式文件的 `ruff format`。不改变行为。
+  - verify: `uv run ruff check . && uv run ruff format --check . && uv run python scripts/check_mypy_ratchet.py`
+
+- [ ] task-0015 SSE 顺序依赖与全量回归
+  - id: task-0015
+  - boundary: tests/test_runtime_sse.py, tests/test_skill_propose_pty.py
+  - origin: emergent
+  - expect: green
+  - behavior: 三层顺序依赖：① `sse_server` / `short_timeout_server` fixture 只 `_stop.set()` 不会唤醒 `serve_forever`，每个用例泄漏一个 server 线程 + 监听 socket 并等满 5s join，全量跑时累积成 flaky；改成 `shutdown()` + `server_close()` + 有界 join 并断言线程已停。② `test_sse_gate_denial_frame_forwarded_with_monotonic_seq` 只等 `gate_denial` 就断言 `done` 已在帧序列里，与 turn 尾部赛跑（全量跑出现 `'done' is not in list`）；改为同时等待 `gate_denial` 与 `done` 再断言顺序。③ 全量跑时 `test_skill_propose_pty` 偶发 REPL 线程提前退出，驱动只报通用 "thread exited" 无法定位；把 `outcome` 里的异常/提前返回原因并入失败信息，使后续 flake 可诊断。
+  - verify: `uv run pytest -q`
+
 ---
 
 **当前进度**：由脚本计算，无需手动维护

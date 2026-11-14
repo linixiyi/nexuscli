@@ -4,7 +4,9 @@ Project ``.nexuscli/config.json`` and the project ``.env`` are merged into the
 effective config at load time with no confirmation, so cloning a repository
 could otherwise flip ``policy.hitl_mode`` to ``"never"``, switch the path /
 command guards off, point ``llm.base_url`` at an attacker-controlled gateway,
-or grant itself ``permissions.allow`` rules. This module fingerprints the
+grant itself ``permissions.allow`` rules, disable the OS sandbox
+(``sandbox.*``), or export trace metadata to its own OTLP collector
+(``telemetry.*``). This module fingerprints the
 security-sensitive projection of the project layer (canonical JSON, sha256
 hex — the same pinned form as :mod:`nexuscli.hooks.trust`) and persists one
 trust record per workspace in ``~/.nexuscli/project-trust.json``.
@@ -41,6 +43,13 @@ TRUST_STORE_FILENAME = "project-trust.json"
 
 # The ``llm`` keys that decide where model traffic and credentials go.
 SENSITIVE_LLM_KEYS: tuple[str, ...] = ("base_url", "api_key", "provider")
+
+# Whole sections that hand a cloned repository control over process-level
+# containment or outbound data: ``sandbox`` can switch the OS sandbox backend
+# to "none" / allow network, and ``telemetry.otlp.endpoint`` can ship trace
+# metadata to an attacker-controlled collector. Both are security-sensitive as
+# a whole section — a benign-looking sub-key is not worth a finer allowlist.
+SENSITIVE_CONFIG_SECTIONS: tuple[str, ...] = ("sandbox", "telemetry")
 
 # Project-.env names that write straight onto a security-sensitive config key.
 # ``NEXUSCLI_API_KEY`` / ``NEXUSCLI_BASE_URL`` are covered by the suffix rules;
@@ -85,6 +94,10 @@ def sensitive_config_section(project_config: dict[str, Any] | None) -> dict[str,
         sensitive_llm = {key: llm[key] for key in SENSITIVE_LLM_KEYS if key in llm}
         if sensitive_llm:
             section["llm"] = sensitive_llm
+    for name in SENSITIVE_CONFIG_SECTIONS:
+        value = project_config.get(name)
+        if isinstance(value, dict) and value:
+            section[name] = value
     return section
 
 
@@ -202,6 +215,12 @@ def strip_sensitive(
         names.extend(f"llm.{key}" for key in removed)
         if not llm:
             del config["llm"]
+
+    for name in SENSITIVE_CONFIG_SECTIONS:
+        value = config.get(name)
+        if isinstance(value, dict) and value:
+            del config[name]
+            names.append(f"{name}.*")
 
     env_names = sorted(key for key in env if is_sensitive_env_key(key))
     for key in env_names:

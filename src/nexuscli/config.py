@@ -328,8 +328,9 @@ def load_config(
         project_config = _read_json(root / ".nexuscli" / "config.json")
         project_env = _read_env(root / ".env")
         # Security-sensitive project keys (policy.*, permissions.allow,
-        # features.audit_log, llm.base_url/api_key/provider and the .env
-        # names that write onto them) only merge through the project trust
+        # features.audit_log, llm.base_url/api_key/provider, sandbox.*,
+        # telemetry.* and the .env names that write onto them) only merge
+        # through the project trust
         # gate: untrusted layers keep the user-level/default values instead
         # and one warning names what was ignored. Non-sensitive project keys
         # (rendering, prompts, model choice, ...) merge exactly as before.
@@ -405,9 +406,18 @@ def load_telemetry_config(
     root = Path(project_root).resolve() if project_root else None
     if root:
         project_config = _read_json(root / ".nexuscli" / "config.json")
+        project_env = _read_env(root / ".env")
+        # The telemetry face is security-sensitive (an untrusted project could
+        # redirect OTLP exports to its own collector), so it goes through the
+        # same project trust gate as the full loader. This fallback read exists
+        # for embedders that never call load_config(); it must not prompt a
+        # second time on a TTY, so untrusted layers are stripped fail-closed
+        # while a fingerprint already trusted by load_config still applies.
+        project_config, project_env = project_trust.gate_project_layer(
+            project_config, project_env, root, confirm=lambda _description: False
+        )
         if project_config:
             data = _deep_merge(data, project_config)
-        project_env = _read_env(root / ".env")
         if project_env:
             data = _apply_env(data, project_env)
 

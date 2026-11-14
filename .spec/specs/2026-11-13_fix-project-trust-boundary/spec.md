@@ -7,12 +7,12 @@
 - goal: 关闭“克隆仓库即可静默关闭权限链、拉起 MCP 命令、绕过 bash deny”的项目层信任缺口，并修掉同一条执行链上的审计归因、路径归一化、只读分类与 MCP 审批漏点；每个缺口都有先红后绿的本机测试。
 - literal ask: 「你先把 /spec 包写好，然后我跟 zcode 说」——为夜间安全加固写可执行的 v3 包。
 - stated purpose: 把项目层 `.nexuscli/config.json`、`.nexuscli/mcp.json`、hooks、slash 注入、路径规则与审计归因纳入同一条可验证的信任边界，而不是只修单点。
-- done means: 项目层安全键无信任时不生效；项目 MCP server 无信任不 spawn 且 env 已清洗；headless hooks 无信任不执行；slash 注入受 `bash` deny/hook 约束；路径规则归一化与 `--flag=value` 写域可测；审计 `never` 归因、只读分类、MCP resource/prompt 审批均有回归测试；docs 同步；集成攻击 fixture 通过。
+- done means: 项目层安全键（含 `sandbox.*` / `telemetry.*`）无信任时不生效；项目 MCP server 无信任不 spawn 且 env 已清洗；headless hooks 无信任不执行；slash 注入受 `bash` deny/hook 约束；路径规则归一化与 `--flag=value` 写域可测；审计 `never` 归因、只读分类、MCP resource/prompt 审批均有回归测试；docs 同步；集成攻击 fixture 通过；既有测试全部对齐新信任模型，全量 pytest、ruff、格式与 mypy 棘轮全绿。
 
 ## Charter
 
 - V1 priority: quality > maintainability > speed > cost | charter.md
-- V2 scope: strict | charter.md
+- V2 scope: adjacent-fixes | charter.md
 - V3 verification: package | charter.md
 - V4 finish: commit | charter.md
 - V5 dependencies: none-new | charter.md
@@ -57,6 +57,10 @@
 - C9 | MCP read_resource/get_prompt 需审批并进入审计 | task-0009
 - C10 | docs 与 README 的权限/MCP/工具边界说明同步，文档契约测试通过 | task-0010
 - C11 | 临时仓库攻击 fixture（config+mcp+hooks+slash）全部被拦住，且无副作用 | task-0011
+- C12 | 项目层 `sandbox.*` / `telemetry.*` 无信任时不生效，`load_telemetry_config` 的 cwd fallback 同样走信任门 | task-0012
+- C13 | 既有 config/MCP/sandbox 测试改为用户层或显式信任记录后全部通过，信任门不放宽 | task-0013
+- C14 | `ruff check` / `ruff format --check` / mypy 棘轮全部通过（8>7 的类型错误清零） | task-0014
+- C15 | `test_runtime_sse` 的 server 线程确定性收口，全量 `uv run pytest -q` 通过 | task-0015
 
 ## Decisions
 
@@ -64,12 +68,11 @@
 - D2 | 项目 MCP 与用户 MCP 分层：用户层始终生效，项目层需信任 | by: F2 | reversal: revert commit
 - D3 | slash 注入保留内部工具名，权限/审计主体映射到 bash/execute_command | by: F3 | reversal: revert commit
 - D4 | 信任入口只做交互式确认，headless 一律 fail-closed，不新增 CLI 子命令 | by: F4 | reversal: revert commit
+- D5 | 用户 2026-11-14 验收要求「除 GitHub billing 外把其余问题都解决并合并」，据此把整改范围扩到本包直接相关的收尾面（sandbox/telemetry 信任键、既有测试对齐、静态门、SSE 顺序依赖、全量回归），V2 由 strict 改为 adjacent-fixes，新增 4 个 emergent 任务 | by: user 2026-11-14 验收修复授权 | reversal: revert commit
+- D6 | P4 处置：29 个旧测试编码旧信任模型，改为用户层配置或显式写入 ProjectTrustStore/MCP trust 记录，不放宽信任门；P4 记录里的「28」按实测 29 修正 | by: user 2026-11-14 验收修复授权 | reversal: revert commit
+- D7 | P1–P3（容器/Windows 沙箱与远程 RBAC、PyPI/demo/branch protection/CI billing、非 Python LSP 与 git undo）经用户授权按范围外接受，不阻塞本包交付；其中 GitHub Actions billing 只影响托管 CI 配额，不影响本地 pytest/ruff/mypy | by: user 2026-11-14 验收修复授权 | reversal: 后续独立包
 
 ## Parked
-
-- P1 | 容器/Windows OS 沙箱后端与远程 daemon/RBAC 不在本包范围 | by: V2 | reversal: 后续独立包
-- P2 | PyPI、demo、branch protection 与 CI billing 不在本包范围 | by: V2 | reversal: 手工发布项
-- P3 | 非 Python 的真实 LSP 与 git 级 undo 不在本包范围 | by: V2 | reversal: 后续能力包
 
 ## Binding
 
