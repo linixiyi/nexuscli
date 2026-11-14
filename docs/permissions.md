@@ -38,6 +38,30 @@
 
 规则与 HITL 一样按层拼接：用户级和项目级 config.json 的同名列表会合并去重，项目规则不会覆盖掉用户级 `deny`。
 
+路径规则（`write_file(src/**)` 等）的匹配同时考虑**原始写法与 POSIX 归一化写法**（折叠 `./`、`a/../` 与重复 `/`，实现：`src/nexuscli/policy/permission_rules.py` 的 `_path_variants`）：`./.env`、`a/../.env`、`.//AGENTS.md`、`src/./x.py` 都会被同一条 deny 命中——调用路径与规则 spec 各自展开成等价形态，任一组合命中即视为命中；原始形态参与匹配，既有规则的语义不变。类别不放宽：相对路径不会命中绝对规则，绝对路径也不会命中相对规则；symlink 不在这一步解析（那是 path_guard 对真实路径的职责），规则匹配保持纯词法。
+
+自定义斜杠命令的 `` !`cmd` `` 注入以内部工具名 `slash_injection` 进 registry（不占模型的工具列表），但它是 shell 命令，权限规则与 PreToolUse hook 按**命令主体**评估（`bash`，`execute_command` 等价）：`deny: ["bash"]` 与 `deny: ["execute_command"]` 都会拒绝注入片段，匹配 `bash` 的 PreToolUse hook 能阻断它，hook 的 ask 提示同样生效，`allow: ["bash"]` 也能放行；为内部名写的 `deny: ["slash_injection"]` 继续有效。deny > ask > allow 优先级不变，CommandGuard 仍先于一切门。审计同时记录内部名（`tool_name`）与真实主体（`tool_subject`），一次调用两个名字都可回答。
+
+## 项目层信任门（config 安全键 / MCP / hooks）
+
+上一节的「按层拼接」对**安全敏感键**不成立：项目 `.nexuscli/config.json` 与项目 `.env` 来自可能被克隆的仓库，其中的安全键不再无条件合并（实现：`src/nexuscli/policy/project_trust.py` 的 `gate_project_layer`）。安全键范围：`policy.*` 整节（含 `hitl_mode`、`path_guard_enabled`、`command_guard_enabled`）、`permissions.allow`、`features.audit_log`、`llm.base_url` / `llm.api_key` / `llm.provider`、`sandbox.*` 整节（后端可被改成 `none`、可放开 `allow_network`）、`telemetry.*` 整节（`otlp.endpoint` 可把 trace 元数据发往外部端点），以及 `.env` 里落到这些键的名字（`NEXUSCLI_HITL`、`NEXUSCLI_PROVIDER`、`*_API_KEY`、`*_BASE_URL`）。它们需要通过**项目信任指纹**（对安全键投影做 canonical JSON + sha256，同一形态复用 hooks 的指纹模式）才生效：
+
+- 未信任时安全键被剔除，保留用户层/默认值，并给出一次可见 warning（`ProjectTrustWarning`）——不静默合并，也不拒绝启动
+- 交互式启动（REPL）对检测到的安全键确认一次（`Trust this project's security-sensitive config? [y/N]`），确认后按工作区记忆指纹到 `~/.nexuscli/project-trust.json`；安全内容变化会重新武装信任门，良性编辑（模型、渲染、提示词）不会
+- `-p` / serve / worker 等 headless 入口没有 TTY，一律失败关闭：无已信任指纹就不合并，绝不静默放行——信任确认只能由人交互完成
+- `deny` / `ask` 不在信任门内：它们只会收紧权限且失败关闭，项目层可直接声明；`permissions.allow` 是放宽性规则，所以在门内
+- 非安全键（渲染、提示词、模型选择、`agent.max_turns` 等）不受影响，照常合并
+
+同样的信任姿态覆盖另外两个项目层入口，三者各用独立的指纹存储，互不连带授权：
+
+| 项目层入口 | 无信任时的行为 | 指纹存储 |
+|---|---|---|
+| `.nexuscli/config.json` + `.env` 安全键 | 剔除安全键，用户层/默认值兜底 | `~/.nexuscli/project-trust.json` |
+| `.nexuscli/mcp.json` 的 enabled server | 不 spawn，只保留用户层 server | `~/.nexuscli/mcp-trust.json` |
+| 项目层 hooks（`-p` / serve 启动路径与 REPL 同一信任门） | 项目 hooks 不执行，用户 hooks 不受影响 | `~/.nexuscli/hooks-trust.json` |
+
+如实边界：远程 daemon、RBAC 与多用户审批均未实现，也不在本包范围——信任门只解决「克隆仓库自带的项目层配置」这一层信任缺口，不要把它当成多租户权限系统。MCP 层的细节见 [mcp.md](mcp.md#项目层-mcp-的信任门与环境清洗)，hooks 的挂载方式见 [hooks.md](hooks.md)。
+
 ## 单次 `-p` 模式下没有审批弹窗
 
 交互式 REPL 才有 HITL 弹窗；`nexuscli -p` 的 `ToolContext` 不带审批回调，因此**需要审批的工具在该模式下按失败关闭处理**：`bash` / `execute_command`（非只读命令）、`write_file`、`edit_file`、`task`、`save_memory`、`save_skill`、`task_stop`、`revert_turn` 都会被拒绝，模型收到的 tool 结果形如：
@@ -81,6 +105,12 @@ interactive REPL for approval prompts.
 
 判定为只读的命令在默认模式下免 HITL 审批直通执行，`plan` 态的只读闸门也按同一判定放行。直通不改变既有优先级：`deny` 命中照常拒绝，`ask` 命中照常追问，PreToolUse hook 的阻断与 ask 提示同样优先，`hitl_mode: "always"` 下仍会弹审批。直通不等于无痕：直通调用仍写审计日志，approver 记为 `readonly-rule`。
 
+只读判定带凭证路径防线：`cat ~/.git-credentials`、`ls ~/.config/gh`、`cat ~/.config/gcloud/credentials.db`、`ls ~/.azure` 等 token 存储与凭证文件路径不算只读，回落审批链；`git show` / `git diff` / `git log` 等只读子命令的 `<rev>:<path>` 参数复用同一判定——`git show HEAD:.env` 会从修订树里读出文件，冒号把它藏在了普通 token 扫描之外，命中即不判只读（`git show HEAD:README.md` 照常直通）；`date` 的数字设时钟形态（BSD 式 `date 010100002026` 与 `date -s`）与 `file -C`（编译 magic 数据库）同样不判只读。既有 `.ssh` / `.env` / `--output` 行为不变。
+
+## 写域守卫与命令路径扫描
+
+写域守卫（FSScopeGuard，`src/nexuscli/policy/fs_scope.py`）对 `mv` / `cp` 等写命令扫描写目标并分类 workspace 内外，域外写经审批链追问。命令词法按 `shlex` + 逐命令旗标表进行，`--flag=value` 长选项现在会按命令表拆分：只有**取值是写目标**的旗标（`mv` / `cp` / `copy` / `move` 的 `-t` / `--target-directory`）才把值当写目标分类——`mv --target-directory=/etc x` 与 `cp --target-directory=/etc/hosts x` 都判 outside；未知旗标与非路径旗标（`--mode=0755` 等）的值照旧整体跳过，`mv -t /etc x` 等既有短形式行为不变。执行器的内层写域提示按调用方的**真实工具名**评估 `allow` 规则：`allow: ["execute_command"]` 对 `execute_command` 调用与 `allow: ["bash"]` 对 `bash` 同等放行，同一次调用不再二次弹写域提示（`hitl_mode: "always"` 下照旧追问）。
+
 ## 审批弹窗的四个选项
 
 HITL 审批弹窗（`bash`、写文件等需要人工确认的调用）提供五个键位，对应四档决策：
@@ -97,6 +127,22 @@ run 级授权（`r`）只作用于「本来就会弹人工提示」的环节：`
 
 边界要写清：run 的语义是**一次 agent run 的主代理上下文**——REPL 里即一个用户回合触发的完整 react 循环（`Agent._run_react` 每次 run 都新建 ToolContext，授权随之清零）。子代理（subagent）有自己的 ToolContext，主代理按 `r` 放行的工具在子代理里仍会独立弹审批。需要会话级放行请用 `a`（auto 模式）或 `permissions.allow` 规则。
 
+### 审计归因（approver 取值）
+
+审计日志的 `approver` 字段回答「这次调用是谁放行的」，取值以实际决策者为准（实现：`src/nexuscli/tools/executor.py`）：
+
+| approver | 含义 |
+|---|---|
+| `hitl` | 人工在审批链决策（含 `--yes` 与 run 级授权的首按 `r`） |
+| `run-scope` | run 级授权（`r`）放行的后续同工具调用 |
+| `readonly-rule` | 只读静态判定直通，无人参与 |
+| `permission-rule` | 权限规则命中（deny 拒绝与 allow 放行同归因） |
+| `hook` | PreToolUse hook 阻断 |
+| `policy-never` | `hitl_mode: "never"` 下的无条件自动放行——这是策略的决定而不是人的批准，绝不记成 `hitl` |
+| `none` | 无需审批的工具在无审批回调时直通（不涉及人工，不冒充审批） |
+
+归因顺序如实：`--yes`（有审批回调时）仍记 `hitl`；run-scope / readonly-rule / permission-rule / hook 的既有归因保持不变；`hitl_mode: "never"` 的自动放行改记 `policy-never`——过去记成 `hitl` 会声称一次从未发生的人工批准。
+
 ## 子进程环境清洗（env_sanitization）
 
 `bash` / `execute_command` 与后台任务派生会把**清洗后的环境**传给子进程，而不是父进程的全量 `os.environ`（实现：`src/nexuscli/policy/sandbox.py` 的 `sanitize_environment`）：
@@ -108,13 +154,11 @@ run 级授权（`r`）只作用于「本来就会弹人工提示」的环节：`
 
 config.json 的 `policy.env_sanitization` 开关（默认 `true`）控制该护栏；设为 `false` 退回全量继承的旧行为。
 
-**如实边界：这是护栏，不是沙箱。** 它是「黑名单 + 安全网」，不是能力系统——名字不带机密形态的变量照样传给子进程，防的是意外泄漏的地板，不是恶意子进程。当前只清洗两个 agent 面向的 spawn 点（前台 `bash` 与后台任务注册表）。**仍未清洗**的子进程路径，按覆盖面挂账而非缺陷列出：
+**如实边界：这是护栏，不是沙箱。** 它是「黑名单 + 安全网」，不是能力系统——名字不带机密形态的变量照样传给子进程，防的是意外泄漏的地板，不是恶意子进程。清洗覆盖四个 agent 面向的 spawn 点：前台 `bash` / `execute_command`、后台任务注册表、MCP stdio server（`sanitize_environment(overrides=spec.env)`，见 [mcp.md](mcp.md#项目层-mcp-的信任门与环境清洗)）与 slash 命令 `` !`cmd` `` 注入执行器（受 `policy.env_sanitization` 开关控制，与 bash 同一实现）。**仍未清洗**的子进程路径，按覆盖面挂账而非缺陷列出：
 
 | 路径 | 现状 | 说明 |
 |---|---|---|
-| MCP stdio server | 继承全量 `os.environ`（叠加 `spec.env`） | server 合同上常需环境变量，直接清洗会破坏既有配置；接前需按 server 设计 allowlist |
 | hooks runner | 继承全量 `os.environ` | 待接入 |
-| slash 命令 `` !`cmd` `` 注入执行器 | 继承全量 `os.environ` | 待接入 |
 
 OS 级沙箱（容器、受限令牌）是更大体量的外部依赖，同样挂账；在它落地之前，不要把宿主机上不可泄露的机密放在子进程可读取的环境里并放开 HITL。
 

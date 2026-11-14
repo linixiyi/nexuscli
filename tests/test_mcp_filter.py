@@ -11,6 +11,7 @@ import pytest
 
 from nexuscli.mcp import McpClientManager
 from nexuscli.mcp.config import _spec_from_raw, load_mcp_server_specs
+from tests.project_trust_support import trust_project_mcp
 
 
 @pytest.fixture
@@ -57,6 +58,9 @@ def _manager_with_remote_tools(
     (tmp_path / ".nexuscli" / "mcp.json").write_text(
         json.dumps({"mcpServers": raw}), encoding="utf-8"
     )
+    # The filter tests exercise the trusted project-layer branch; an untrusted
+    # layer is dropped wholesale by design (see test_mcp_project_trust.py).
+    trust_project_mcp(tmp_path)
     manager = McpClientManager(tmp_path)
 
     @asynccontextmanager
@@ -124,6 +128,7 @@ def test_load_mcp_server_specs_reads_filters(tmp_path, filter_home):
         ),
         encoding="utf-8",
     )
+    trust_project_mcp(tmp_path)
     specs = load_mcp_server_specs(tmp_path)
     assert specs["fake"].allowed_tools == ["echo"]
     assert specs["fake"].blocked_tools == ["admin*"]

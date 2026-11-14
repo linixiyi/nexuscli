@@ -10,6 +10,7 @@ from nexuscli.policy import evaluate_permissions, parse_rule
 from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 from nexuscli.tools.executor import ToolExecutor
 from nexuscli.tools.registry import ToolRegistry
+from tests.project_trust_support import trust_project_config
 
 # ---------------------------------------------------------------------------
 # Rule parsing and matching
@@ -434,6 +435,9 @@ def test_permission_lists_concat_across_user_and_project_configs(tmp_path, monke
     (project / ".nexuscli" / "config.json").write_text(
         json.dumps({"permissions": {"allow": ["bash(git *)"]}}), encoding="utf-8"
     )
+    # permissions.allow is a project security-sensitive key: this test owns the
+    # user+project list merge, so record the trust decision explicitly.
+    trust_project_config(project)
 
     config = load_config(project_root=project)
     assert config.permissions.deny == ["bash(rm *)"]

@@ -23,6 +23,7 @@ from nexuscli.mcp import McpClientManager
 from nexuscli.mcp import auth as mcp_auth
 from nexuscli.mcp.config import McpAuthConfig, McpServerSpec
 from nexuscli.sdk import QueryEngine, create_default_engine
+from tests.project_trust_support import trust_project_mcp
 
 # ---------------------------------------------------------------------------
 # MCP: real stdio server + config-file filters (10.2)
@@ -83,6 +84,9 @@ def filtered_project(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     _ = command
+    # The real-stdio lane exercises the trusted project-layer branch; the
+    # fail-closed branch is covered by test_mcp_project_trust.py.
+    trust_project_mcp(tmp_path)
     return tmp_path
 
 

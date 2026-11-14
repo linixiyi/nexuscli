@@ -45,6 +45,7 @@ from nexuscli.policy.os_sandbox import (
     wrap_command,
 )
 from nexuscli.tools.commands import CommandExecutor
+from tests.project_trust_support import trust_project_config
 
 FAKE_BWRAP = "/usr/bin/bwrap"
 FAKE_PYTHON = "/usr/bin/fake-python"
@@ -670,6 +671,7 @@ def test_sandbox_config_accepts_linux_backends(tmp_path: Path, backend: str):
         json.dumps({"sandbox": {"backend": backend, "writable_paths": ["/opt/data"]}}),
         encoding="utf-8",
     )
+    trust_project_config(tmp_path)
 
     config = load_config(project_root=tmp_path, env={})
 

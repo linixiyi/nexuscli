@@ -71,6 +71,17 @@ curl -sS -X POST http://127.0.0.1:3000 \
 
 Chrome DevTools MCP 会把浏览器页面和 DevTools 状态暴露给 Agent。不要随意把包含个人账号、敏感数据或生产后台的 Chrome 会话授权给 Agent。
 
+## 项目层 MCP 的信任门与环境清洗
+
+`.nexuscli/mcp.json` 与项目 config 安全键、hooks 一样属于项目层配置，其 server 必须通过**项目信任指纹**才会进入有效列表：一个 enabled server 会在本机拉起任意命令，克隆来的仓库可以借此静默取得执行面（实现：`src/nexuscli/mcp/config.py` 的 `_project_layer_servers`，对 `mcpServers` 映射做 canonical JSON + sha256，与 hooks 指纹同一形态）：
+
+- 未信任时项目层整层不合并，只保留用户层（`~/.nexuscli/mcp.json`）的 server，并给出一次可见 warning（`McpTrustWarning`）；确认后按工作区记忆到 `~/.nexuscli/mcp-trust.json`
+- `-p` / serve 等 headless 入口没有 TTY，一律失败关闭：无已信任指纹就不 spawn，信任确认只能由人交互完成
+- 只含 `enabled: false` server 的项目层永远不会 spawn，不需要信任，照常合并展示
+- 三个指纹存储（config 安全键 / MCP / hooks）彼此独立：信任其中一个不连带授权另外两个，撤销也互不影响
+
+stdio server 的子进程环境是**清洗后的环境**，不再是全量 `os.environ` 叠加 `spec.env`（实现：`src/nexuscli/mcp/client.py` 用 `sanitize_environment(overrides=spec.env)` 构造 `StdioServerParameters.env`）：名字含 `KEY` / `SECRET` / `TOKEN` / `PASSWORD` / `CREDENTIAL` 等密钥形态的变量不再传给 server 子进程，`PATH` / `HOME` 等运行必需键保留，`spec.env` 的显式值原样保留在最上层——server 合同需要的变量请在 `spec.env` 里显式声明。清洗语义与如实边界见 [permissions.md](permissions.md#子进程环境清洗env_sanitization)。
+
 ## 工具级过滤（allowed_tools / blocked_tools）
 
 MCP server 常暴露几十上百个工具，全量注入会污染上下文并放大误调用面。每个 server 条目可以单独配置过滤（实现：`src/nexuscli/mcp/config.py` 的 `McpServerSpec`，过滤逻辑在 `src/nexuscli/mcp/client.py` 的 `_tool_registered`）：
@@ -110,9 +121,7 @@ server 完全可以声明只读、然后删文件。因此 NexusCLI 不把 `read
 - **`readOnlyHint=True` 只进展示面**：作为附注追加到工具描述（"server advertises
   readOnlyHint; NexusCLI does not trust it and still requires approval"），供模型与
   用户参考，不参与 `is_read_only` / `requires_approval` / `danger_level` 的计算。
-- **virtual 工具不受此策略影响**：每个 server 附带的 `list_resources` /
-  `read_resource` / `list_prompts` / `get_prompt` 由 NexusCLI 本地包装、语义确实
-  只读，仍注册为 read-only。
+- **virtual 资源/提示工具不走本地免审批**：`read_resource` / `get_prompt` 需要审批并进审计——它们由 NexusCLI 本地包装，但返回内容来自外部 server 进程，与远端工具输出同样不可信，因此注册为非只读、`requires_approval=True`、`danger_level="medium"`（实现：`src/nexuscli/mcp/client.py`）；auto/default 模式照常走审批链询问，plan 模式与远端工具一样拒绝 `read_resource` / `get_prompt`。纯列目录的 `list_resources` / `list_prompts` 保持只读，不弹审批。
 
 ## OAuth 2.0 授权（HTTP 类 server，授权码 + PKCE）
 

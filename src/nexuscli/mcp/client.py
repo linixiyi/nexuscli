@@ -18,6 +18,7 @@ from pydantic import AnyUrl
 
 from nexuscli.mcp import auth as mcp_auth
 from nexuscli.mcp.config import McpServerSpec, load_mcp_server_specs
+from nexuscli.policy import sanitize_environment
 from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 
 
@@ -346,7 +347,17 @@ class McpClientManager:
                 ),
                 required_keys=["uri"],
                 handler=read_handler,
-                is_read_only=True,
+                # An MCP server is an external process: what it hands back for
+                # a resource URI is as untrustworthy as a remote tool's output.
+                # Same registration as the wrapped remote tools — not
+                # read-only (plan mode keeps refusing it), approval required
+                # (auto/default still ask), medium danger — instead of the
+                # former local read-only exemption that skipped the approval
+                # chain and the audit.
+                is_read_only=False,
+                is_concurrency_safe=False,
+                danger_level="medium",
+                requires_approval=True,
             ),
         ]
 
@@ -386,7 +397,13 @@ class McpClientManager:
                 ),
                 required_keys=["name"],
                 handler=get_handler,
-                is_read_only=True,
+                # Same stance as read_resource above: the rendered prompt comes
+                # from an external process, so it enters the approval chain and
+                # the audit instead of a local read-only exemption.
+                is_read_only=False,
+                is_concurrency_safe=False,
+                danger_level="medium",
+                requires_approval=True,
             ),
         ]
 
@@ -395,10 +412,14 @@ class McpClientManager:
         if spec.type in {"stdio", "local"}:
             if not spec.command:
                 raise ValueError(f"MCP server {spec.name} is missing command")
+            # The child must not inherit the parent's secret-shaped variables
+            # ({**os.environ, ...} handed every API key to the server process);
+            # sanitize_environment drops them, keeps the essential keys, and
+            # applies spec.env verbatim on top (caller-configured, trusted).
             params = StdioServerParameters(
                 command=spec.command,
                 args=spec.args,
-                env={**os.environ, **spec.env},
+                env=sanitize_environment(overrides=spec.env),
                 cwd=spec.cwd or self.project_root,
             )
             with self._stderr_log(spec) as errlog:

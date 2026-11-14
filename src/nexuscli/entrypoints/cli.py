@@ -84,6 +84,7 @@ from nexuscli.eval.real import (
     run_baseline_comparison,
     write_real_comparison,
 )
+from nexuscli.hooks import trust
 from nexuscli.llm import create_llm_client
 from nexuscli.llm.base import LlmClient
 from nexuscli.llm.pricing import UNKNOWN_MODEL_PRICE_NOTE, CostBreakdown, ModelPriceProfile
@@ -1195,6 +1196,10 @@ async def _run_prompt(
     as one stderr line.
     """
     config.render_mode = "plain"
+    # Project-layer hooks merged at load time must be trusted before any of
+    # them can fire (same sha256 trust store as the REPL gate): a headless -p
+    # run refuses untrusted project hooks and keeps only the user layer.
+    trust.gate_project_hooks(config, cwd)
     if not config.llm.api_key:
         typer.echo(
             "Fatal error: LLM API key is not configured. Set it with --api-key, "

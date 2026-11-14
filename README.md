@@ -228,11 +228,11 @@ config.json 的 `permissions` 里声明 `allow` / `deny` / `ask` 三组规则，
 | `s` | 跳过 |
 | `n` | 拒绝 |
 
-直通与审批都写审计日志。
+直通与审批都写审计日志，`approver` 按实际决策者归因：人工批准记 `hitl`、run 级授权的后续放行记 `run-scope`、只读直通记 `readonly-rule`、`hitl_mode: "never"` 的自动放行记 `policy-never`（是策略的决定，绝不记成人工批准的 `hitl`）。
 
-三条如实边界必须知道：**`-p` 单次模式没有审批弹窗**，需要审批的工具一律按失败关闭（见[快速开始](#-快速开始)）；`bash` 与后台任务派生会把清洗后的环境传给子进程（剔除密钥形态变量），**这是护栏不是沙箱**，MCP stdio server、hooks runner 与 slash 命令注入路径未清洗，OS 级沙箱挂账；`save_skill` 等沉淀类操作默认强制人工确认，模型不会静默改变后续行为。
+三条如实边界必须知道：**`-p` 单次模式没有审批弹窗**，需要审批的工具一律按失败关闭（见[快速开始](#-快速开始)）；`bash`、后台任务派生、MCP stdio server 与 slash 注入会把清洗后的环境传给子进程（剔除密钥形态变量），**这是护栏不是沙箱**，hooks runner 仍未清洗，OS 级沙箱挂账；`save_skill` 等沉淀类操作默认强制人工确认，模型不会静默改变后续行为。
 
-Hooks 以 shell 命令挂在七个生命周期事件上，hook 进程 stdin 收 JSON 载荷，exit 2 阻断、stdout 输出 JSON 同样生效；项目级 hooks 经 sha256 指纹信任确认后才会生效。会话权限模式、审批与 hooks 的完整口径见 [docs/permissions.md](docs/permissions.md#会话权限模式default--auto--plan) 与 [docs/hooks.md](docs/hooks.md)。
+Hooks 以 shell 命令挂在七个生命周期事件上，hook 进程 stdin 收 JSON 载荷，exit 2 阻断、stdout 输出 JSON 同样生效；项目级 hooks 经 sha256 指纹信任确认后才会生效。项目层配置有信任门：项目 `.nexuscli/config.json` / `.env` 的安全敏感键（`policy.*`、`permissions.allow`、`features.audit_log`、`llm.base_url` / `api_key` / `provider`、`sandbox.*`、`telemetry.*`）、项目 `.nexuscli/mcp.json` 的 enabled server、项目层 hooks 都需要通过 sha256 信任指纹才生效；交互式启动确认一次即记忆（三个指纹存储彼此独立），`-p` / serve 等 headless 入口无 TTY 一律失败关闭，用户层配置不受影响。斜杠命令 `` !`cmd` `` 注入按 `bash` 主体过 deny 规则与 PreToolUse hook。远程 daemon 与 RBAC 均未实现——信任门只覆盖本机项目层，不是多租户权限系统。会话权限模式、审批、项目信任门与 hooks 的完整口径见 [docs/permissions.md](docs/permissions.md#项目层信任门config-安全键--mcp--hooks) 与 [docs/hooks.md](docs/hooks.md)。
 
 ## 💬 交互命令
 
@@ -292,7 +292,7 @@ NexusCLI 内置了一组 Agent 可以调用的本地工具和联网工具，速�
 看看这个图片 @image:https://example.com/image.png
 ```
 
-写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作会经过 policy、HITL 和 audit 处理；写 `.py` 文件后自动 py_compile 语法诊断，错误就地回传给模型；`bash` / `execute_command` 支持 `run_in_background` 后台执行（`task_output` 读取、`task_stop` 终止）。想扩展工具面时，Skill（`load_skill` / `save_skill`）与自定义斜杠命令是两条不写 Python 代码的路径。
+写文件、执行命令、远程 MCP 写操作、恢复快照等危险动作会经过 policy、HITL 和 audit 处理；写 `.py` 文件后自动 py_compile 语法诊断，错误就地回传给模型；`bash` / `execute_command` 共享守卫链但按调用名评估权限规则与写域，斜杠命令 `` !`cmd` `` 注入按 `bash` 主体过 deny 规则与 PreToolUse hook（见 [docs/tools.md](docs/tools.md#命令主体与审批边界)）；`bash` / `execute_command` 支持 `run_in_background` 后台执行（`task_output` 读取、`task_stop` 终止）。想扩展工具面时，Skill（`load_skill` / `save_skill`）与自定义斜杠命令是两条不写 Python 代码的路径。
 
 `read_file` 的 pdf 提取、`grep` 的 rg 加速与语义差异、`vfs_ls` / `vfs_read` 只读视图边界、代码索引与 BM25 检索、联网工具 SSRF 防护、图片输入管线、任务清单的补充口径见 [docs/tools.md](docs/tools.md#read_file-的-pdf-支持)；子代理委派与邮箱见 [docs/subagents.md](docs/subagents.md)。
 
@@ -324,7 +324,7 @@ NexusCLI 可以连接 MCP server，并把远端工具动态注册为 `mcp__<serv
 
 > ⚠️ **部署边界**：作为 MCP server 运行时，NexusCLI 会在协议层强制关闭人工审批（`hitl_mode = "never"`），这意味着接入该 server 的任何客户端都获得了**无需审批的完整工具能力（包括执行命令、读写文件）**。只把 server 暴露给可信客户端；HTTP 传输默认只绑定 localhost，不要手动开放到公网。
 
-HTTP 类 MCP server 支持 OAuth 2.0 授权码 + PKCE（令牌落盘 `~/.nexuscli/mcp-oauth.json`，0600）；每个 server 可配 `allowed_tools` / `blocked_tools` 做工具级过滤（精确名或 fnmatch 通配，allowed 优先）。需要登录态、浏览器状态或 JS 渲染页面时，建议接入 Chrome DevTools MCP（`uv run nexuscli mcp init-chrome` 一键生成配置）。工具级过滤、OAuth 授权流程边界、`mcp list` 与 smoke 的完整说明见 [docs/mcp.md](docs/mcp.md)。
+HTTP 类 MCP server 支持 OAuth 2.0 授权码 + PKCE（令牌落盘 `~/.nexuscli/mcp-oauth.json`，0600）；每个 server 可配 `allowed_tools` / `blocked_tools` 做工具级过滤（精确名或 fnmatch 通配，allowed 优先）。需要登录态、浏览器状态或 JS 渲染页面时，建议接入 Chrome DevTools MCP（`uv run nexuscli mcp init-chrome` 一键生成配置）。项目层 `.nexuscli/mcp.json` 的 enabled server 需通过项目信任指纹才 spawn（headless 无 TTY 失败关闭），stdio server 的子进程环境经清洗——密钥形态变量不再从宿主进程全量继承，`spec.env` 显式值保留；`read_resource` / `get_prompt` 与远端工具同样进入审批链与审计，`list_resources` / `list_prompts` 保持只读。工具级过滤、项目信任门与环境清洗、OAuth 授权流程边界、`mcp list` 与 smoke 的完整说明见 [docs/mcp.md](docs/mcp.md#项目层-mcp-的信任门与环境清洗)。
 
 ## 📡 Runtime API
 

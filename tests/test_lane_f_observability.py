@@ -44,6 +44,7 @@ from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 from nexuscli.tools.executor import ToolExecutor
 from nexuscli.tools.registry import ToolRegistry
 from nexuscli.types import Message, Usage
+from tests.project_trust_support import trust_project_config
 
 # ---------------------------------------------------------------------------
 # Shared httpx stub (success SSE body, pattern of tests/test_telemetry.py)
@@ -244,6 +245,9 @@ def test_debug_dump_from_config_wiring_and_dump_shows_request(tmp_path, monkeypa
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     _write_project_config(tmp_path, {"debug_dump": True})
+    # llm.provider/base_url/api_key are project security-sensitive keys; this
+    # test owns the debug_dump wiring through the trusted-project branch.
+    trust_project_config(tmp_path)
 
     config = load_config(project_root=tmp_path)
     assert config.llm.debug_dump is True

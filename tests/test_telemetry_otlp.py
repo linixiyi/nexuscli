@@ -57,6 +57,7 @@ from nexuscli.tools.base import Tool, ToolContext, ToolResult, object_schema
 from nexuscli.tools.executor import ToolExecutor
 from nexuscli.tools.registry import ToolRegistry
 from nexuscli.types import Message
+from tests.project_trust_support import trust_project_config
 
 _EXPORTER_MODULE = "opentelemetry.exporter.otlp.proto.http.trace_exporter"
 
@@ -359,6 +360,9 @@ def test_load_telemetry_config_layers_like_load_config(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
+    # telemetry is a project security-sensitive section (OTLP endpoint can
+    # exfiltrate trace metadata): exercise the trusted-project branch.
+    trust_project_config(tmp_path)
     face = load_telemetry_config(project_root=tmp_path)
     assert face.enabled is True
     assert face.otlp.endpoint == "https://project.example/v1/traces"
@@ -390,6 +394,7 @@ def test_wiring_consumes_load_config_resolved_face(
         ),
         encoding="utf-8",
     )
+    trust_project_config(real_root)
     # The process-cwd project that must NOT leak into the wiring.
     cwd_root = tmp_path / "leak"
     (cwd_root / ".nexuscli").mkdir(parents=True)

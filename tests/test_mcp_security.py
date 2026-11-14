@@ -28,6 +28,7 @@ from nexuscli.mcp import McpClientManager
 from nexuscli.tools.base import ToolContext
 from nexuscli.tools.executor import ToolExecutor
 from nexuscli.tools.registry import ToolRegistry
+from tests.project_trust_support import trust_project_mcp
 
 
 @dataclass
@@ -67,6 +68,9 @@ def _manager_with_remote_tools(
     (tmp_path / ".nexuscli" / "mcp.json").write_text(
         json.dumps({"mcpServers": {"fake": {"command": "python"}}}), encoding="utf-8"
     )
+    # Project MCP servers only load once the user trusted that layer; these
+    # tests exercise the trusted branch and the tool-gate semantics.
+    trust_project_mcp(tmp_path)
     manager = McpClientManager(tmp_path)
 
     @asynccontextmanager
