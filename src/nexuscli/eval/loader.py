@@ -112,7 +112,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from nexuscli.memory.signals import (
     TEMPORAL_KIND_ORDER,
@@ -919,8 +919,13 @@ def _parse_memory_query_item(
     return MemoryQuerySpec(query=query, target=target, distractors=distractors, top_k=top_k)
 
 
-def _is_seed_index(value: Any, seed_count: int) -> bool:
-    """True for an in-range seed index; ``True``/``False`` are not indexes."""
+def _is_seed_index(value: Any, seed_count: int) -> TypeGuard[int]:
+    """True for an in-range seed index; ``True``/``False`` are not indexes.
+
+    ``TypeGuard[int]`` carries the validation result back to the caller: an
+    accepted ``target`` / ``distractor`` is known to be an ``int``, so the
+    ``MemoryQuerySpec`` construction needs no second check.
+    """
     return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < seed_count
 
 
