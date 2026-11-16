@@ -155,8 +155,11 @@ def create_llm_client(
         # Local gateways usually run without credentials: no key is not an
         # error (see LocalProviderClient), so config.api_key flows through
         # as-is and stays empty when unset.
-        base_url = config.base_url or LOCAL_PROVIDER_BASE_URLS.get(provider)
-        if not base_url:
+        # Own binding (not the deepseek branch's ``base_url``): the dict
+        # lookup may legitimately return None and the guard below is what
+        # narrows it to str before the client is built.
+        local_base_url = config.base_url or LOCAL_PROVIDER_BASE_URLS.get(provider)
+        if not local_base_url:
             raise ValueError(
                 'provider "local" requires llm.base_url '
                 '(e.g. "http://127.0.0.1:8080/v1" for llama-server); '
@@ -171,7 +174,7 @@ def create_llm_client(
             provider_name=provider,
             model=config.model,
             api_key=config.api_key,
-            base_url=base_url,
+            base_url=local_base_url,
             max_tokens=config.max_tokens,
             temperature=config.temperature,
             timeout=config.timeout,

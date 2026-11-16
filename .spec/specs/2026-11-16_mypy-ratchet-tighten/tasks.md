@@ -19,7 +19,7 @@
   - tests: 若为纯标注修复，跑既有 eval 测试防回归；若动了运行时语义（A3 破裂），在 `tests/**` 补针对性测试。
   - verify: `uv run python scripts/check_mypy_ratchet.py 2>&1 | grep -cE "loader\.py:919|real\.py:427" | grep -qx 0 && uv run --extra dev python -m pytest -q tests/test_eval.py tests/test_eval_assertions_p1.py`
 
-- [ ] task-0002 llm/factory.py 一处清零
+- [x] task-0002 llm/factory.py 一处清零
   - id: task-0002
   - boundary: src/nexuscli/llm/factory.py, tests/**
   - origin: planned
