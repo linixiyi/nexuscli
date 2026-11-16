@@ -20,7 +20,7 @@
 
 ## 阶段 B：文档同步
 
-- [ ] task-0002 README 与 docs/hooks.md 同步清洗口径
+- [x] task-0002 README 与 docs/hooks.md 同步清洗口径
   - id: task-0002
   - boundary: README.md, docs/hooks.md, new:tests/test_hooks_env_docs.py
   - depends-on: task-0001
