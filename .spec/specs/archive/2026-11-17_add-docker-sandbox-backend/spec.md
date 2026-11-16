@@ -48,11 +48,15 @@
 
 ## Decisions
 
+- D2 | P1（真实 docker daemon 冒烟）保持范围外：daemon 未运行，启动 Docker Desktop 与拉镜像涉及用户环境与宿主网络；后端语义已由 fake 注入单测与 fail-closed 测试覆盖，daemon 可用后补独立冒烟小包 | by: user 2026-11-17 会话常设授权 | reversal: daemon 可用后补冒烟包
+
 - D1 | C1 的「镜像经配置」需要改 builtins.py / commands.py 两个调用点，两文件原在 Scope.out——按 2026-11-16 会话「直接自己执行不用问」的常设授权与 runner.py 收编先例，chartter V2 临时调为 adjacent-fixes 后 plan-amend 收编 task-0003，事后复位 strict | by: user 2026-11-16/17 会话常设授权 | reversal: revert commit
 
 ## Parked
 
-- P1 | 真实 docker daemon 冒烟（起容器跑一条命令验证端到端）：daemon 未运行，启动 Docker Desktop 与拉取镜像涉及用户环境与网络，不在本包内做 | by: A5 | reversal: daemon 可用后以独立小包/任务补冒烟
+- D2 | P1（真实 docker daemon 冒烟）保持范围外：daemon 未运行，启动 Docker Desktop 与拉镜像涉及用户环境与宿主网络；后端语义已由 19 项 fake 注入单测与 fail-closed 测试覆盖，daemon 可用后补独立冒烟小包 | by: user 2026-11-17 会话常设授权 | reversal: daemon 可用后补冒烟包
+
+
 
 ## Binding
 
