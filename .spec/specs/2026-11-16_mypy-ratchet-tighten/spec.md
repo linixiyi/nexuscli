@@ -45,6 +45,8 @@
 
 ## Decisions
 
+- D1 | real.py:427 按 F2 pick a「协议对齐」修：`_assertion_failures` 签名改为结构面 Protocol（`_AssertionScenario.assertions` / `_AssertionResult.{tool_sequence,final_text,turns}`）。F2 的前提（"RealEvalScenario/RealEvalResult 与基类是继承但 mypy 不认"）与事实不符——loader.py docstring 明言两类型「Deliberately a different type」（跨轨互传是设计禁区），继承会破坏该设计且 EvalScenario 多数字段必填；调用点 cast 被 F2 明令禁止。协议签名唯一落在 runner.py（task-0001 boundary 外），故记此决定：runner.py 仅改导入 + 两个小 Protocol + 签名标注，零运行时行为变化 | by: V1 | reversal: reversible
+
 ## Parked
 
 ## Binding

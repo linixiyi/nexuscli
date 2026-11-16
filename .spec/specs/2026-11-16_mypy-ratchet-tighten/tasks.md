@@ -52,3 +52,11 @@
 ---
 
 **当前进度**：由脚本计算，无需手动维护
+- [x] task-0005 runner.py 协议对齐签名收编
+  - id: task-0005
+  - boundary: src/nexuscli/eval/runner.py
+  - depends-on: task-0001
+  - origin: emergent
+  - expect: green
+  - behavior: 把 D1 已实施的最小协议对齐改动（`_AssertionScenario` / `_AssertionResult` 两个结构面 Protocol、`_assertion_failures` 签名改用它们、`EvalAssertions` 导入）收编为正式任务边界；零运行时行为变化；loader 的两轨类型分离设计（docstring「Deliberately a different type」）保持不动。
+  - verify: `uv run python scripts/check_mypy_ratchet.py 2>&1 | grep -cE "loader\.py:919|real\.py:427|runner\.py:" | grep -qx 0 && uv run --extra dev python -m pytest -q tests/test_eval.py tests/test_eval_assertions_p1.py`
