@@ -135,6 +135,9 @@ class SandboxConfig:
     backend: str = "none"
     writable_paths: list[str] = field(default_factory=list)
     allow_network: bool = False
+    # Image of the ``"docker"`` backend (ignored elsewhere). The first use
+    # of an image pulls it from the registry, which needs host network.
+    docker_image: str = "python:3.11-slim"
 
 
 @dataclass(slots=True)
