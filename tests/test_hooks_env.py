@@ -51,9 +51,7 @@ _SHELL_MANAGED_VARS = frozenset({"PWD", "OLDPWD", "SHLVL", "_", "PS1"})
 def _hooked_config(tmp_path: Path, command: str, *, env_sanitization: bool) -> NexusCliConfig:
     config = NexusCliConfig()
     config.policy.env_sanitization = env_sanitization
-    config.hooks.pre_tool_use = [
-        HookMatcherConfig(hooks=[HookCommandConfig(command=command)])
-    ]
+    config.hooks.pre_tool_use = [HookMatcherConfig(hooks=[HookCommandConfig(command=command)])]
     return config
 
 

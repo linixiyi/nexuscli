@@ -154,11 +154,7 @@ run 级授权（`r`）只作用于「本来就会弹人工提示」的环节：`
 
 config.json 的 `policy.env_sanitization` 开关（默认 `true`）控制该护栏；设为 `false` 退回全量继承的旧行为。
 
-**如实边界：这是护栏，不是沙箱。** 它是「黑名单 + 安全网」，不是能力系统——名字不带机密形态的变量照样传给子进程，防的是意外泄漏的地板，不是恶意子进程。清洗覆盖四个 agent 面向的 spawn 点：前台 `bash` / `execute_command`、后台任务注册表、MCP stdio server（`sanitize_environment(overrides=spec.env)`，见 [mcp.md](mcp.md#项目层-mcp-的信任门与环境清洗)）与 slash 命令 `` !`cmd` `` 注入执行器（受 `policy.env_sanitization` 开关控制，与 bash 同一实现）。**仍未清洗**的子进程路径，按覆盖面挂账而非缺陷列出：
-
-| 路径 | 现状 | 说明 |
-|---|---|---|
-| hooks runner | 继承全量 `os.environ` | 待接入 |
+**如实边界：这是护栏，不是沙箱。** 它是「黑名单 + 安全网」，不是能力系统——名字不带机密形态的变量照样传给子进程，防的是意外泄漏的地板，不是恶意子进程。清洗覆盖五个 agent 面向的 spawn 点：前台 `bash` / `execute_command`、后台任务注册表、MCP stdio server（`sanitize_environment(overrides=spec.env)`，见 [mcp.md](mcp.md#项目层-mcp-的信任门与环境清洗)）、slash 命令 `` !`cmd` `` 注入执行器与 hooks runner（受 `policy.env_sanitization` 开关控制，与 bash 同一实现）。当前没有已知的未清洗子进程路径；新的 spawn 点接入时必须走同一 `sanitize_environment` 口径。
 
 OS 级沙箱（容器、受限令牌）是更大体量的外部依赖，同样挂账；在它落地之前，不要把宿主机上不可泄露的机密放在子进程可读取的环境里并放开 HITL。
 

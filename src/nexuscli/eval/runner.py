@@ -419,9 +419,7 @@ class _AssertionResult(Protocol):
     turns: int
 
 
-def _assertion_failures(
-    scenario: _AssertionScenario, result: _AssertionResult
-) -> list[str]:
+def _assertion_failures(scenario: _AssertionScenario, result: _AssertionResult) -> list[str]:
     """Evaluate the scenario's assertions; human-readable reasons on miss.
 
     The three call-count assertions (``required_tools``, ``max_tool_calls``,

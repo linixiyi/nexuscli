@@ -124,8 +124,12 @@ def test_readme_mcp_section_documents_trust_and_env() -> None:
     assert "MCP stdio server、hooks runner 与 slash 命令注入路径未清洗" not in readme, (
         "README 仍声称 MCP stdio / slash 注入未清洗，与 task-0002 后的实现不符"
     )
-    assert any("hooks runner" in s and "未清洗" in s for s in sentences), (
-        "README 应如实保留 hooks runner 未清洗的挂账"
+    # 过时的「hooks runner 未清洗」挂账宣称必须移除（2026-11-16 hooks 清洗包后已接入）
+    assert "hooks runner 仍未清洗" not in readme, (
+        "README 仍声称 hooks runner 未清洗，与 hooks 清洗包后的实现不符"
+    )
+    assert any("hooks runner" in s and "清洗" in s for s in sentences), (
+        "README 应把 hooks runner 列入已清洗的子进程派发路径"
     )
 
 
