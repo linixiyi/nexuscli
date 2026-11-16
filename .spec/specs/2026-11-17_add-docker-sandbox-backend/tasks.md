@@ -21,7 +21,7 @@
 
 ## 阶段 B：文档同步
 
-- [ ] task-0002 后端清单与如实边界文档
+- [x] task-0002 后端清单与如实边界文档
   - id: task-0002
   - boundary: docs/permissions.md, README.md, new:tests/test_docker_sandbox_docs.py
   - depends-on: task-0001
