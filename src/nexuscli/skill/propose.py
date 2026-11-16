@@ -510,7 +510,12 @@ def _real_scenario_side(
         entry = next((e for e in entries if str(e.get("name") or "") == name), None)
     if entry is None:
         return None
-    pass_k = entry.get("pass_k") if isinstance(entry.get("pass_k"), dict) else {}
+    # Bind once, then isinstance-narrow the binding: a ternary that re-evaluates
+    # ``entry.get(...)`` inside the isinstance leaves the ``None`` arm of
+    # ``dict.get`` in the inferred type, so mypy cannot see the ``{}`` fallback
+    # already guarantees a dict here.
+    pass_k_raw = entry.get("pass_k")
+    pass_k = pass_k_raw if isinstance(pass_k_raw, dict) else {}
     all_pass = bool(pass_k.get("all_pass"))
     reasons: list[str] = []
     for run in entry.get("runs") or []:
@@ -519,7 +524,8 @@ def _real_scenario_side(
         reasons.extend(
             str(reason) for reason in run.get("failure_reasons") or [] if str(reason).strip()
         )
-    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    summary_raw = report.get("summary")
+    summary = summary_raw if isinstance(summary_raw, dict) else {}
     return {
         "scenario": str(entry.get("name") or "?"),
         "status": "pass" if all_pass else "fail",

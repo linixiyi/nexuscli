@@ -28,7 +28,7 @@
   - tests: 若为纯标注修复，跑既有 factory/model 相关测试；若动了运行时语义，补针对性测试。
   - verify: `uv run python scripts/check_mypy_ratchet.py 2>&1 | grep -c "factory\.py:158" | grep -qx 0 && uv run --extra dev python -m pytest -q tests/test_model_discovery.py tests/test_model_selector.py`
 
-- [ ] task-0003 skill/propose.py 三处清零
+- [x] task-0003 skill/propose.py 三处清零
   - id: task-0003
   - boundary: src/nexuscli/skill/propose.py, tests/**
   - origin: planned
