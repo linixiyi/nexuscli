@@ -401,6 +401,7 @@ class CommandExecutor:
                 cwd=cwd,
                 writable_paths=tuple(config.writable_paths),
                 allow_network=config.allow_network,
+                docker_image=config.docker_image,
             ),
         )
 

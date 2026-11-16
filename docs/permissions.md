@@ -178,10 +178,13 @@ OS 级沙箱（容器、受限令牌）是更大体量的外部依赖，同样�
 | `seatbelt` | macOS 上用 `sandbox-exec -p` 包装命令：写域限制在命令 cwd、系统临时目录、`/dev/null` 与显式 `writable_paths` 之内；`allow_network: false`（默认）时整网拒绝，`true` 时仅放行出站（bind/入站仍拒绝） |
 | `bubblewrap` | Linux 上用 `bwrap` 挂载命名空间包装命令：根文件系统只读绑定，另挂全新 `/dev`、`/proc` 与 `/dev/shm`，仅 cwd、系统临时目录与显式 `writable_paths` 可写；`allow_network: false`（默认）时 `--unshare-net` 整网拒绝（含 loopback），`true` 时完全放开（bind 也放行，粒度比 seatbelt 粗）。需要非特权的 user namespaces（或 setuid `bwrap`），容器里常见两者皆无——probe 会如实报错。安装提示：Debian/Ubuntu `apt install bubblewrap`、Fedora `dnf install bubblewrap`、Arch `pacman -S bubblewrap` |
 | `landlock` | Linux 上用内核 Landlock（实现：`src/nexuscli/policy/linux_sandbox.py`）包装命令：内置 helper 先对自身 `restrict_self` 再 exec 命令，写域与 seatbelt 相同（`/dev/null`、临时目录、cwd、显式 `writable_paths`），读保持开放；网络拒绝需要内核 ABI ≥ 4（Linux ≥ 6.7），仅覆盖 TCP（UDP 自 ABI 10 起），内核达不到时按 fail-closed 直接报错而非裸跑。ABI 探测是纯查询（`landlock_create_ruleset` 的 VERSION 标志），不会限制调用方本身；restrict 在一次性子进程里完成 |
+| `docker` | 任意平台用 Docker 一次性容器包装命令：`docker run --rm --read-only --network=none --tmpfs /tmp -v <cwd>:<cwd> -w <cwd> [-v <p>:<p> ...] <image> /bin/sh -c <命令>`——根文件系统只读、默认整网拒绝、容器内 `/tmp` 为独立 tmpfs，仅 cwd 与显式 `writable_paths` 挂载可写；镜像经 `sandbox.docker_image` 配置（默认 `python:3.11-slim`，首次使用需从 registry 拉取，依赖宿主网络）。probe 用 `docker version` 同时校验 CLI 与 daemon，任一缺失即 fail-closed |
+
+**docker 后端的两条如实边界**：`allow_network: true` 是容器网络整体放行（bind/入站一并放开）——Seatbelt 可做到「仅出站」，docker 做不到，粒度不对称；容器内 `/tmp` 是独立 tmpfs，**不与宿主临时目录共享**（Seatbelt/bubblewrap 共享宿主 temp），写到容器 `/tmp` 的文件随容器销毁。另外 macOS/Windows 的 bind mount 走 Docker Desktop 文件共享层，共享根之外的宿主路径在容器内不可见。容器比宿主后端重：每条命令都付容器启动开销。
 
 **Linux 后端优先级**：两个 Linux 后端**优先 bubblewrap**（覆盖更完整、网络粒度更明确），`nexuscli.policy.linux_sandbox.preferred_linux_backend` 返回本机可用的首选后端；任一后端不可用时，typed 错误信息会带上安装提示，并在对方可用时提示切换 `sandbox.backend`。
 
-**fail-closed 语义**：请求了本机不可用的后端（非 macOS 请求 seatbelt、`sandbox-exec` 不在 PATH、probe 试运行失败；非 Linux 或 `bwrap` 缺失/不可用时请求 bubblewrap；非 Linux 或内核 Landlock ABI 不足时请求 landlock）或未知后端名时，抛类型化错误 `nexuscli.policy.os_sandbox.OperationUnsupported`，命令**不执行**——绝不会静默退回 `none` 继续裸跑。`CommandExecutor` 在构造时完成解析，坏配置在任何命令 spawn 之前就失败。
+**fail-closed 语义**：请求了本机不可用的后端（非 macOS 请求 seatbelt、`sandbox-exec` 不在 PATH、probe 试运行失败；非 Linux 或 `bwrap` 缺失/不可用时请求 bubblewrap；非 Linux 或内核 Landlock ABI 不足时请求 landlock；`docker` CLI 缺失或 daemon 未运行时请求 docker）或未知后端名时，抛类型化错误 `nexuscli.policy.os_sandbox.OperationUnsupported`，命令**不执行**——绝不会静默退回 `none` 继续裸跑。`CommandExecutor` 在构造时完成解析，坏配置在任何命令 spawn 之前就失败。
 
 `writable_paths` 追加可写子域；cwd 与系统临时目录始终可写。`sandbox-exec` 已被 Apple 标记废弃但仍是官方策略机制；后端不可用会以 `OperationUnsupported` 显式报错，而不是产生一个坏掉的 spawn。bubblewrap 会丢弃本机不存在的可写路径（无物可写、也无法绑定）；landlock helper 对打不开的规则路径跳过并在 stderr 告警。
 

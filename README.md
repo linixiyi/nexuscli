@@ -230,7 +230,7 @@ config.json 的 `permissions` 里声明 `allow` / `deny` / `ask` 三组规则，
 
 直通与审批都写审计日志，`approver` 按实际决策者归因：人工批准记 `hitl`、run 级授权的后续放行记 `run-scope`、只读直通记 `readonly-rule`、`hitl_mode: "never"` 的自动放行记 `policy-never`（是策略的决定，绝不记成人工批准的 `hitl`）。
 
-三条如实边界必须知道：**`-p` 单次模式没有审批弹窗**，需要审批的工具一律按失败关闭（见[快速开始](#-快速开始)）；`bash`、后台任务派生、MCP stdio server、slash 注入与 hooks runner 都会把清洗后的环境传给子进程（剔除密钥形态变量，`policy.env_sanitization` 可关），**这是护栏不是沙箱**，OS 级沙箱仍挂账；`save_skill` 等沉淀类操作默认强制人工确认，模型不会静默改变后续行为。
+三条如实边界必须知道：**`-p` 单次模式没有审批弹窗**，需要审批的工具一律按失败关闭（见[快速开始](#-快速开始)）；`bash`、后台任务派生、MCP stdio server、slash 注入与 hooks runner 都会把清洗后的环境传给子进程（剔除密钥形态变量，`policy.env_sanitization` 可关），**这是护栏不是沙箱**，OS 级围栏见 `sandbox` 配置（seatbelt/bubblewrap/landlock/docker 四后端，Windows 后端仍挂账）；`save_skill` 等沉淀类操作默认强制人工确认，模型不会静默改变后续行为。
 
 Hooks 以 shell 命令挂在七个生命周期事件上，hook 进程 stdin 收 JSON 载荷，exit 2 阻断、stdout 输出 JSON 同样生效；项目级 hooks 经 sha256 指纹信任确认后才会生效。项目层配置有信任门：项目 `.nexuscli/config.json` / `.env` 的安全敏感键（`policy.*`、`permissions.allow`、`features.audit_log`、`llm.base_url` / `api_key` / `provider`、`sandbox.*`、`telemetry.*`）、项目 `.nexuscli/mcp.json` 的 enabled server、项目层 hooks 都需要通过 sha256 信任指纹才生效；交互式启动确认一次即记忆（三个指纹存储彼此独立），`-p` / serve 等 headless 入口无 TTY 一律失败关闭，用户层配置不受影响。斜杠命令 `` !`cmd` `` 注入按 `bash` 主体过 deny 规则与 PreToolUse hook。远程 daemon 与 RBAC 均未实现——信任门只覆盖本机项目层，不是多租户权限系统。会话权限模式、审批、项目信任门与 hooks 的完整口径见 [docs/permissions.md](docs/permissions.md#项目层信任门config-安全键--mcp--hooks) 与 [docs/hooks.md](docs/hooks.md)。
 

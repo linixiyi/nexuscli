@@ -56,12 +56,22 @@ from typing import Protocol
 
 # Names accepted by ``sandbox.backend``. "none" is the unconfined default;
 # everything else must resolve to a backend that can actually run here.
-SUPPORTED_BACKENDS: tuple[str, ...] = ("none", "seatbelt", "bubblewrap", "landlock")
+SUPPORTED_BACKENDS: tuple[str, ...] = (
+    "none",
+    "seatbelt",
+    "bubblewrap",
+    "landlock",
+    "docker",
+)
 
 BACKEND_NONE = "none"
 BACKEND_SEATBELT = "seatbelt"
 BACKEND_BUBBLEWRAP = "bubblewrap"
 BACKEND_LANDLOCK = "landlock"
+BACKEND_DOCKER = "docker"
+
+# Default image of the docker backend; configurable via sandbox.docker_image.
+DEFAULT_DOCKER_IMAGE = "python:3.11-slim"
 
 # Backends implemented in :mod:`nexuscli.policy.linux_sandbox` and resolved
 # through a lazy import from :func:`resolve_backend` — this module stays the
@@ -102,6 +112,8 @@ class SandboxRequest:
     cwd: str
     writable_paths: tuple[str, ...] = ()
     allow_network: bool = False
+    # Image for the docker backend only; every other backend ignores it.
+    docker_image: str = DEFAULT_DOCKER_IMAGE
 
 
 class SandboxBackend(Protocol):
@@ -321,6 +333,10 @@ def resolve_backend(
         from nexuscli.policy.linux_sandbox import resolve_linux_backend
 
         return resolve_linux_backend(name, which=which, runner=runner, platform=platform)
+    if name == BACKEND_DOCKER:
+        from nexuscli.policy.docker_sandbox import resolve_docker_backend
+
+        return resolve_docker_backend(name, which=which, runner=runner, platform=platform)
     if name != BACKEND_SEATBELT:
         raise OperationUnsupported(
             f"unknown sandbox backend {name!r}; supported backends: "
@@ -351,6 +367,7 @@ def wrap_command(
     which: Callable[[str], str | None] = shutil.which,
     runner: ProbeRunner | None = None,
     platform: str | None = None,
+    docker_image: str = DEFAULT_DOCKER_IMAGE,
 ) -> str:
     """Resolve *backend* and wrap *command*; ``"none"`` returns it unchanged.
 
@@ -366,5 +383,6 @@ def wrap_command(
         cwd=cwd if cwd is not None else os.getcwd(),
         writable_paths=tuple(writable_paths),
         allow_network=allow_network,
+        docker_image=docker_image,
     )
     return resolved.wrap(command, request)
