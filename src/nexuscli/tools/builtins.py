@@ -794,6 +794,7 @@ async def _bash(
             cwd=context.cwd,
             writable_paths=tuple(context.config.sandbox.writable_paths),
             allow_network=context.config.sandbox.allow_network,
+            docker_image=context.config.sandbox.docker_image,
         )
     except OperationUnsupported as exc:
         return ToolResult(f"Command rejected. {exc}", is_error=True)

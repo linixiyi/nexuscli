@@ -34,7 +34,7 @@
 ---
 
 **当前进度**：由脚本计算，无需手动维护
-- [ ] task-0003 docker_image 配置贯通到两个 wrap 调用点
+- [x] task-0003 docker_image 配置贯通到两个 wrap 调用点
   - id: task-0003
   - boundary: src/nexuscli/tools/builtins.py, src/nexuscli/tools/commands.py, new:tests/test_docker_image_wiring.py
   - depends-on: task-0001
