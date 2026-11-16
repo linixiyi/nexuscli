@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
 from nexuscli.config import HOOK_EVENT_FIELDS, HookCommandConfig, NexusCliConfig
 from nexuscli.hooks.registry import hooks_for
+from nexuscli.policy.sandbox import sanitize_environment
 
 _BLOCKED_FALLBACK_REASON = "blocked by hook"
 
@@ -80,20 +82,42 @@ async def fire_event(
         "cwd": cwd,
         **payload,
     }
-    return await run_hooks(commands, event, full_payload)
+    return await run_hooks(
+        commands, event, full_payload, sanitize_env=config.policy.env_sanitization
+    )
 
 
 async def run_hooks(
     commands: list[HookCommandConfig],
     event: str,
     payload: dict[str, Any],
+    *,
+    sanitize_env: bool = True,
 ) -> HookOutcome:
-    """Run every hook command for *event* and aggregate their outcomes."""
+    """Run every hook command for *event* and aggregate their outcomes.
+
+    ``sanitize_env`` mirrors ``policy.env_sanitization`` (passed down as a
+    plain bool per F1, not the whole config): with it on (the default) the
+    hook child gets the same sanitized environment as ``bash``, with it off
+    the historical full ``os.environ`` is handed over.
+    """
     outcome = HookOutcome()
     cwd = str(payload.get("cwd") or ".")
     for hook in commands:
-        await _run_single(hook, payload, cwd, outcome)
+        await _run_single(hook, payload, cwd, outcome, sanitize_env=sanitize_env)
     return outcome
+
+
+def _child_environment(sanitize_env: bool) -> dict[str, str]:
+    """Build the hook subprocess environment (same shape as bash's).
+
+    With ``sanitize_env`` on, secret-shaped and ``NEXUSCLI_*`` variables are
+    stripped via :func:`nexuscli.policy.sanitize_environment`; with it off the
+    full parent environment is handed over unchanged.
+    """
+    if not sanitize_env:
+        return os.environ.copy()
+    return sanitize_environment()
 
 
 async def _run_single(
@@ -101,6 +125,8 @@ async def _run_single(
     payload: dict[str, Any],
     cwd: str,
     outcome: HookOutcome,
+    *,
+    sanitize_env: bool = True,
 ) -> None:
     stdin_data = json.dumps(payload, ensure_ascii=False)
     try:
@@ -110,6 +136,7 @@ async def _run_single(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=_child_environment(sanitize_env),
         )
     except OSError as exc:
         outcome.errors.append(f"hook failed to start: {exc}")

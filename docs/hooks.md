@@ -30,6 +30,12 @@
 - 安全边界：hook 返回 `allow` 只做记录，**不会绕过审批**——hooks 只能拒绝、追问或补充上下文，不能替人工放行
 - 未配置对应事件时零开销；用户级与项目级的 hook 列表同样按层拼接
 
+## 子进程环境
+
+hook 子进程与 `bash` 工具同口径拿到清洗后的环境（`src/nexuscli/hooks/runner.py` 与 bash 的 `_child_environment` 走同一个 `nexuscli.policy.sanitize_environment`）：`policy.env_sanitization` 开启（默认）时剔除密钥形态变量（名字含 `KEY` / `SECRET` / `TOKEN` / `PASSWORD` / `CREDENTIAL` 等，大小写不敏感子串）与 `NEXUSCLI_*` 内部变量，并强保留 `PATH` / `HOME` / `TEMP` 等运行必需键；关闭时保持历史行为，子进程继承宿主全量环境。
+
+如实边界：这是黑名单护栏，不是沙箱——名字不带机密形态的变量照样传给子进程，防的是意外泄漏的地板，不是恶意子进程；OS 级沙箱（容器、受限令牌）仍挂账。清洗口径的完整说明见 [permissions.md](permissions.md)。
+
 ## 工作区 hooks 的 sha256 信任机制
 
 项目级 `.nexuscli/config.json` 的 `hooks` 段是随仓库分发、加载时无条件合并的，克隆一个恶意仓库等于让任意 shell 命令挂在每个工具事件上。为此 REPL 在启动时对工作区 hooks 加了一道信任闸门（实现：`src/nexuscli/hooks/trust.py` 与 `repl._gate_workspace_hooks`）：
