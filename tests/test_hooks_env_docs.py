@@ -27,8 +27,9 @@ def test_readme_lists_hooks_runner_among_sanitized_spawn_points() -> None:
 
 
 def test_readme_keeps_os_sandbox_parking() -> None:
+    # docker 后端（2026-11-17 包）落地后，挂账口径收窄为仅 Windows 后端。
     text = _README.read_text(encoding="utf-8")
-    assert "OS 级沙箱仍挂账" in text
+    assert "Windows 后端仍挂账" in text
 
 
 def test_hooks_doc_has_child_env_section_with_flag() -> None:
