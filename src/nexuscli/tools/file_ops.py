@@ -312,7 +312,11 @@ def glob_files(
     *,
     limit: int = 100,
 ) -> FileOpResult:
-    """Find files matching *pattern* relative to *cwd*."""
+    """Find files matching *pattern* relative to *cwd*.
+
+    Matches with any path segment in SKIP_DIRS are excluded, and *limit*
+    counts only the surviving entries.
+    """
     root = Path(cwd).resolve()
     if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
         return FileOpResult("glob pattern must stay inside workspace", is_error=True)
@@ -322,9 +326,12 @@ def glob_files(
     for match in sorted(matches):
         mp = Path(match).resolve()
         try:
-            rels.append(str(mp.relative_to(root)))
+            rel = mp.relative_to(root)
         except ValueError:
             continue
+        if any(part in SKIP_DIRS for part in rel.parts):
+            continue
+        rels.append(str(rel))
         if len(rels) >= limit:
             break
     return FileOpResult("\n".join(rels) or "(no matches)")

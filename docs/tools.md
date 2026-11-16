@@ -24,6 +24,10 @@ MCP server 附带的 `read_resource` / `get_prompt` 不是本地免审批工具�
 
 `grep` 对目录搜索先探测 PATH 上的 rg：命中则由 rg 子进程加速并映射回同一 `路径:行号: 内容` 格式，rg 缺失或失败时回退纯 Python 扫描。已知语义差异：rg 会跳过二进制文件，纯 Python 路径以 `errors="ignore"` 读取一切，文本文件结果一致。
 
+## glob 的噪声目录过滤
+
+`glob` 默认丢弃路径任一段落在 `SKIP_DIRS` 集合内的命中（`.git`、`.venv`、`node_modules`、`dist`、`build`、`target`、`__pycache__`），与 `directory_tree` 的默认排除同集、同口径；`limit` 只对过滤后的有效命中计数，噪声目录不再消耗配额。如实边界：不支持自定义排除清单；pattern 显式指向噪声目录（如 `node_modules/**`）时命中同样被过滤，返回 `(no matches)`。
+
 ## task 后台委派与收尾播报
 
 `task` 的 `run_in_background: true` 立即返回后台任务 id 与落盘报告路径（`~/.nexuscli/bg-subagents/<task_id>.md`），不阻塞当前回合；回合结束时 REPL 会把**已**完成的后台子代理一次性播报给用户（`[bg-subagent] completed/failed ...`，不进入模型上下文）。后台子代理是进程内状态：未完成任务随 REPL 退出而终止，已完成的报告文件保留在磁盘上；`task_stop` 可终止仍在跑的后台子代理（状态记为 `stopped`，不再回播），对已到终态的任务是 no-op。子代理工具（含 `mailbox_post` / `mailbox_read` 邮箱）的完整口径见 [subagents.md](subagents.md)。
