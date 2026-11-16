@@ -39,12 +39,13 @@ import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from nexuscli.agent import Agent
 from nexuscli.config import NexusCliConfig
 from nexuscli.eval.loader import (
     DEFAULT_DIFFICULTY,
+    EvalAssertions,
     EvalScenario,
     MemoryQuerySpec,
     MemorySeedEntry,
@@ -398,7 +399,29 @@ def _final_assistant_text(messages: Any, *, fallback: list[str]) -> str:
     return "".join(fallback)
 
 
-def _assertion_failures(scenario: EvalScenario, result: EvalRunResult) -> list[str]:
+class _AssertionScenario(Protocol):
+    """The structural surface :func:`_assertion_failures` reads from a scenario.
+
+    The hermetic and real scenario types are deliberately unrelated classes
+    (the loader keeps them apart so a scenario cannot be handed across tracks
+    by accident); both carry the same validated ``assertions`` block, which is
+    all this evaluator judges.
+    """
+
+    assertions: EvalAssertions
+
+
+class _AssertionResult(Protocol):
+    """The structural surface :func:`_assertion_failures` reads from a result."""
+
+    tool_sequence: list[str]
+    final_text: str
+    turns: int
+
+
+def _assertion_failures(
+    scenario: _AssertionScenario, result: _AssertionResult
+) -> list[str]:
     """Evaluate the scenario's assertions; human-readable reasons on miss.
 
     The three call-count assertions (``required_tools``, ``max_tool_calls``,

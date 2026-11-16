@@ -1,5 +1,5 @@
 {
-  "errors": 7,
+  "errors": 0,
   "ignored_modules": 30,
   "ignored_lines": 6,
   "mypy": "2.4.1",
