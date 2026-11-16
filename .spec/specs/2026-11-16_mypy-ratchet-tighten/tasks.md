@@ -39,7 +39,7 @@
 
 ## 阶段 B：重写 baseline 锁定
 
-- [ ] task-0004 重写 baseline 至 errors=0 并全量棘轮验证
+- [x] task-0004 重写 baseline 至 errors=0 并全量棘轮验证
   - id: task-0004
   - boundary: mypy-baseline.json
   - depends-on: task-0001, task-0002, task-0003
