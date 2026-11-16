@@ -1,4 +1,0 @@
-{"cmd": "uv run pytest -q tests/test_plan_worker_tools.py", "duration": 0.145, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0001", "ts": "2026-11-10T16:00:31+00:00"}
-{"cmd": "uv run pytest -q tests/test_plan_worker_docs.py", "duration": 0.138, "exit": 4, "expect": "red", "kind": "baseline", "task": "task-0002", "ts": "2026-11-10T16:00:31+00:00"}
-{"dirty": [], "head": "87b82100d1b977779e5e4385ddf1fd1f2e6a0d0c", "kind": "baseline", "task": "package", "ts": "2026-11-10T16:00:31+00:00"}
-{"attempt": 1, "checkpoint": "e6eceb7ef235bfae41d84d61a82ae74198e5b157", "cmd": "uv run pytest -q tests/test_plan_worker_tools.py", "duration": 0.566, "exit": 0, "final": false, "head": "8b22292240e7c178059eeaff7de452225c08e1b3", "kind": "run", "sig": "77eb486697750029", "task": "task-0001", "tree_fp": "ea950f87084746dd240f286b4dd29312eacb648f4d8ad76300e1058fbe66bd13", "ts": "2026-11-16T15:43:12+00:00"}

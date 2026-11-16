@@ -47,10 +47,9 @@
 
 - D1 | 采用“过滤 worker registry + prompt 双约束”，而不是只改提示 | by: V1 | reversal: revert commit
 - D2 | 不改 executor 只读闸，执行层 blocked 继续作为安全兜底 | by: V6 | reversal: revert commit
+- D3 | P1（glob 输出 `__pycache__` 等噪声过滤）按原计划保持范围外，用户已批准立为后续独立包（本轮 2026-11-16 会话与 hooks 清洗、mypy 棘轮同批开工） | by: user 2026-11-16 会话批准 | reversal: 后续包交付
 
 ## Parked
-
-- P1 | glob 输出中 `__pycache__` 等噪声过滤暂不做，避免扩大本包边界 | by: V2 | reversal: 后续独立包
 
 ## Binding
 
