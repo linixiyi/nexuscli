@@ -19,7 +19,7 @@
   - tests: 新增 `tests/test_plan_worker_tools.py`，至少覆盖：① plan 模式过滤后只含六个工具，bash/write_file/edit_file 不在列表中；② 非 plan 模式返回完整 registry；③ `_task_system_prompt()` 包含 plan 只读约束与禁止写工具字样；④ 若可低成本构造，断言 `_execute_task_stream()` 调用 `query()` 时传入的是过滤后的 registry（monkeypatch `query` 捕获参数）。
   - verify: `uv run pytest -q tests/test_plan_worker_tools.py`
 
-- [ ] task-0002 文档同步 worker 只读语义
+- [x] task-0002 文档同步 worker 只读语义
   - id: task-0002
   - boundary: README.md, docs/plan-execute.md, new:tests/test_plan_worker_docs.py
   - depends-on: task-0001
