@@ -10,7 +10,7 @@
 
 ## 阶段 A：worker 运行时只读约束
 
-- [ ] task-0001 plan 模式 worker 只暴露六个只读工具
+- [x] task-0001 plan 模式 worker 只暴露六个只读工具
   - id: task-0001
   - boundary: src/nexuscli/agent/plan_execute.py, new:tests/test_plan_worker_tools.py
   - origin: planned
