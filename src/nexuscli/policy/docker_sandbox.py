@@ -45,7 +45,6 @@ import os
 import shlex
 import shutil
 import subprocess
-import sys
 from collections.abc import Callable
 
 from nexuscli.policy.os_sandbox import (
@@ -55,7 +54,6 @@ from nexuscli.policy.os_sandbox import (
     ProbeRunner,
     SandboxBackend,
     SandboxRequest,
-    writable_subpaths,
 )
 
 DOCKER_EXECUTABLE = "docker"

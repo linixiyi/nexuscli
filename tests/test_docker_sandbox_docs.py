@@ -49,9 +49,7 @@ def test_permissions_fail_closed_mentions_docker() -> None:
 
 def test_readme_boundary_sentence_updated() -> None:
     text = _read(_README)
-    assert "OS 级沙箱仍挂账" not in text, (
-        "README 仍保留整句『OS 级沙箱仍挂账』的旧口径"
-    )
+    assert "OS 级沙箱仍挂账" not in text, "README 仍保留整句『OS 级沙箱仍挂账』的旧口径"
     assert "docker" in text and "Windows" in text and "挂账" in text, (
         "README 应说明四后端可用、仅 Windows 后端挂账"
     )
