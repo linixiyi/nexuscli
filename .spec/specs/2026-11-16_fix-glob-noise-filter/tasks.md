@@ -20,7 +20,7 @@
 
 ## 阶段 B：文档同步
 
-- [ ] task-0002 docs/tools.md 补 glob 排除口径
+- [x] task-0002 docs/tools.md 补 glob 排除口径
   - id: task-0002
   - boundary: docs/tools.md, new:tests/test_glob_noise_docs.py
   - depends-on: task-0001
